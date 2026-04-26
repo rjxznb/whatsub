@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eversay Video Review</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+  h1 { margin-bottom: 12px; font-size: 22px; }
+  .toolbar { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .toolbar label { font-weight: 600; }
+  .toolbar input[type=file] { flex: 1; min-width: 200px; }
+  .toolbar select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; }
+  .stats { background: #fff; padding: 14px 16px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+  .stats .stat { font-size: 14px; }
+  .stats .stat b { font-size: 18px; color: #1a73e8; }
+  .actions { display: flex; gap: 8px; margin-left: auto; }
+  button { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+  .btn-primary { background: #1a73e8; color: #fff; }
+  .btn-primary:hover { background: #1557b0; }
+  .btn-secondary { background: #e8eaed; color: #333; }
+  .btn-secondary:hover { background: #dadce0; }
+  .btn-success { background: #34a853; color: #fff; }
+  .btn-success:hover { background: #2d8e47; }
+  .scene-group { background: #fff; border-radius: 8px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
+  .scene-header { padding: 12px 16px; background: #f8f9fa; border-bottom: 1px solid #e8eaed; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .scene-header h2 { font-size: 16px; }
+  .scene-header .badge { background: #1a73e8; color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 13px; }
+  .video-list { padding: 0; }
+  .video-item { display: flex; align-items: flex-start; padding: 12px 16px; border-bottom: 1px solid #f0f0f0; gap: 12px; transition: background 0.15s; }
+  .video-item:hover { background: #f8f9fa; }
+  .video-item:last-child { border-bottom: none; }
+  .video-item input[type=checkbox] { margin-top: 4px; width: 18px; height: 18px; cursor: pointer; flex-shrink: 0; }
+  .video-info { flex: 1; min-width: 0; }
+  .video-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .video-title a { color: #1a73e8; text-decoration: none; }
+  .video-title a:hover { text-decoration: underline; }
+  .video-meta { font-size: 13px; color: #666; display: flex; gap: 16px; flex-wrap: wrap; }
+  .score-badge { display: inline-block; padding: 1px 8px; border-radius: 4px; font-weight: 700; font-size: 13px; color: #fff; }
+  .score-5 { background: #34a853; }
+  .score-4 { background: #fbbc04; color: #333; }
+  .score-3 { background: #ea8600; }
+  .video-reason { font-size: 13px; color: #555; margin-top: 4px; }
+  .video-phrases { font-size: 12px; color: #888; margin-top: 4px; }
+  .empty { text-align: center; padding: 60px 20px; color: #999; font-size: 16px; }
+  .filter-bar { display: flex; gap: 8px; align-items: center; }
+  .filter-bar label { font-size: 13px; }
+  #drop-zone { border: 2px dashed #ccc; border-radius: 8px; padding: 40px; text-align: center; color: #999; margin-bottom: 16px; transition: all 0.2s; }
+  #drop-zone.dragover { border-color: #1a73e8; background: #e8f0fe; color: #1a73e8; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h1>Eversay Video Review Tool</h1>
+
+<div id="drop-zone">
+  <p style="font-size:16px; margin-bottom:8px;">拖拽 analyzed_results.json 或 cc_analyzed_results.json 到这里</p>
+  <p style="font-size:13px;">或点击下方选择文件</p>
+  <input type="file" id="file-input" accept=".json" style="margin-top:12px;">
+</div>
+
+<div id="app" class="hidden">
+  <div class="stats">
+    <div class="stat">总视频 <b id="stat-total">0</b></div>
+    <div class="stat">已选 <b id="stat-selected">0</b></div>
+    <div class="stat">5分 <b id="stat-5">0</b></div>
+    <div class="stat">4分 <b id="stat-4">0</b></div>
+    <div class="stat">3分 <b id="stat-3">0</b></div>
+    <div class="actions">
+      <div class="filter-bar">
+        <label>最低分:</label>
+        <select id="min-score">
+          <option value="4" selected>4</option>
+          <option value="3">3</option>
+          <option value="5">5</option>
+          <option value="1">全部</option>
+        </select>
+      </div>
+      <button class="btn-secondary" onclick="selectAll()">全选</button>
+      <button class="btn-secondary" onclick="deselectAll()">全不选</button>
+      <button class="btn-success" onclick="exportJSON()">导出选中 JSON</button>
+    </div>
+  </div>
+
+  <div id="video-container"></div>
+</div>
+
+<script>
+let allVideos = [];
+let selectedIds = new Set();
+
+// Drag & drop
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => { if (e.target.files.length) loadFile(e.target.files[0]); });
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      parseData(data);
+      dropZone.classList.add('hidden');
+      document.getElementById('app').classList.remove('hidden');
+    } catch (err) {
+      alert('JSON 解析失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+function parseData(data) {
+  allVideos = [];
+  for (const [scene, videos] of Object.entries(data)) {
+    for (const v of videos) {
+      const a = v.analysis || {};
+      allVideos.push({
+        video_id: v.video_id || '',
+        scene: scene,
+        title: v.title || '',
+        channel: v.channel || '',
+        duration: v.duration || 0,
+        view_count: v.view_count || 0,
+        score: a.score || 0,
+        suitable: a.suitable || false,
+        reason: a.reason || '',
+        difficulty: a.difficulty || '',
+        accent: a.accent || '',
+        content_type: a.content_type || '',
+        has_real_dialogue: a.has_real_dialogue || false,
+        key_phrases: a.key_phrases || [],
+      });
+    }
+  }
+  allVideos.sort((a, b) => b.score - a.score || a.scene.localeCompare(b.scene));
+
+  // Auto-select score >= 4
+  selectedIds.clear();
+  for (const v of allVideos) {
+    if (v.score >= 4) selectedIds.add(v.video_id);
+  }
+
+  render();
+}
+
+function render() {
+  const minScore = parseInt(document.getElementById('min-score').value);
+  const filtered = allVideos.filter(v => v.score >= minScore);
+
+  // Stats
+  document.getElementById('stat-total').textContent = filtered.length;
+  document.getElementById('stat-selected').textContent =
+    filtered.filter(v => selectedIds.has(v.video_id)).length;
+  document.getElementById('stat-5').textContent = allVideos.filter(v => v.score === 5).length;
+  document.getElementById('stat-4').textContent = allVideos.filter(v => v.score === 4).length;
+  document.getElementById('stat-3').textContent = allVideos.filter(v => v.score === 3).length;
+
+  // Group by scene
+  const groups = {};
+  for (const v of filtered) {
+    if (!groups[v.scene]) groups[v.scene] = [];
+    groups[v.scene].push(v);
+  }
+
+  const sceneNames = {
+    immigration: '入境通关', housing: '住房安家', medical: '医疗健康',
+    campus: '校园学习', banking: '银行财务', shopping: '日常购物',
+    transport: '交通出行', social: '社交日常', dining: '餐饮', emergency: '紧急情况',
+    job: '求职职场', phone: '电话沟通', salon: '美容美发', driving: '驾照开车',
+    travel: '旅游度假', fitness: '运动健身', mental_health: '心理健康', maintenance: '搬家维修',
+  };
+
+  const container = document.getElementById('video-container');
+  container.innerHTML = '';
+
+  for (const scene of Object.keys(groups).sort()) {
+    const videos = groups[scene];
+    videos.sort((a, b) => b.score - a.score);
+    const selectedCount = videos.filter(v => selectedIds.has(v.video_id)).length;
+
+    const group = document.createElement('div');
+    group.className = 'scene-group';
+    group.innerHTML = `
+      <div class="scene-header" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <h2>${sceneNames[scene] || scene} (${scene})</h2>
+        <span class="badge">${selectedCount}/${videos.length} 选中</span>
+      </div>
+      <div class="video-list">
+        ${videos.map(v => videoHTML(v)).join('')}
+      </div>
+    `;
+    container.appendChild(group);
+  }
+}
+
+function videoHTML(v) {
+  const checked = selectedIds.has(v.video_id) ? 'checked' : '';
+  const url = `https://www.youtube.com/watch?v=${v.video_id}`;
+  const dur = v.duration ? `${Math.floor(v.duration/60)}:${String(v.duration%60).padStart(2,'0')}` : '';
+  const views = v.view_count ? (v.view_count >= 1000 ? `${(v.view_count/1000).toFixed(1)}K` : v.view_count) : '';
+  const phrases = v.key_phrases.slice(0, 3).map(p => `"${p.expression}"`).join(', ');
+
+  return `
+    <div class="video-item">
+      <input type="checkbox" ${checked} onchange="toggleVideo('${v.video_id}', this.checked)">
+      <div class="video-info">
+        <div class="video-title">
+          <span class="score-badge score-${v.score}">${v.score}</span>
+          <a href="${url}" target="_blank">${escapeHtml(v.title)}</a>
+        </div>
+        <div class="video-meta">
+          <span>${escapeHtml(v.channel)}</span>
+          ${dur ? `<span>${dur}</span>` : ''}
+          ${views ? `<span>${views} views</span>` : ''}
+          ${v.accent ? `<span>${v.accent}</span>` : ''}
+          ${v.difficulty ? `<span>${v.difficulty}</span>` : ''}
+          ${v.content_type ? `<span>${v.content_type}</span>` : ''}
+        </div>
+        ${v.reason ? `<div class="video-reason">${escapeHtml(v.reason)}</div>` : ''}
+        ${phrases ? `<div class="video-phrases">Key: ${escapeHtml(phrases)}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function toggleVideo(id, checked) {
+  if (checked) selectedIds.add(id); else selectedIds.delete(id);
+  render();
+}
+
+function selectAll() {
+  const minScore = parseInt(document.getElementById('min-score').value);
+  for (const v of allVideos) {
+    if (v.score >= minScore) selectedIds.add(v.video_id);
+  }
+  render();
+}
+
+function deselectAll() {
+  const minScore = parseInt(document.getElementById('min-score').value);
+  for (const v of allVideos) {
+    if (v.score >= minScore) selectedIds.delete(v.video_id);
+  }
+  render();
+}
+
+function exportJSON() {
+  const selected = allVideos
+    .filter(v => selectedIds.has(v.video_id))
+    .map(v => ({
+      video_id: v.video_id,
+      scene: v.scene,
+      title: v.title,
+      channel: v.channel,
+      score: v.score,
+      url: `https://www.youtube.com/watch?v=${v.video_id}`,
+    }));
+
+  const blob = new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'approved_videos.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+document.getElementById('min-score').addEventListener('change', render);
+</script>
+</body>
+</html>

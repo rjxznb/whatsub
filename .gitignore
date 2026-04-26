@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+target/
+
+# Build outputs
+dist/
+build/
+*.exe
+*.dll
+*.dylib
+*.so
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Brainstorm session files
+.superpowers/
+
+# Whisper models + bundled binaries (downloaded/placed at build time)
+client/src-tauri/binaries/
+
+# Existing video pipeline data (not part of the client)
+data/
+
+# Python pipeline artifacts
+__pycache__/
+*.pyc
+.venv/
+
+# Logs
+*.log
+
+# Sensitive / per-machine
+scripts/video_sourcing/cookies.txt
+.claude/settings.local.json

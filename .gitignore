@@ -27,7 +27,9 @@ Thumbs.db
 .superpowers/
 
 # Whisper models + bundled binaries (downloaded/placed at build time)
-client/src-tauri/binaries/
+# Exclude the actual binaries but keep README.md for documentation
+client/src-tauri/binaries/*.exe
+client/src-tauri/binaries/*.dll
 
 # Existing video pipeline data (not part of the client)
 data/

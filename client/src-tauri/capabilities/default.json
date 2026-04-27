@@ -13,6 +13,8 @@
     "fs:default",
     "dialog:default",
     "http:default",
+    "updater:default",
+    "process:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [

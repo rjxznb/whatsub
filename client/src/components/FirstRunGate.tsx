@@ -38,7 +38,7 @@ export function FirstRunGate({ children }: Props) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
         <div className="max-w-md text-center space-y-4">
-          <h1 className="text-2xl font-semibold">欢迎使用 Get Video</h1>
+          <h1 className="text-2xl font-semibold">欢迎使用 Eversay Studio</h1>
           <p className="text-zinc-400 text-sm">
             首次启动需要：
             {!hasLlmKey && <span className="block">· 配置 LLM API Key</span>}

@@ -36,7 +36,12 @@ pub async fn download(
     std::fs::create_dir_all(out_dir)?;
     let video_path = out_dir.join("source.mp4").to_string_lossy().to_string();
     let thumb_path = out_dir.join("thumb.jpg").to_string_lossy().to_string();
-    let info_path = out_dir.join("info.json").to_string_lossy().to_string();
+    // yt-dlp's --write-info-json sidecar uses the SAME base name as the video,
+    // appending `.info.json`. So with -o ".../source.mp4" the JSON ends up at
+    // ".../source.info.json". Read from there — don't try to override its path
+    // via -o "infojson:..." because that template gets a literal `.info.json`
+    // suffix appended too, leading to `info.info.json` which is confusing.
+    let info_path_actual = out_dir.join("source.info.json");
 
     let id = video_id.to_string();
     let app_clone = app.clone();
@@ -59,7 +64,6 @@ pub async fn download(
         }
     };
     let thumb_template = format!("thumbnail:{}", thumb_path.trim_end_matches(".jpg"));
-    let info_template = format!("infojson:{}", info_path.trim_end_matches(".json"));
 
     let cookies = read_cookies_file();
     let mut args: Vec<String> = Vec::new();
@@ -84,9 +88,9 @@ pub async fn download(
         "jpg".into(),
         "-o".into(),
         thumb_template.clone(),
+        // No `-o "infojson:..."` — let yt-dlp default to writing the JSON
+        // next to the video file (out_dir/source.info.json).
         "--write-info-json".into(),
-        "-o".into(),
-        info_template.clone(),
         "--newline".into(),
         "--progress-template".into(),
         "[download] %(progress._percent_str)s".into(),
@@ -113,13 +117,21 @@ pub async fn download(
     )
     .await?;
 
-    let info: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&info_path)?)?;
-    let title = info
-        .get("title")
-        .and_then(|v| v.as_str())
-        .unwrap_or("Untitled")
-        .to_string();
-    let duration = info.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    // info.json may not exist if yt-dlp failed but we caught a soft failure;
+    // gracefully fall back to a stub if missing.
+    let (title, duration) = match std::fs::read_to_string(&info_path_actual) {
+        Ok(raw) => {
+            let info: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+            let t = info
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Untitled")
+                .to_string();
+            let d = info.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            (t, d)
+        }
+        Err(_) => ("Untitled".to_string(), 0.0),
+    };
 
     Ok(DownloadResult {
         video_path,

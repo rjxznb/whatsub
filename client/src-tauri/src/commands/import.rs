@@ -89,6 +89,7 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
         created_at: Utc::now().to_rfc3339(),
         status: LibraryStatus::Analyzing,
         last_error: None,
+        video_dir: Some(out_dir.to_string_lossy().to_string()),
     };
     library_upsert(entry)?;
 

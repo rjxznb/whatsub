@@ -36,6 +36,12 @@ pub struct LibraryEntry {
     pub created_at: String,
     pub status: LibraryStatus,
     pub last_error: Option<String>,
+    /// Absolute path to the directory holding source.mp4, transcript.srt, analysis.json
+    /// for this video. Frozen at import time so changing settings.libraryDir later
+    /// does not orphan existing entries. Optional for backward compat with old entries
+    /// written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -190,6 +196,7 @@ mod tests {
             created_at: "2026-04-26T00:00:00Z".into(),
             status: LibraryStatus::Analyzing,
             last_error: None,
+            video_dir: None,
         }
     }
 

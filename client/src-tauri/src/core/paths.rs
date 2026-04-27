@@ -34,7 +34,21 @@ pub fn models_dir() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("models"))
 }
 
+/// Resolve a video's directory.
+///
+/// Order of precedence:
+/// 1. The `videoDir` field stored in this entry's library.json record (frozen at import time).
+/// 2. `library_dir()/<id>` — the default for fresh imports, also a sensible fallback for
+///    legacy entries written before the `videoDir` field existed.
+///
+/// This means changing `settings.libraryDir` does NOT relocate existing videos —
+/// each entry remembers where it was put.
 pub fn video_dir(video_id: &str) -> Result<PathBuf, String> {
+    if let Some(stored) = read_entry_video_dir(video_id) {
+        if !stored.trim().is_empty() {
+            return Ok(PathBuf::from(stored));
+        }
+    }
     Ok(library_dir()?.join(video_id))
 }
 
@@ -46,6 +60,25 @@ fn read_settings_string(key: &str) -> Option<String> {
     let raw = std::fs::read_to_string(&path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
     v.get(key)?.as_str().map(|s| s.to_string())
+}
+
+fn read_entry_video_dir(video_id: &str) -> Option<String> {
+    let path = library_index_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let videos = v.get("videos")?.as_array()?;
+    for entry in videos {
+        if entry.get("id").and_then(|x| x.as_str()) == Some(video_id) {
+            return entry
+                .get("videoDir")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

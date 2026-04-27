@@ -13,6 +13,9 @@ export interface LibraryEntry {
   createdAt: string;
   status: LibraryStatus;
   lastError: string | null;
+  /** Absolute path to the dir holding source.mp4 / transcript.srt / analysis.json.
+   *  Frozen at import time. Optional for entries created before this field existed. */
+  videoDir?: string;
 }
 
 export interface Library {

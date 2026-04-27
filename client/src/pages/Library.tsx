@@ -1,14 +1,28 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useLibrary } from "../store/library";
 import { ImportModal } from "../components/ImportModal";
+import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
+import { RenameDialog } from "../components/RenameDialog";
 import { formatTime } from "../utils/time";
+import type { LibraryEntry } from "../types/library";
+
+interface MenuState {
+  x: number;
+  y: number;
+  entry: LibraryEntry;
+}
 
 export function Library() {
-  const { library, reload } = useLibrary();
+  const navigate = useNavigate();
+  const { library, reload, remove, rename, reorder, reveal } = useLibrary();
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState("");
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   useEffect(() => {
     reload();
@@ -17,6 +31,78 @@ export function Library() {
   const visible = library.videos.filter((v) =>
     v.title.toLowerCase().includes(search.toLowerCase())
   );
+
+  function handleContextMenu(e: React.MouseEvent, entry: LibraryEntry) {
+    e.preventDefault();
+    setMenu({ x: e.clientX, y: e.clientY, entry });
+  }
+
+  function buildMenuItems(entry: LibraryEntry): ContextMenuItem[] {
+    return [
+      { label: "重命名", onClick: () => setRenaming(entry) },
+      {
+        label: "在文件夹中显示",
+        onClick: () => {
+          reveal(entry.id).catch((e) => alert(`打开文件夹失败：${e}`));
+        },
+      },
+      {
+        label: "删除",
+        danger: true,
+        onClick: () => {
+          if (confirm(`确定删除「${entry.title}」？\n这会同时删除视频文件和分析结果，不可恢复。`)) {
+            remove(entry.id).catch((e) => alert(`删除失败：${e}`));
+          }
+        },
+      },
+    ];
+  }
+
+  function onDragStart(e: React.DragEvent, id: string) {
+    setDraggedId(id);
+    e.dataTransfer.effectAllowed = "move";
+    // Set a payload so the drop event fires.
+    e.dataTransfer.setData("text/plain", id);
+  }
+
+  function onDragOver(e: React.DragEvent, id: string) {
+    if (!draggedId || draggedId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverId(id);
+  }
+
+  function onDragLeave(id: string) {
+    setDragOverId((cur) => (cur === id ? null : cur));
+  }
+
+  function onDrop(e: React.DragEvent, targetId: string) {
+    e.preventDefault();
+    const sourceId = draggedId;
+    setDraggedId(null);
+    setDragOverId(null);
+    if (!sourceId || sourceId === targetId) return;
+
+    // Build new order: remove source, insert before target.
+    const ids = library.videos.map((v) => v.id);
+    const filtered = ids.filter((id) => id !== sourceId);
+    const targetIdx = filtered.indexOf(targetId);
+    if (targetIdx === -1) return;
+    const newOrder = [
+      ...filtered.slice(0, targetIdx),
+      sourceId,
+      ...filtered.slice(targetIdx),
+    ];
+    reorder(newOrder).catch((e) => {
+      console.error("reorder failed", e);
+      reload();
+    });
+  }
+
+  function onDragEnd() {
+    setDraggedId(null);
+    setDragOverId(null);
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -45,44 +131,84 @@ export function Library() {
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6">
-          {visible.map((v) => (
-            <Link
-              key={v.id}
-              to={`/player/${v.id}`}
-              className="bg-zinc-900 border border-zinc-800 rounded-md overflow-hidden hover:border-zinc-600"
-            >
-              <div className="aspect-video bg-zinc-800 relative">
-                {v.thumbnailPath && (
-                  <img
-                    src={convertFileSrc(v.thumbnailPath)}
-                    className="w-full h-full object-cover"
-                  />
-                )}
-                {v.status === "analyzing" && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs">
-                    解析中...
-                  </div>
-                )}
-                {v.status === "failed" && (
-                  <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center">
-                    !
-                  </div>
-                )}
+          {visible.map((v) => {
+            const isDragged = draggedId === v.id;
+            const isDragOver = dragOverId === v.id;
+            return (
+              <div
+                key={v.id}
+                draggable
+                onDragStart={(e) => onDragStart(e, v.id)}
+                onDragOver={(e) => onDragOver(e, v.id)}
+                onDragLeave={() => onDragLeave(v.id)}
+                onDrop={(e) => onDrop(e, v.id)}
+                onDragEnd={onDragEnd}
+                onClick={() => {
+                  if (!draggedId) navigate(`/player/${v.id}`);
+                }}
+                onContextMenu={(e) => handleContextMenu(e, v)}
+                className={
+                  "bg-zinc-900 border rounded-md overflow-hidden cursor-pointer select-none transition " +
+                  (isDragged
+                    ? "opacity-40 border-zinc-700"
+                    : isDragOver
+                    ? "border-blue-400 ring-2 ring-blue-400/30"
+                    : "border-zinc-800 hover:border-zinc-600")
+                }
+              >
+                <div className="aspect-video bg-zinc-800 relative pointer-events-none">
+                  {v.thumbnailPath && (
+                    <img
+                      src={convertFileSrc(v.thumbnailPath)}
+                      className="w-full h-full object-cover"
+                      draggable={false}
+                    />
+                  )}
+                  {v.status === "analyzing" && (
+                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs">
+                      解析中...
+                    </div>
+                  )}
+                  {v.status === "failed" && (
+                    <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center">
+                      !
+                    </div>
+                  )}
+                </div>
+                <div className="p-3 pointer-events-none">
+                  <div className="text-sm font-medium truncate">{v.title}</div>
+                  {v.durationSec > 0 && (
+                    <div className="mt-1 text-[10px] text-zinc-500">
+                      {formatTime(v.durationSec)}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="p-3">
-                <div className="text-sm font-medium truncate">{v.title}</div>
-                {v.durationSec > 0 && (
-                  <div className="mt-1 text-[10px] text-zinc-500">
-                    {formatTime(v.durationSec)}
-                  </div>
-                )}
-              </div>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {showImport && <ImportModal onClose={() => setShowImport(false)} />}
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={buildMenuItems(menu.entry)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {renaming && (
+        <RenameDialog
+          initialTitle={renaming.title}
+          onConfirm={(newTitle) => {
+            rename(renaming.id, newTitle).catch((e) => alert(`重命名失败：${e}`));
+          }}
+          onClose={() => setRenaming(null)}
+        />
+      )}
     </div>
   );
 }

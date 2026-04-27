@@ -109,6 +109,71 @@ pub fn library_set_status(
     write_index(&lib)
 }
 
+#[tauri::command]
+pub fn library_rename(id: String, title: String) -> AppResult<()> {
+    let mut lib = read_index()?;
+    if let Some(entry) = lib.videos.iter_mut().find(|v| v.id == id) {
+        entry.title = title;
+    }
+    write_index(&lib)
+}
+
+#[tauri::command]
+pub fn library_reorder(ordered_ids: Vec<String>) -> AppResult<()> {
+    let mut lib = read_index()?;
+    // Build a map from id -> entry, then re-insert in the requested order.
+    // Any ids missing from `ordered_ids` are appended at the end (defensive).
+    let mut by_id: std::collections::HashMap<String, LibraryEntry> = lib
+        .videos
+        .into_iter()
+        .map(|e| (e.id.clone(), e))
+        .collect();
+    let mut new_videos: Vec<LibraryEntry> = Vec::with_capacity(by_id.len());
+    for id in &ordered_ids {
+        if let Some(entry) = by_id.remove(id) {
+            new_videos.push(entry);
+        }
+    }
+    // Append remaining (shouldn't happen if frontend keeps in sync, but be safe)
+    for (_, entry) in by_id {
+        new_videos.push(entry);
+    }
+    lib.videos = new_videos;
+    write_index(&lib)
+}
+
+#[tauri::command]
+pub fn reveal_in_explorer(path: String) -> AppResult<()> {
+    use crate::error::AppError;
+
+    #[cfg(target_os = "windows")]
+    {
+        // explorer /select takes the path as a single arg; do not quote in CreateProcess form.
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{path}"))
+            .spawn()
+            .map_err(|e| AppError::Subprocess(format!("explorer: {e}")))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| AppError::Subprocess(format!("open: {e}")))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent = std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        std::process::Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .map_err(|e| AppError::Subprocess(format!("xdg-open: {e}")))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

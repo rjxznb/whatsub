@@ -326,6 +326,114 @@ cargo test              # paths, ids, srt, ytdlp, whisper, library, settings
                         #       — known issue, not yet refactored to use temp dir
 ```
 
+## Release workflow (Tauri auto-updater)
+
+The app self-checks for updates on launch and lets the user install with one
+click. Detailed step-by-step in `RELEASE.md`; here's the operational summary.
+
+### Where things live
+
+| Asset | Location |
+|---|---|
+| **Source code repo** (private) | `github.com/rjxznb/Get_Video` |
+| **Release artifact repo** (public, updater endpoint) | `github.com/rjxznb/Get_Video-releases` |
+| **Private signing key** (sign every release) | `secrets/eversay-studio.key` (private repo backup) + `~/.tauri/eversay-studio.key` (active local) |
+| **Public verification key** (embedded in the app) | `client/src-tauri/tauri.conf.json` → `plugins.updater.pubkey` |
+| **Updater endpoint** (URL the app polls) | `https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json` |
+
+The repo is split private/public so the source stays closed but auto-update
+artifacts can be served over GitHub's public CDN. **Don't** commit the .msi
+or .sig anywhere — they only live as GitHub Release assets on the public repo.
+
+### Per-release checklist
+
+1. **Bump version in 3 places** (must match):
+   - `client/package.json` `"version"`
+   - `client/src-tauri/tauri.conf.json` `"version"`
+   - `client/src-tauri/Cargo.toml` `[package] version`
+
+2. **Build with signing** (Git Bash):
+   ```bash
+   cd client
+   TAURI_SIGNING_PRIVATE_KEY="$(cat $USERPROFILE/.tauri/eversay-studio.key)" \
+   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+   pnpm tauri build --bundles msi
+   ```
+   The `--bundles msi` flag skips NSIS (whose download often times out from
+   China). Output:
+   ```
+   src-tauri/target/release/bundle/msi/Eversay Studio_X.Y.Z_x64_en-US.msi
+   src-tauri/target/release/bundle/msi/Eversay Studio_X.Y.Z_x64_en-US.msi.sig
+   ```
+
+3. **Hand-author `latest.json`** — Tauri does NOT generate this automatically;
+   you write it. Template:
+   ```json
+   {
+     "version": "X.Y.Z",
+     "notes": "user-facing notes shown in the toast",
+     "pub_date": "2026-04-28T10:00:00Z",
+     "platforms": {
+       "windows-x86_64": {
+         "signature": "<paste full content of .msi.sig>",
+         "url": "https://github.com/rjxznb/Get_Video-releases/releases/download/vX.Y.Z/Eversay.Studio_X.Y.Z_x64_en-US.msi"
+       }
+     }
+   }
+   ```
+   Note the .msi URL uses dots not spaces — GitHub mangles spaces to dots in
+   asset URLs. Either rename the .msi before upload, or write the URL with
+   the actual asset URL after upload.
+
+4. **Cut the GitHub Release** via `gh`:
+   ```bash
+   gh release create vX.Y.Z \
+     --repo rjxznb/Get_Video-releases \
+     --title "Eversay Studio vX.Y.Z" \
+     --notes "Brief release notes here" \
+     "src-tauri/target/release/bundle/msi/Eversay Studio_X.Y.Z_x64_en-US.msi" \
+     "src-tauri/target/release/bundle/msi/Eversay Studio_X.Y.Z_x64_en-US.msi.sig" \
+     latest.json
+   ```
+
+5. **Verify** the manifest is reachable:
+   ```bash
+   curl https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json
+   ```
+   Should print the JSON. If 404, re-check the release was published (not draft)
+   and `latest.json` is named exactly that.
+
+6. **Test the upgrade flow** on a machine with the previous version installed:
+   restart the app, the bottom-right toast should appear within ~3 seconds.
+
+### How users experience updates
+
+- **Auto-check on every launch** (3 s after window opens; silently fails on
+  network issues)
+- **Toast at bottom-right** if a newer version is found, with three actions:
+  - "立即更新" → download + verify signature + install + auto-restart
+  - "稍后" → dismisses for this session only
+  - "✓ 不再提醒此版本" → permanently silences for THIS specific version
+    (still notifies for the *next* version)
+- **Manual trigger**: Settings page → 应用版本 → 「检查更新」 button (ignores
+  the skipped-version list)
+- "Skipped versions" persisted in `localStorage["skippedUpdateVersions"]`
+
+### Key safety / what to NOT do
+
+- **NEVER lose the private key.** Embedded public key in the shipped app is
+  fixed; if you re-generate keys, all existing installs stop accepting your
+  updates and need manual reinstall. Backup at `secrets/eversay-studio.key`
+  (in the private repo) covers drive failure on the dev machine.
+- **NEVER make the source repo public** unless you also rotate the signing
+  key (it's currently stored without password protection in `secrets/`).
+- **NEVER commit .msi or .sig files** to the source repo — they're release
+  assets only. Add to `.gitignore` if Cargo accidentally produces them under
+  a tracked path (currently `client/src-tauri/target/` is ignored, so safe).
+- **NEVER delete a release** users may have already installed from — they'll
+  get errors trying to verify signatures of subsequent updates if the chain
+  breaks. Only delete pre-release / draft releases that nobody downloaded.
+
 ## Known limitations / TODO
 
 - **All OpenAI-compatible vendors share one API-key slot** in

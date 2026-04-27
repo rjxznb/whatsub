@@ -117,11 +117,17 @@ export function Settings() {
           <select
             value={draft.llmProvider}
             onChange={(e) => setDraft({ ...draft, llmProvider: e.target.value as LlmProvider })}
-            className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm"
+            className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-full max-w-md"
           >
-            <option value="openai-compatible">OpenAI 兼容协议</option>
-            <option value="claude">Claude (Anthropic)</option>
-            <option value="gemini">Gemini (Google)</option>
+            <option value="openai-compatible">
+              OpenAI 兼容协议（OpenAI / DeepSeek / 智谱GLM / Kimi / 阿里 Qwen / SiliconFlow / Ollama 本地 / 各种代理）
+            </option>
+            <option value="claude">
+              Claude（Anthropic — Sonnet / Opus / Haiku 各版本）
+            </option>
+            <option value="gemini">
+              Gemini（Google — Gemini 2.5 Pro / Flash 等）
+            </option>
           </select>
 
           {draft.llmProvider === "openai-compatible" && (

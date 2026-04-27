@@ -289,13 +289,47 @@ export function ImportModal({ onClose }: Props) {
 
                 <div>
                   <span className="text-amber-300">③  导出 cookies.txt：</span>
-                  <ul className="list-disc list-inside mt-1 space-y-0.5 text-zinc-400">
-                    <li>Edge / Chrome 装扩展「Get cookies.txt LOCALLY」</li>
-                    <li>登录 YouTube</li>
-                    <li>点扩展按钮 → Export → 保存为 .txt 文件</li>
-                    <li>回 app 设置页 → 「yt-dlp cookies 文件」选这个 .txt</li>
+                  <ol className="list-decimal list-inside mt-1 space-y-1 text-zinc-400">
+                    <li>
+                      Edge / Chrome 装扩展{" "}
+                      <a
+                        href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-300 underline"
+                      >
+                        Get cookies.txt LOCALLY
+                      </a>
+                    </li>
+                    <li>登录 YouTube 网页</li>
+                    <li>
+                      点浏览器扩展按钮，再点 Get cookies.txt LOCALLY，弹窗里点
+                      Export All Cookies 保存为 .txt 文件
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <img
+                          src="/help/cookies-step3-extension.png"
+                          alt="点扩展按钮"
+                          className="rounded border border-zinc-700 w-full"
+                        />
+                        <img
+                          src="/help/cookies-step3-export.png"
+                          alt="Export All Cookies"
+                          className="rounded border border-zinc-700 w-full"
+                        />
+                      </div>
+                    </li>
+                    <li>
+                      回 app 设置页 → 「yt-dlp cookies 文件」选这个 .txt
+                      <div className="mt-2">
+                        <img
+                          src="/help/cookies-step4-settings.png"
+                          alt="设置页选 cookies 文件"
+                          className="rounded border border-zinc-700 w-full"
+                        />
+                      </div>
+                    </li>
                     <li>cookies 通常 1-2 周后过期，再失败时重新导出即可</li>
-                  </ul>
+                  </ol>
                 </div>
 
                 <div>

@@ -175,10 +175,14 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   }
 
   async function toggleFullscreen() {
-    const win = getCurrentWindow();
-    const next = !isFullscreen;
-    await win.setFullscreen(next);
-    setIsFullscreen(next);
+    try {
+      const win = getCurrentWindow();
+      const cur = await win.isFullscreen();
+      await win.setFullscreen(!cur);
+      setIsFullscreen(!cur);
+    } catch (e) {
+      console.error("toggleFullscreen failed:", e);
+    }
   }
 
   function changeSpeed(s: number) {

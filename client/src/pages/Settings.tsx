@@ -83,6 +83,16 @@ export function Settings() {
   async function handleSave() {
     setSaveStatus({ ok: true, msg: "保存中..." });
     try {
+      // If libraryDir is changing, freeze the path of any existing entries that
+      // don't yet have a videoDir set. This must happen BEFORE save_settings,
+      // so the freeze uses the OLD library_dir() value — old videos stay where
+      // they are, new imports use the new path.
+      if (settings.libraryDir !== draft.libraryDir) {
+        const frozen = await invoke<number>("library_freeze_paths");
+        if (frozen > 0) {
+          console.log(`Froze ${frozen} legacy entries to old library dir`);
+        }
+      }
       await save(draft);
       setSaveStatus({ ok: true, msg: "✓ 已保存" });
       setTimeout(() => setSaveStatus(null), 2500);

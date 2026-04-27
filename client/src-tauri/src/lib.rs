@@ -22,6 +22,7 @@ pub fn run() {
             commands::library::library_set_status,
             commands::library::library_rename,
             commands::library::library_reorder,
+            commands::library::library_freeze_paths,
             commands::library::reveal_in_explorer,
             commands::analysis::save_analysis,
             commands::analysis::load_analysis,

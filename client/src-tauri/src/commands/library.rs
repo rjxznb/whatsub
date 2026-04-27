@@ -148,6 +148,28 @@ pub fn library_reorder(ordered_ids: Vec<String>) -> AppResult<()> {
     write_index(&lib)
 }
 
+/// Freeze the `videoDir` field on every library entry that does not already have one,
+/// using the **currently-resolved** `library_dir()` value. Call this BEFORE persisting a
+/// new `settings.libraryDir`, so legacy entries continue pointing at the old location
+/// while new imports go to the new one.
+///
+/// Returns the number of entries that were frozen.
+#[tauri::command]
+pub fn library_freeze_paths() -> AppResult<usize> {
+    let mut lib = read_index()?;
+    let current_lib_dir = crate::core::paths::library_dir()?;
+    let mut frozen = 0;
+    for entry in lib.videos.iter_mut() {
+        if entry.video_dir.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            let dir = current_lib_dir.join(&entry.id);
+            entry.video_dir = Some(dir.to_string_lossy().to_string());
+            frozen += 1;
+        }
+    }
+    write_index(&lib)?;
+    Ok(frozen)
+}
+
 #[tauri::command]
 pub fn reveal_in_explorer(path: String) -> AppResult<()> {
     use crate::error::AppError;

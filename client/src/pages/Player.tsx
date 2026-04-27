@@ -40,6 +40,17 @@ export function Player() {
     window.localStorage.setItem("playerSplitPct", String(splitPct));
   }, [splitPct]);
 
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("playerPanelOpen")
+        : null;
+    return saved === null ? true : saved === "1";
+  });
+  useEffect(() => {
+    window.localStorage.setItem("playerPanelOpen", panelOpen ? "1" : "0");
+  }, [panelOpen]);
+
   const startSplitDrag = (e: React.MouseEvent) => {
     e.preventDefault();
     document.body.style.cursor = "col-resize";
@@ -182,16 +193,28 @@ export function Player() {
       <ProgressBanner />
 
       <div ref={splitContainerRef} className="flex-1 flex min-h-0">
-        <div style={{ width: `${splitPct}%` }} className="shrink-0">
-          {videoSrc && <VideoPlayer ref={videoRef} src={videoSrc} />}
-        </div>
         <div
-          onMouseDown={startSplitDrag}
-          onDoubleClick={() => setSplitPct(58)}
-          title="拖动调整比例 · 双击重置 58%"
-          className="w-1 bg-zinc-800 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize shrink-0 transition-colors"
-        />
-        <div className="flex-1 flex flex-col min-h-0">
+          style={panelOpen ? { width: `${splitPct}%` } : { width: "100%" }}
+          className="shrink-0"
+        >
+          {videoSrc && (
+            <VideoPlayer
+              ref={videoRef}
+              src={videoSrc}
+              panelOpen={panelOpen}
+              onTogglePanel={() => setPanelOpen((v) => !v)}
+            />
+          )}
+        </div>
+        {panelOpen && (
+          <>
+            <div
+              onMouseDown={startSplitDrag}
+              onDoubleClick={() => setSplitPct(58)}
+              title="拖动调整比例 · 双击重置 58%"
+              className="w-1 bg-zinc-800 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize shrink-0 transition-colors"
+            />
+            <div className="flex-1 flex flex-col min-h-0">
           <div className="flex border-b border-zinc-800 text-sm">
             {(["subtitles", "keyPhrases"] as Tab[]).map((t) => (
               <button
@@ -222,7 +245,9 @@ export function Player() {
               <KeyPhraseList phrases={analysis.summary?.keyPhrases ?? []} />
             )}
           </div>
-        </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

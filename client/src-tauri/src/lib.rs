@@ -24,6 +24,9 @@ pub fn run() {
             commands::analysis::load_analysis,
             commands::analysis::load_transcript,
             commands::analysis::video_source_path,
+            commands::models::whisper_model_status,
+            commands::models::whisper_model_download,
+            commands::import::import_video,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

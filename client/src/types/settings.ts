@@ -24,6 +24,10 @@ export interface Settings {
   claude: ClaudeConfig;
   gemini: GeminiConfig;
   whisperModel: WhisperModelSize;
+  /** Custom directory for video + analysis files. Empty string = use default (%APPDATA%/Get_Video/library). */
+  libraryDir: string;
+  /** Custom directory for Whisper model files. Empty string = use default (%APPDATA%/Get_Video/models). */
+  modelsDir: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -32,4 +36,6 @@ export const DEFAULT_SETTINGS: Settings = {
   claude: { apiKey: "", model: "claude-sonnet-4-6" },
   gemini: { apiKey: "", model: "gemini-2.5-pro" },
   whisperModel: "small",
+  libraryDir: "",
+  modelsDir: "",
 };

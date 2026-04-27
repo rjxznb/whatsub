@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
 import type { Settings, WhisperModelSize, LlmProvider } from "../types/settings";
 
@@ -190,6 +191,27 @@ export function Settings() {
         </section>
 
         <section>
+          <h2 className="font-semibold mb-3">存储路径</h2>
+          <div className="space-y-3">
+            <DirField
+              label="视频/字幕/分析文件目录"
+              value={draft.libraryDir}
+              defaultHint="默认：%APPDATA%/Get_Video/library"
+              onChange={(v) => setDraft({ ...draft, libraryDir: v })}
+            />
+            <DirField
+              label="Whisper 模型目录"
+              value={draft.modelsDir}
+              defaultHint="默认：%APPDATA%/Get_Video/models"
+              onChange={(v) => setDraft({ ...draft, modelsDir: v })}
+            />
+            <p className="text-[10px] text-zinc-500 leading-relaxed">
+              ⚠ 修改路径不会自动迁移已有文件。如需保留历史视频/模型，请先手动把它们移到新路径下。否则旧条目会显示为找不到。
+            </p>
+          </div>
+        </section>
+
+        <section>
           <h2 className="font-semibold mb-3">Whisper 模型</h2>
           <select
             value={draft.whisperModel}
@@ -257,6 +279,54 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100"
       />
+    </label>
+  );
+}
+
+function DirField({
+  label,
+  value,
+  defaultHint,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  defaultHint: string;
+  onChange: (v: string) => void;
+}) {
+  async function pickDir() {
+    const result = await openDialog({ directory: true, multiple: false });
+    if (typeof result === "string") onChange(result);
+  }
+  return (
+    <label className="text-sm text-zinc-300 block">
+      {label}
+      <div className="mt-1 flex gap-2">
+        <input
+          type="text"
+          value={value}
+          readOnly
+          placeholder={defaultHint}
+          className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100 placeholder:text-zinc-600"
+        />
+        <button
+          type="button"
+          onClick={pickDir}
+          className="px-3 py-1.5 bg-zinc-700 text-zinc-100 rounded text-sm hover:bg-zinc-600"
+        >
+          选择...
+        </button>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            title="重置为默认"
+            className="px-3 py-1.5 bg-zinc-800 text-zinc-300 rounded text-sm hover:bg-zinc-700"
+          >
+            重置
+          </button>
+        )}
+      </div>
     </label>
   );
 }

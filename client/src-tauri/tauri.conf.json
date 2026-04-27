@@ -24,7 +24,14 @@
         "enable": true,
         "scope": [
           "$DATA/Get_Video/**",
-          "$LOCALDATA/Get_Video/**"
+          "$LOCALDATA/Get_Video/**",
+          "**/*.mp4",
+          "**/*.mkv",
+          "**/*.mov",
+          "**/*.webm",
+          "**/*.jpg",
+          "**/*.jpeg",
+          "**/*.png"
         ]
       }
     }

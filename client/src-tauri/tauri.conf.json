@@ -23,8 +23,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/Get_Video/**",
-          "$APPDATA/Get Video/**"
+          "$DATA/Get_Video/**",
+          "$LOCALDATA/Get_Video/**"
         ]
       }
     }

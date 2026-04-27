@@ -42,19 +42,21 @@ export function Library() {
     win
       .onDragDropEvent((event) => {
         const p = event.payload;
-        if (p.type === "enter" || p.type === "over") {
+        if (p.type === "enter") {
           // Highlight only when the drag includes at least one video file.
-          const hasVideo = p.paths?.some((path) => VIDEO_EXT_RE.test(path));
-          setFileHover(Boolean(hasVideo));
+          const hasVideo = p.paths.some((path: string) => VIDEO_EXT_RE.test(path));
+          setFileHover(hasVideo);
         } else if (p.type === "leave") {
           setFileHover(false);
         } else if (p.type === "drop") {
           setFileHover(false);
-          const videoPath = p.paths?.find((path) => VIDEO_EXT_RE.test(path));
+          const videoPath = p.paths.find((path: string) => VIDEO_EXT_RE.test(path));
           if (videoPath) {
             setImportInitial({ filePath: videoPath });
           }
         }
+        // "over" fires repeatedly while dragging over the window; we already set
+        // hover state on "enter" so nothing to do here.
       })
       .then((u) => {
         if (cancelled) u();

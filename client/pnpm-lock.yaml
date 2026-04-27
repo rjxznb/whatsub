@@ -11,6 +11,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.91.1
         version: 0.91.1
+      '@fontsource/charis-sil':
+        specifier: ^5.2.7
+        version: 5.2.7
       '@google/genai':
         specifier: ^1.50.1
         version: 1.50.1
@@ -454,6 +457,9 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@fontsource/charis-sil@5.2.7':
+    resolution: {integrity: sha512-qbaXZFD9f54j2ZFqe2+3MES2TeotlGuEHE5v8PlS+nsDPts7L9g87zlKogZdnuVyZV4XY0z306ejthJykweWLw==}
 
   '@google/genai@1.50.1':
     resolution: {integrity: sha512-YbkX7H9+1Pt8wOt7DDREy8XSoiL6fRDzZQRyaVBarFf8MR3zHGqVdvM4cLbDXqPhxqvegZShgfxb8kw9C7YhAQ==}
@@ -2221,6 +2227,8 @@ snapshots:
       levn: 0.4.1
 
   '@exodus/bytes@1.15.0': {}
+
+  '@fontsource/charis-sil@5.2.7': {}
 
   '@google/genai@1.50.1':
     dependencies:

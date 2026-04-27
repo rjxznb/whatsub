@@ -76,9 +76,7 @@ export function KeyPhraseList({ phrases }: Props) {
                   {p.expression}
                 </span>
                 {ipa && (
-                  <span className="text-zinc-500 text-xs italic font-mono">
-                    {ipa}
-                  </span>
+                  <span className="font-ipa text-zinc-300 text-sm">{ipa}</span>
                 )}
                 <button
                   type="button"

@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Charis SIL — designed by SIL specifically for linguistics/IPA. Has full
+   coverage of IPA Extensions, combining diacritics, tone letters, etc. */
+@import "@fontsource/charis-sil/400.css";
+@import "@fontsource/charis-sil/700.css";
+
+.font-ipa {
+  font-family: "Charis SIL", "Gentium Plus", "Noto Sans", "Segoe UI", serif;
+  font-feature-settings: "kern" 1;
+}
+
 /* Dark, thin scrollbars — replaces WebView2's bright default that clashes with
    the zinc-950 surfaces. Standard `scrollbar-*` for Firefox/modern Chromium,
    `::-webkit-scrollbar*` for finer control on Edge/Chrome. */

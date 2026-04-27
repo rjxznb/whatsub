@@ -31,8 +31,9 @@ Thumbs.db
 client/src-tauri/binaries/*.exe
 client/src-tauri/binaries/*.dll
 
-# Existing video pipeline data (not part of the client)
-data/
+# Existing video pipeline data (not part of the client) — anchored to repo root
+# so client/public/data/ assets are NOT ignored.
+/data/
 
 # Python pipeline artifacts
 __pycache__/

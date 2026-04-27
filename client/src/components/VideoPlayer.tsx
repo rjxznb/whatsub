@@ -18,7 +18,6 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { formatTime } from "../utils/time";
 
 interface Props {
@@ -54,7 +53,9 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
   const [seeking, setSeeking] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  // App-window "fullscreen" — covers the Tauri window (not OS-level fullscreen).
+  // The container becomes position:fixed inset-0 to overlay header / sidebar / banner.
+  const [expanded, setExpanded] = useState(false);
 
   // Resolve the video element via either a function ref or our own internal use.
   const resolveVideo = useCallback((): HTMLVideoElement | null => {
@@ -84,17 +85,18 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     };
   }, [playing, resetHideTimer]);
 
-  // Sync Tauri window fullscreen state on mount + when user uses keyboard F11/etc.
+  // Esc exits expanded mode (mirrors browser fullscreen UX).
   useEffect(() => {
-    const win = getCurrentWindow();
-    win.isFullscreen().then(setIsFullscreen).catch(() => {});
-    const unlistenP = win.onResized(() => {
-      win.isFullscreen().then(setIsFullscreen).catch(() => {});
-    });
-    return () => {
-      unlistenP.then((u) => u()).catch(() => {});
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setExpanded(false);
+      }
     };
-  }, []);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded]);
 
   // Keyboard shortcuts (when player is mounted and focus is not in an input).
   useEffect(() => {
@@ -174,15 +176,8 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     setMuted(!muted);
   }
 
-  async function toggleFullscreen() {
-    try {
-      const win = getCurrentWindow();
-      const cur = await win.isFullscreen();
-      await win.setFullscreen(!cur);
-      setIsFullscreen(!cur);
-    } catch (e) {
-      console.error("toggleFullscreen failed:", e);
-    }
+  function toggleFullscreen() {
+    setExpanded((v) => !v);
   }
 
   function changeSpeed(s: number) {
@@ -273,7 +268,12 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   return (
     <div
       ref={containerRef}
-      className="group relative h-full w-full bg-black overflow-hidden select-none"
+      className={
+        "group bg-black overflow-hidden select-none " +
+        (expanded
+          ? "fixed inset-0 z-50"
+          : "relative h-full w-full")
+      }
       onMouseMove={resetHideTimer}
       onMouseLeave={() => {
         if (playing) setShowControls(false);
@@ -453,14 +453,14 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
             </button>
           )}
 
-          {/* Fullscreen */}
+          {/* Fullscreen (within the app window, not OS-level) */}
           <button
             type="button"
             onClick={toggleFullscreen}
-            title={isFullscreen ? "退出全屏 (F)" : "全屏 (F)"}
+            title={expanded ? "退出全屏 (F / Esc)" : "全屏 (F)"}
             className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/20 transition-colors"
           >
-            {isFullscreen ? (
+            {expanded ? (
               <Minimize className="h-6 w-6" />
             ) : (
               <Maximize className="h-6 w-6" />

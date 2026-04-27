@@ -29,6 +29,39 @@ export function Player() {
   const [tab, setTab] = useState<Tab>("subtitles");
   const [videoSrc, setVideoSrc] = useState<string>("");
 
+  // Resizable split between video pane (left) and subtitle pane (right).
+  // Persisted as a percentage in localStorage; clamped to 25%-80%.
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const [splitPct, setSplitPct] = useState<number>(() => {
+    const saved =
+      typeof window !== "undefined" ? window.localStorage.getItem("playerSplitPct") : null;
+    const n = saved ? parseFloat(saved) : 58;
+    return isNaN(n) ? 58 : Math.min(80, Math.max(25, n));
+  });
+  useEffect(() => {
+    window.localStorage.setItem("playerSplitPct", String(splitPct));
+  }, [splitPct]);
+
+  const startSplitDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    const onMove = (ev: MouseEvent) => {
+      const rect = splitContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      setSplitPct(Math.min(80, Math.max(25, pct)));
+    };
+    const onUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   const entry = library.videos.find((v) => v.id === videoId);
 
   useTauriEvent<{ stage: string; video_id?: string; percent?: number }>(
@@ -124,10 +157,16 @@ export function Player() {
 
       <ProgressBanner />
 
-      <div className="flex-1 flex min-h-0">
-        <div className="w-[58%] border-r border-zinc-800">
+      <div ref={splitContainerRef} className="flex-1 flex min-h-0">
+        <div style={{ width: `${splitPct}%` }} className="shrink-0">
           {videoSrc && <VideoPlayer ref={videoRef} src={videoSrc} />}
         </div>
+        <div
+          onMouseDown={startSplitDrag}
+          onDoubleClick={() => setSplitPct(58)}
+          title="拖动调整比例 · 双击重置 58%"
+          className="w-1 bg-zinc-800 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize shrink-0 transition-colors"
+        />
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex border-b border-zinc-800 text-sm">
             {(["subtitles", "keyPhrases"] as Tab[]).map((t) => (

@@ -40,6 +40,24 @@ pub async fn download(
 
     let id = video_id.to_string();
     let app_clone = app.clone();
+    let id_for_log = video_id.to_string();
+    let app_for_log = app.clone();
+    let emit_log = move |line: &str| {
+        for actual in line.lines() {
+            let t = actual.trim();
+            if t.is_empty() {
+                continue;
+            }
+            emit(
+                &app_for_log,
+                PipelineEvent::Log {
+                    video_id: id_for_log.clone(),
+                    source: "yt-dlp".into(),
+                    line: t.into(),
+                },
+            );
+        }
+    };
     let thumb_template = format!("thumbnail:{}", thumb_path.trim_end_matches(".jpg"));
     let info_template = format!("infojson:{}", info_path.trim_end_matches(".json"));
 
@@ -80,7 +98,8 @@ pub async fn download(
         app,
         "yt-dlp",
         &arg_refs,
-        |line| {
+        move |line| {
+            emit_log(line);
             if let Some(p) = parse_percent(line) {
                 emit(
                     &app_clone,

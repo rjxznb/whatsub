@@ -32,6 +32,14 @@ pub enum PipelineEvent {
         total_mb: u64,
         downloaded_mb: u64,
     },
+    /// Raw stderr line from a sidecar — shown in the UI's expandable detail
+    /// view so the user can see what's happening during phases that don't
+    /// emit percent progress (e.g. yt-dlp resolving URLs).
+    Log {
+        video_id: String,
+        source: String,
+        line: String,
+    },
 }
 
 pub fn emit(app: &AppHandle, event: PipelineEvent) {

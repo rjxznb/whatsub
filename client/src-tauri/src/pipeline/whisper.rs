@@ -113,6 +113,24 @@ pub async fn transcribe(
 
     let id = video_id.to_string();
     let app_clone = app.clone();
+    let id_for_log = video_id.to_string();
+    let app_for_log = app.clone();
+    let emit_log = move |chunk: &str| {
+        for line in chunk.lines() {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            emit(
+                &app_for_log,
+                PipelineEvent::Log {
+                    video_id: id_for_log.clone(),
+                    source: "whisper-cli".into(),
+                    line: t.into(),
+                },
+            );
+        }
+    };
     run_sidecar(
         app,
         "whisper-cli",
@@ -124,7 +142,8 @@ pub async fn transcribe(
             "-of", &out_base,
             "--print-progress",
         ],
-        |line| {
+        move |line| {
+            emit_log(line);
             if let Some(p) = parse_progress(line) {
                 emit(
                     &app_clone,

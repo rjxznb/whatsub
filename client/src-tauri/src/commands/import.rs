@@ -62,7 +62,7 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
             let dest = out_dir.join("source.mp4");
             std::fs::copy(&req.source_value, &dest)?;
             let thumb = out_dir.join("thumb.jpg");
-            ffmpeg::extract_thumbnail(&app, &dest, &thumb).await?;
+            ffmpeg::extract_thumbnail(&app, &dest, &thumb, &video_id).await?;
             let title = std::path::Path::new(&req.source_value)
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -100,7 +100,7 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
         },
     );
     let audio_path = out_dir.join("audio.wav");
-    ffmpeg::extract_audio_wav(&app, &video_path, &audio_path).await?;
+    ffmpeg::extract_audio_wav(&app, &video_path, &audio_path, &video_id).await?;
 
     let srt_path =
         whisper::transcribe(&app, &audio_path, &out_dir, &req.whisper_model, &video_id).await?;

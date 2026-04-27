@@ -21,7 +21,16 @@ type PipelineEventPayload =
   | { stage: "Transcribing"; video_id: string; percent: number }
   | { stage: "Transcribed"; video_id: string; srt_path: string; duration_sec: number }
   | { stage: "Failed"; video_id: string; error: string }
-  | { stage: "ModelDownload"; progress: number; total_mb: number; downloaded_mb: number };
+  | { stage: "ModelDownload"; progress: number; total_mb: number; downloaded_mb: number }
+  | { stage: "Log"; video_id: string; source: string; line: string };
+
+interface LogLine {
+  source: string;
+  text: string;
+  /** Monotonic key for React lists; lines are immutable so timestamp suffices. */
+  ts: number;
+}
+const LOG_BUFFER_SIZE = 80;
 
 type Phase = "idle" | "started" | "downloading" | "extracting" | "transcribing" | "done" | "error";
 
@@ -60,6 +69,8 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
+  const [logLines, setLogLines] = useState<LogLine[]>([]);
+  const [showLog, setShowLog] = useState(false);
 
   // Subscribe to pipeline events while submitting so we can render live progress.
   useEffect(() => {
@@ -92,6 +103,18 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         case "Failed":
           setPhase("error");
           setError(ev.error);
+          break;
+        case "Log":
+          setLogLines((prev) => {
+            const next = [
+              ...prev,
+              { source: ev.source, text: ev.line, ts: Date.now() },
+            ];
+            // Keep only the most recent N lines so the panel stays manageable.
+            return next.length > LOG_BUFFER_SIZE
+              ? next.slice(-LOG_BUFFER_SIZE)
+              : next;
+          });
           break;
       }
     }).then((u) => {
@@ -128,6 +151,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     setSubmitting(true);
     setPhase("started");
     setPercent(0);
+    setLogLines([]);
 
     try {
       const result = await invoke<{
@@ -158,6 +182,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     setPhase("idle");
     setPercent(0);
     setError(null);
+    setLogLines([]);
   }
 
   // ------- Progress view -------
@@ -225,6 +250,37 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
               <div className="text-xs whitespace-pre-wrap break-all">{error}</div>
             </div>
           )}
+
+          {/* Live sub-process log — collapsible. Lets the user see exactly
+              what step yt-dlp / ffmpeg / whisper-cli is on during the
+              "preparing" / "transcribing" phases that don't expose percent. */}
+          <div className="mt-4 border-t border-zinc-800 pt-3">
+            <button
+              type="button"
+              onClick={() => setShowLog((v) => !v)}
+              className="flex items-center gap-2 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              <span className="inline-block w-3 text-zinc-500">
+                {showLog ? "▾" : "▸"}
+              </span>
+              详细日志
+              <span className="text-zinc-600">({logLines.length} 行)</span>
+            </button>
+            {showLog && (
+              <div className="mt-2 max-h-48 overflow-y-auto rounded bg-black/40 border border-zinc-800 p-2 font-mono text-[10px] leading-relaxed">
+                {logLines.length === 0 ? (
+                  <div className="text-zinc-600 italic">暂无输出...</div>
+                ) : (
+                  logLines.map((l) => (
+                    <div key={l.ts + l.text} className="text-zinc-400">
+                      <span className="text-blue-400">[{l.source}]</span>{" "}
+                      <span className="break-all">{l.text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="flex justify-end gap-2 mt-5">
             {error ? (

@@ -11,22 +11,44 @@ export function useSpeech() {
     typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null
   );
 
-  // Load voices. Browsers (Chromium especially) populate them async; listen
-  // for voiceschanged to catch the late arrival.
+  // Load voices. Chromium/WebView2 populates them async — sometimes the
+  // voiceschanged event fires, sometimes it doesn't. Be defensive: poll for
+  // up to ~3 seconds after mount before giving up.
   useEffect(() => {
     const synth = window.speechSynthesis;
-    if (!synth) return;
+    if (!synth) {
+      console.warn("[useSpeech] window.speechSynthesis is undefined");
+      return;
+    }
+    let cancelled = false;
     const refresh = () => {
       const all = synth.getVoices();
-      // Only English voices. Sort by lang for predictable ordering.
       const filtered = all
         .filter((v) => v.lang.toLowerCase().startsWith("en"))
         .sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
-      setVoices(filtered);
+      if (!cancelled) setVoices(filtered);
+      // Helpful in DevTools when troubleshooting empty voice list.
+      if (all.length === 0) {
+        console.log(
+          "[useSpeech] getVoices() returned 0 — waiting for voiceschanged or poll"
+        );
+      } else {
+        console.log(
+          `[useSpeech] ${all.length} total voices, ${filtered.length} English`
+        );
+      }
     };
     refresh();
     synth.addEventListener("voiceschanged", refresh);
-    return () => synth.removeEventListener("voiceschanged", refresh);
+    // Poll fallback for WebView2 quirks where voiceschanged never fires.
+    const intervals = [200, 500, 1000, 2000, 3000].map((ms) =>
+      setTimeout(refresh, ms)
+    );
+    return () => {
+      cancelled = true;
+      synth.removeEventListener("voiceschanged", refresh);
+      intervals.forEach(clearTimeout);
+    };
   }, []);
 
   // Persist voice choice; also pick a sensible default the first time.

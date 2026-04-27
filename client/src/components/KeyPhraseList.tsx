@@ -44,14 +44,15 @@ export function KeyPhraseList({ phrases }: Props) {
 
   return (
     <div className="overflow-y-auto h-full flex flex-col">
-      {/* Voice selector header */}
-      {voices.length > 0 && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
-          <span className="text-[10px] text-zinc-500 ml-auto">音色</span>
+      {/* Voice selector header — always visible so the user can see the feature
+          even if voices haven't loaded yet, and learn why if loading failed. */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
+        <span className="text-[10px] text-zinc-500 ml-auto">音色</span>
+        {voices.length > 0 ? (
           <select
             value={voiceURI ?? ""}
             onChange={(e) => setVoiceURI(e.target.value)}
-            className="text-xs bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 max-w-[180px]"
+            className="text-xs bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 max-w-[200px]"
             title="选择 TTS 音色"
           >
             {voices.map((v) => (
@@ -60,8 +61,12 @@ export function KeyPhraseList({ phrases }: Props) {
               </option>
             ))}
           </select>
-        </div>
-      )}
+        ) : (
+          <span className="text-[10px] text-zinc-500 italic">
+            未检测到英语 TTS 音色
+          </span>
+        )}
+      </div>
 
       <div className="p-3 space-y-3">
         {phrases.map((p, i) => {

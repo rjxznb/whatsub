@@ -7,6 +7,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
+import { useUpdater } from "../hooks/useUpdater";
+import { getVersion } from "@tauri-apps/api/app";
 
 const WHISPER_SIZES: WhisperModelSize[] = ["tiny", "base", "small", "medium", "large-v3"];
 
@@ -205,8 +207,59 @@ export function Settings() {
             </span>
           )}
         </div>
+
+        <UpdateSection />
       </div>
     </div>
+  );
+}
+
+function UpdateSection() {
+  const { status, checkNow, downloadAndInstall } = useUpdater();
+  const [appVersion, setAppVersion] = useState<string>("");
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+  }, []);
+  return (
+    <section className="border-t border-zinc-800 pt-6">
+      <h2 className="font-semibold mb-3">应用版本</h2>
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-zinc-400 tabular-nums">
+          v{appVersion || "0.0.0"}
+        </span>
+        <button
+          onClick={() => void checkNow()}
+          disabled={status.type === "checking" || status.type === "downloading"}
+          className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm rounded disabled:opacity-50"
+        >
+          {status.type === "checking" ? "检查中..." : "检查更新"}
+        </button>
+        {status.type === "available" && (
+          <button
+            onClick={() => void downloadAndInstall()}
+            className="px-3 py-1.5 bg-blue-500 text-black text-sm rounded font-medium"
+          >
+            更新到 v{status.update.version}
+          </button>
+        )}
+        {status.type === "none" && (
+          <span className="text-sm text-green-400">✓ 已是最新版本</span>
+        )}
+        {status.type === "error" && (
+          <span className="text-xs text-red-400" title={status.message}>
+            ✗ 检查失败
+          </span>
+        )}
+        {status.type === "downloading" && (
+          <span className="text-xs text-blue-300 tabular-nums">
+            下载中 {status.percent.toFixed(0)}%
+          </span>
+        )}
+        {status.type === "installing" && (
+          <span className="text-xs text-blue-300">安装中，即将重启...</span>
+        )}
+      </div>
+    </section>
   );
 }
 

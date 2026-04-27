@@ -3,6 +3,7 @@ import { Library } from "./pages/Library";
 import { Player } from "./pages/Player";
 import { Settings } from "./pages/Settings";
 import { FirstRunGate } from "./components/FirstRunGate";
+import { UpdateChecker } from "./components/UpdateChecker";
 import "./App.css";
 
 function App() {
@@ -21,6 +22,7 @@ function App() {
         <Route path="/player/:videoId" element={<Player />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
+      <UpdateChecker />
     </BrowserRouter>
   );
 }

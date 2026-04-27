@@ -13,6 +13,7 @@ import { ProgressBanner } from "../components/ProgressBanner";
 import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
+import { dedupSubtitles } from "../store/analysis";
 import type { AnalysisResult, Subtitle } from "../llm/types";
 
 type Tab = "subtitles" | "keyPhrases";
@@ -83,20 +84,34 @@ export function Player() {
 
   useEffect(() => {
     if (!videoId) return;
+    // StrictMode in dev double-mounts components. Without this token, the first
+    // mount's runAnalysis would keep streaming and appending while the second
+    // mount kicks off another LLM call — producing two parallel sets of cues.
+    let cancelled = false;
+
     (async () => {
       const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
+      if (cancelled) return;
+
       if (cached) {
-        analysis.setSubtitles(cached.subtitles);
+        // Dedup any duplicates already on disk from before this fix; if dedup
+        // changed the count, persist the cleaned version back so the file
+        // self-heals on next open.
+        const cleaned = dedupSubtitles(cached.subtitles);
+        analysis.setSubtitles(cleaned);
         const { subtitles: _drop, ...summary } = cached;
         analysis.setSummary(summary);
         analysis.setPhase("complete");
+        if (cleaned.length !== cached.subtitles.length) {
+          const cleanedAnalysis: AnalysisResult = { ...cached, subtitles: cleaned };
+          await invoke("save_analysis", { videoId, analysis: cleanedAnalysis });
+        }
         return;
       }
 
       analysis.startFor(videoId);
-      const srt = srtPathFromImport
-        ? await invoke<string | null>("load_transcript", { videoId })
-        : await invoke<string | null>("load_transcript", { videoId });
+      const srt = await invoke<string | null>("load_transcript", { videoId });
+      if (cancelled) return;
       if (!srt) {
         analysis.setError("找不到 transcript.srt — 请重新解析");
         return;
@@ -109,14 +124,21 @@ export function Player() {
         await runAnalysis({
           provider,
           cues,
-          onCue: (c: Subtitle) => analysis.appendSubtitle(c),
-          onSummary: (s) => analysis.setSummary(s),
+          onCue: (c: Subtitle) => {
+            if (cancelled) return;
+            analysis.appendSubtitle(c);
+          },
+          onSummary: (s) => {
+            if (cancelled) return;
+            analysis.setSummary(s);
+          },
         });
+        if (cancelled) return;
         const summary = useAnalysis.getState().summary;
         if (summary) {
           const finalAnalysis: AnalysisResult = {
             ...summary,
-            subtitles: useAnalysis.getState().subtitles,
+            subtitles: dedupSubtitles(useAnalysis.getState().subtitles),
           };
           await invoke("save_analysis", { videoId, analysis: finalAnalysis });
           await invoke("library_set_status", {
@@ -128,6 +150,7 @@ export function Player() {
         analysis.setPhase("complete");
         await reload();
       } catch (e) {
+        if (cancelled) return;
         analysis.setError(String(e));
         await invoke("library_set_status", {
           id: videoId,
@@ -137,6 +160,12 @@ export function Player() {
         await reload();
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
+    // srtPathFromImport intentionally excluded — its sole purpose is to gate the
+    // initial branch and we don't want a re-run if it changes mid-flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 

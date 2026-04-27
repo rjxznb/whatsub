@@ -1,6 +1,19 @@
 import { create } from "zustand";
 import type { Subtitle, AnalysisResult } from "../llm/types";
 
+/** Drop entries that share (time, endTime, text) with a previous one. */
+export function dedupSubtitles(subs: Subtitle[]): Subtitle[] {
+  const seen = new Set<string>();
+  const out: Subtitle[] = [];
+  for (const s of subs) {
+    const key = `${s.time}|${s.endTime}|${s.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
 export type AnalysisPhase =
   | "idle"
   | "downloading"
@@ -46,8 +59,17 @@ export const useAnalysis = create<AnalysisState>((set) => ({
     }),
   setPhase: (phase, percent) =>
     set((s) => ({ phase, progressPercent: percent ?? s.progressPercent })),
-  appendSubtitle: (s) => set((st) => ({ subtitles: [...st.subtitles, s] })),
-  setSubtitles: (s) => set({ subtitles: s }),
+  appendSubtitle: (s) =>
+    set((st) => {
+      // Defensive dedup at append time too — if the same cue arrives via two
+      // parallel runs (e.g. StrictMode double-mount race), only keep the first.
+      const key = `${s.time}|${s.endTime}|${s.text}`;
+      if (st.subtitles.some((x) => `${x.time}|${x.endTime}|${x.text}` === key)) {
+        return st;
+      }
+      return { subtitles: [...st.subtitles, s] };
+    }),
+  setSubtitles: (s) => set({ subtitles: dedupSubtitles(s) }),
   setSummary: (s) => set({ summary: s }),
   setError: (msg) => set({ phase: "error", errorMessage: msg }),
   reset: () =>

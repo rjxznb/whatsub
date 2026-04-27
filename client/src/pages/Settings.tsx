@@ -14,6 +14,7 @@ export function Settings() {
   const [downloading, setDownloading] = useState<WhisperModelSize | null>(null);
   const [downloadPct, setDownloadPct] = useState(0);
   const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     load();
@@ -50,6 +51,10 @@ export function Settings() {
     setDownloadPct(0);
     try {
       await invoke("whisper_model_download", { size });
+    } catch (e) {
+      // Reset model state so a partial file doesn't show as "downloaded"
+      console.error("model download failed", e);
+      alert(`下载失败：${e}`);
     } finally {
       setDownloading(null);
     }
@@ -71,6 +76,18 @@ export function Settings() {
       setTestStatus(ok ? "✓ 连接成功" : "✗ 无响应");
     } catch (e) {
       setTestStatus(`✗ ${e}`);
+    }
+  }
+
+  async function handleSave() {
+    setSaveStatus({ ok: true, msg: "保存中..." });
+    try {
+      await save(draft);
+      setSaveStatus({ ok: true, msg: "✓ 已保存" });
+      setTimeout(() => setSaveStatus(null), 2500);
+    } catch (e) {
+      console.error("save failed", e);
+      setSaveStatus({ ok: false, msg: `✗ 保存失败：${e}` });
     }
   }
 
@@ -108,9 +125,8 @@ export function Settings() {
                   })
                 }
               />
-              <Field
+              <SecretField
                 label="API Key"
-                type="password"
                 value={draft.openaiCompatible.apiKey}
                 onChange={(v) =>
                   setDraft({
@@ -134,9 +150,8 @@ export function Settings() {
 
           {draft.llmProvider === "claude" && (
             <div className="grid grid-cols-1 gap-3 mt-3">
-              <Field
+              <SecretField
                 label="API Key"
-                type="password"
                 value={draft.claude.apiKey}
                 onChange={(v) => setDraft({ ...draft, claude: { ...draft.claude, apiKey: v } })}
               />
@@ -150,9 +165,8 @@ export function Settings() {
 
           {draft.llmProvider === "gemini" && (
             <div className="grid grid-cols-1 gap-3 mt-3">
-              <Field
+              <SecretField
                 label="API Key"
-                type="password"
                 value={draft.gemini.apiKey}
                 onChange={(v) => setDraft({ ...draft, gemini: { ...draft.gemini, apiKey: v } })}
               />
@@ -201,12 +215,23 @@ export function Settings() {
           )}
         </section>
 
-        <button
-          onClick={() => save(draft)}
-          className="px-4 py-2 bg-blue-500 text-black font-medium rounded text-sm"
-        >
-          保存设置
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-blue-500 text-black font-medium rounded text-sm"
+          >
+            保存设置
+          </button>
+          {saveStatus && (
+            <span
+              className={
+                "text-sm " + (saveStatus.ok ? "text-green-400" : "text-red-400")
+              }
+            >
+              {saveStatus.msg}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -232,6 +257,48 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100"
       />
+    </label>
+  );
+}
+
+/**
+ * Password input with a toggle eye button to reveal the value.
+ */
+function SecretField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <label className="text-sm text-zinc-300">
+      {label}
+      <div className="mt-1 flex items-stretch border border-zinc-800 rounded bg-zinc-900 focus-within:border-zinc-600">
+        <input
+          type={reveal ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="flex-1 px-3 py-1.5 bg-transparent text-zinc-100 outline-none"
+          placeholder={value ? "" : "未设置"}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          onClick={() => setReveal((r) => !r)}
+          title={reveal ? "隐藏" : "显示"}
+          className="px-3 text-zinc-400 hover:text-zinc-100 select-none"
+        >
+          {reveal ? "🙈" : "👁"}
+        </button>
+      </div>
+      {value && !reveal && (
+        <div className="text-[10px] text-zinc-500 mt-1">已保存（{value.length} 字符）</div>
+      )}
     </label>
   );
 }

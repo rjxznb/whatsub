@@ -34,6 +34,14 @@ pub async fn download_model(app: &AppHandle, size: &str) -> AppResult<()> {
     let dest = model_path(size)?;
     std::fs::create_dir_all(dest.parent().unwrap())?;
 
+    // Download to a sibling `.partial` path so an interrupted download never
+    // leaves a "complete-looking" file at `dest`. Rename to the final name
+    // only after the stream finishes successfully.
+    let partial = dest.with_extension("bin.partial");
+    if partial.exists() {
+        std::fs::remove_file(&partial)?;
+    }
+
     let resp = reqwest::get(url).await?;
     let total_bytes = resp.content_length().unwrap_or(total_mb * 1024 * 1024);
     let mut downloaded: u64 = 0;
@@ -41,27 +49,47 @@ pub async fn download_model(app: &AppHandle, size: &str) -> AppResult<()> {
 
     use futures_util::StreamExt;
     use std::io::Write;
-    let mut file = std::fs::File::create(&dest)?;
-    let mut stream = resp.bytes_stream();
+    {
+        let mut file = std::fs::File::create(&partial)?;
+        let mut stream = resp.bytes_stream();
 
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk?;
-        file.write_all(&bytes)?;
-        downloaded += bytes.len() as u64;
-        let pct = ((downloaded as f64 / total_bytes as f64) * 100.0) as u8;
-        if pct != last_percent {
-            last_percent = pct;
-            emit(
-                app,
-                PipelineEvent::ModelDownload {
-                    progress: pct,
-                    total_mb: total_bytes / 1024 / 1024,
-                    downloaded_mb: downloaded / 1024 / 1024,
-                },
-            );
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk?;
+            file.write_all(&bytes)?;
+            downloaded += bytes.len() as u64;
+            let pct = ((downloaded as f64 / total_bytes as f64) * 100.0) as u8;
+            if pct != last_percent {
+                last_percent = pct;
+                emit(
+                    app,
+                    PipelineEvent::ModelDownload {
+                        progress: pct,
+                        total_mb: total_bytes / 1024 / 1024,
+                        downloaded_mb: downloaded / 1024 / 1024,
+                    },
+                );
+            }
         }
+        file.sync_all()?;
     }
+
+    // Sanity check: if Content-Length was known, refuse to rename a truncated file.
+    if resp_had_content_length(total_bytes, total_mb) && downloaded < total_bytes {
+        std::fs::remove_file(&partial).ok();
+        return Err(AppError::Other(format!(
+            "download truncated: got {} bytes, expected {}",
+            downloaded, total_bytes
+        )));
+    }
+
+    std::fs::rename(&partial, &dest)?;
     Ok(())
+}
+
+fn resp_had_content_length(total_bytes: u64, fallback_mb: u64) -> bool {
+    // If total_bytes equals the fallback_mb*1024*1024 exactly, it's the unwrap_or default
+    // (no Content-Length). Otherwise the server provided a real value.
+    total_bytes != fallback_mb * 1024 * 1024
 }
 
 pub async fn transcribe(

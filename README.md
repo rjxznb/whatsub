@@ -4,14 +4,43 @@
 
 ## 环境准备
 
-```bash
-# 1. 设置编码（Windows 每个终端都要执行一次）
+每个新终端都要先设一次环境变量。**根据你用的 Shell 选一种**：
+
+### PowerShell（Windows 11 默认）
+
+```powershell
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+$PYTHON = "C:\Users\renjx\anaconda3\envs\ASR\python.exe"
+
+# 调用：
+& $PYTHON scripts\cc_sourcing\download_cc.py --help
+```
+
+> PowerShell 调用带变量的可执行文件必须加 `&`（call operator）。
+
+### cmd.exe（传统 Windows 命令行）
+
+```cmd
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
-
-# 2. Python 路径
 set PYTHON=C:\Users\renjx\anaconda3\envs\ASR\python.exe
+
+REM 调用：
+%PYTHON% scripts\cc_sourcing\download_cc.py --help
 ```
+
+### 不想设变量？直接用完整路径
+
+```
+C:\Users\renjx\anaconda3\envs\ASR\python.exe scripts\cc_sourcing\download_cc.py --help
+```
+
+---
+
+> **本文后续示例统一写成 `%PYTHON%`（cmd 风格）**。
+> 如果你在 PowerShell 里跑，把所有 `%PYTHON%` 替换成 `& $PYTHON` 即可。
+> 例：`%PYTHON% download_cc.py --help` → `& $PYTHON download_cc.py --help`
 
 cookies.txt 过期处理：YouTube 约 100 次请求后 cookie 过期，用 Edge 扩展 "Get cookies.txt LOCALLY" 重新导出到 `scripts/video_sourcing/cookies.txt`，重跑即可（已完成的自动跳过）。
 

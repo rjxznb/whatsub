@@ -1,12 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { Subtitle, KeyPhrase, AnalysisResult } from "./types";
 
-const _kp: KeyPhrase = {
-  expression: "",
-  meaningZh: "",
-  usage: "",
-  minDifficulty: "EASY",
-};
+const _kp: KeyPhrase = { expression: "", meaningZh: "", usage: "" };
 void _kp;
 
 describe("types module", () => {

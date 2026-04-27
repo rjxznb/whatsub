@@ -9,13 +9,10 @@ export interface Subtitle {
   highlightTranslations: Record<string, string>;
 }
 
-export type Difficulty = "EASY" | "MEDIUM" | "HARD";
-
 export interface KeyPhrase {
   expression: string;
   meaningZh: string;
   usage: string;
-  minDifficulty: Difficulty;
 }
 
 export interface AnalysisResult {

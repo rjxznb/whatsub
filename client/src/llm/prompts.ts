@@ -29,8 +29,7 @@ SUMMARY OBJECT SCHEMA (last line only)
   "keyPhrases": [{
     "expression": string,
     "meaningZh": string,
-    "usage": string,
-    "minDifficulty": "EASY"|"MEDIUM"|"HARD"
+    "usage": string
   }]
 }
 

@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useLibrary } from "../store/library";
 import { ImportModal } from "../components/ImportModal";
-import { SCENE_LABELS } from "../llm/types";
 import { formatTime } from "../utils/time";
 
 export function Library() {
@@ -72,12 +71,11 @@ export function Library() {
               </div>
               <div className="p-3">
                 <div className="text-sm font-medium truncate">{v.title}</div>
-                <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-500">
-                  <span className="bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded">
-                    {SCENE_LABELS[v.scene as keyof typeof SCENE_LABELS] ?? v.scene}
-                  </span>
-                  {v.durationSec > 0 && <span>{formatTime(v.durationSec)}</span>}
-                </div>
+                {v.durationSec > 0 && (
+                  <div className="mt-1 text-[10px] text-zinc-500">
+                    {formatTime(v.durationSec)}
+                  </div>
+                )}
               </div>
             </Link>
           ))}

@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useSettings } from "../store/settings";
 import type { Settings, WhisperModelSize, LlmProvider } from "../types/settings";
-import { SCENE_LABELS, type Scene, type Country } from "../llm/types";
 
 const WHISPER_SIZES: WhisperModelSize[] = ["tiny", "base", "small", "medium", "large-v3"];
 
@@ -200,40 +199,6 @@ export function Settings() {
               {downloading === draft.whisperModel ? `下载中 ${downloadPct}%` : "下载"}
             </button>
           )}
-        </section>
-
-        <section>
-          <h2 className="font-semibold mb-3">默认值</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="text-sm">
-              默认场景
-              <select
-                value={draft.defaultScene}
-                onChange={(e) => setDraft({ ...draft, defaultScene: e.target.value as Scene })}
-                className="w-full mt-1 px-2 py-1.5 bg-zinc-900 border border-zinc-800 rounded"
-              >
-                {Object.entries(SCENE_LABELS).map(([k, l]) => (
-                  <option key={k} value={k}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm">
-              默认国家
-              <select
-                value={draft.defaultCountry}
-                onChange={(e) =>
-                  setDraft({ ...draft, defaultCountry: e.target.value as Country })
-                }
-                className="w-full mt-1 px-2 py-1.5 bg-zinc-900 border border-zinc-800 rounded"
-              >
-                {(["US", "UK", "AU", "CA"] as const).map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-          </div>
         </section>
 
         <button

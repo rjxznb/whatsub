@@ -13,9 +13,7 @@ export function KeyPhraseList({ phrases }: Props) {
       {phrases.map((p, i) => (
         <div key={i} className="border border-zinc-800 rounded-md p-3 bg-zinc-900/40">
           <div className="text-amber-300 font-semibold text-sm">{p.expression}</div>
-          <div className="text-zinc-500 text-[10px] mt-1">
-            {p.register} · {p.speakerRole} · {p.minDifficulty}
-          </div>
+          <div className="text-zinc-500 text-[10px] mt-1">{p.minDifficulty}</div>
           <div className="text-zinc-100 text-xs mt-1.5">{p.meaningZh}</div>
           <div className="text-zinc-400 text-xs mt-1 italic">{p.usage}</div>
         </div>

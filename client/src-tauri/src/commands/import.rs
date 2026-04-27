@@ -13,8 +13,6 @@ use tauri::AppHandle;
 pub struct ImportRequest {
     pub source_kind: String, // "local" | "url"
     pub source_value: String,
-    pub scene: String,
-    pub country: String,
     pub whisper_model: String,
 }
 
@@ -86,8 +84,6 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
                 original_path: req.source_value.clone(),
             },
         },
-        scene: req.scene.clone(),
-        country: req.country.clone(),
         duration_sec,
         thumbnail_path: thumb_path.to_string_lossy().to_string(),
         created_at: Utc::now().to_rfc3339(),

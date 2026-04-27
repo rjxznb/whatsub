@@ -64,8 +64,12 @@ def download_video(video_id, output_dir=None):
 
 
 
-def download_approved(min_score=4):
-    """Download all videos with analysis score >= min_score."""
+def download_approved(min_score=4, flat_dir=None):
+    """Download all videos with analysis score >= min_score.
+
+    If flat_dir is provided, all mp4 files go directly into that directory,
+    skipping the {scene}/{video_id}/ subfolder layout and cache cleanup.
+    """
     analyzed_path = VIDEOS_DIR / "analyzed_results.json"
     transcribed_path = VIDEOS_DIR / "transcribed_results.json"
 
@@ -118,8 +122,9 @@ def download_approved(min_score=4):
         if not scene_videos:
             continue
 
-        scene_dir = VIDEOS_DIR / scene
-        scene_dir.mkdir(parents=True, exist_ok=True)
+        if flat_dir is None:
+            scene_dir = VIDEOS_DIR / scene
+            scene_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n[{SCENE_NAMES[scene]}] {len(scene_videos)} videos...", flush=True)
 
@@ -128,11 +133,14 @@ def download_approved(min_score=4):
             title = v["title"][:50]
             print(f"  [{v['score']}] {title}...", flush=True)
 
-            # Each video gets its own subdirectory: videos/{scene}/{video_id}/
-            vid_dir = scene_dir / vid
-            vid_dir.mkdir(parents=True, exist_ok=True)
+            if flat_dir is not None:
+                target_dir = flat_dir
+                target_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                target_dir = scene_dir / vid
+                target_dir.mkdir(parents=True, exist_ok=True)
 
-            path = download_video(vid, output_dir=vid_dir)
+            path = download_video(vid, output_dir=target_dir)
             if path:
                 v["local_path"] = path
                 downloaded.append(v)
@@ -142,17 +150,17 @@ def download_approved(min_score=4):
             time.sleep(DOWNLOAD_DELAY)
 
     # ── Phase 3: Clean up non-recommended cache ──
-    print(f"\n--- Cleaning up non-recommended cache ---", flush=True)
     cleanup_count = 0
+    if flat_dir is None:
+        print(f"\n--- Cleaning up non-recommended cache ---", flush=True)
+        # Clean subtitles
+        for f in glob_mod.glob(str(SUBTITLES_DIR / "*.vtt")):
+            vid = os.path.basename(f).split(".")[0]
+            if vid not in recommended_ids:
+                os.remove(f)
+                cleanup_count += 1
 
-    # Clean subtitles
-    for f in glob_mod.glob(str(SUBTITLES_DIR / "*.vtt")):
-        vid = os.path.basename(f).split(".")[0]
-        if vid not in recommended_ids:
-            os.remove(f)
-            cleanup_count += 1
-
-    print(f"Cleaned up {cleanup_count} non-recommended cache files.", flush=True)
+        print(f"Cleaned up {cleanup_count} non-recommended cache files.", flush=True)
 
     # ── Save manifest ──
     manifest = {
@@ -174,7 +182,8 @@ def download_approved(min_score=4):
         ],
     }
 
-    manifest_path = VIDEOS_DIR / "download_manifest.json"
+    manifest_path = (flat_dir if flat_dir is not None else VIDEOS_DIR) / "download_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
@@ -184,8 +193,11 @@ def download_approved(min_score=4):
     print(f"Manifest: {manifest_path}", flush=True)
 
 
-def download_from_approved_file(approved_path, skip_video=False):
-    """Download videos listed in an approved_videos.json file (exported from review.html)."""
+def download_from_approved_file(approved_path, skip_video=False, flat_dir=None):
+    """Download videos listed in an approved_videos.json file (exported from review.html).
+
+    If flat_dir is provided, all mp4 files go directly into that directory.
+    """
     with open(approved_path, "r", encoding="utf-8") as f:
         approved = json.load(f)
 
@@ -200,8 +212,9 @@ def download_from_approved_file(approved_path, skip_video=False):
         if not scene_videos:
             continue
 
-        scene_dir = VIDEOS_DIR / scene
-        scene_dir.mkdir(parents=True, exist_ok=True)
+        if flat_dir is None:
+            scene_dir = VIDEOS_DIR / scene
+            scene_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n[{SCENE_NAMES[scene]}] {len(scene_videos)} videos...", flush=True)
 
@@ -210,14 +223,17 @@ def download_from_approved_file(approved_path, skip_video=False):
             title = v.get("title", "")[:50]
             print(f"  [{v.get('score', '?')}] {title}...", flush=True)
 
-            vid_dir = scene_dir / vid
-            vid_dir.mkdir(parents=True, exist_ok=True)
+            if flat_dir is not None:
+                target_dir = flat_dir
+            else:
+                target_dir = scene_dir / vid
+            target_dir.mkdir(parents=True, exist_ok=True)
 
             if skip_video:
                 downloaded.append(v)
                 continue
 
-            path = download_video(vid, output_dir=vid_dir)
+            path = download_video(vid, output_dir=target_dir)
             if path:
                 v["local_path"] = path
                 downloaded.append(v)
@@ -232,6 +248,7 @@ def download_from_approved_file(approved_path, skip_video=False):
 
 if __name__ == "__main__":
     import argparse
+    from pathlib import Path
     parser = argparse.ArgumentParser(description="Download approved videos")
     parser.add_argument("min_score", nargs="?", type=int, default=4,
                         help="Minimum analysis score to download (default: 4)")
@@ -239,9 +256,14 @@ if __name__ == "__main__":
                         help="Path to approved_videos.json (exported from review.html)")
     parser.add_argument("--skip-video", action="store_true",
                         help="Skip video download (only create directories)")
+    parser.add_argument("--output-dir", type=str,
+                        help="Custom output directory. All mp4 files go directly into this directory, "
+                             "no scene/video_id subfolders. download_manifest.json is also written here.")
     args = parser.parse_args()
 
+    flat_dir = Path(args.output_dir).resolve() if args.output_dir else None
+
     if args.approved:
-        download_from_approved_file(args.approved, skip_video=args.skip_video)
+        download_from_approved_file(args.approved, skip_video=args.skip_video, flat_dir=flat_dir)
     else:
-        download_approved(min_score=args.min_score)
+        download_approved(min_score=args.min_score, flat_dir=flat_dir)

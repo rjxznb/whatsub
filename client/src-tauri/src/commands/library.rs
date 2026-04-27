@@ -31,8 +31,6 @@ pub struct LibraryEntry {
     pub id: String,
     pub title: String,
     pub source: LibrarySource,
-    pub scene: String,
-    pub country: String,
     pub duration_sec: f64,
     pub thumbnail_path: String,
     pub created_at: String,
@@ -122,8 +120,6 @@ mod tests {
             source: LibrarySource::Local {
                 original_path: "/x".into(),
             },
-            scene: "social".into(),
-            country: "US".into(),
             duration_sec: 10.0,
             thumbnail_path: "thumb.jpg".into(),
             created_at: "2026-04-26T00:00:00Z".into(),

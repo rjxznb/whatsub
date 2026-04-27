@@ -1,13 +1,13 @@
-import type { SrtCue, Scene, Country } from "./types";
+import type { SrtCue } from "./types";
 
-export const SYSTEM_PROMPT = `You are an EngHub English-learning content analyst.
+export const SYSTEM_PROMPT = `You are an English subtitle analyst for a learning app.
 
-EngHub is a Chinese-language English-learning app for university students preparing to study abroad. Your job: take English subtitle cues from a real-life scenario video and produce structured analysis the app uses for learning.
+Given English subtitle cues, produce structured analysis: Chinese translations, key phrase highlighting, and a separate "key phrases" review list.
 
 OUTPUT FORMAT — REQUIRED
 - Output ONLY JSON Lines (one JSON object per line, no markdown, no code fences, no prose).
 - One line = one analyzed subtitle cue, in the order received.
-- After ALL subtitle cues, emit a single trailing line containing a "summary" object with keyPhrases, roleSetup, complications, maxRounds, commonErrors, culturalNotes, sceneContext.
+- After ALL subtitle cues, emit a single trailing line containing a "summary" object with the global keyPhrases list.
 
 PER-CUE OBJECT SCHEMA
 {
@@ -26,19 +26,12 @@ PER-CUE OBJECT SCHEMA
 SUMMARY OBJECT SCHEMA (last line only)
 {
   "type": "summary",
-  "sceneContext": string,
-  "keyPhrases": [{ "expression": string, "meaningZh": string, "usage": string,
-                    "register": "formal"|"casual"|"professional",
-                    "speakerRole": "learner"|"passive"|"both",
-                    "minDifficulty": "EASY"|"MEDIUM"|"HARD" }],
-  "roleSetup": { "name": string, "identity": string, "personality": string,
-                  "accent": "American"|"American Female"|"British"|"British Female"|
-                            "Australian"|"Australian Female"|"Canadian"|"Canadian Female" },
-  "complications": { "medium": string[], "hard": string[] },
-  "maxRounds": { "easy": 4, "medium": 6, "hard": 10 },
-  "commonErrors": string[],
-  "culturalNotes": string,
-  "country": "US"|"UK"|"AU"|"CA"
+  "keyPhrases": [{
+    "expression": string,
+    "meaningZh": string,
+    "usage": string,
+    "minDifficulty": "EASY"|"MEDIUM"|"HARD"
+  }]
 }
 
 CRITICAL RULES (these have caused bugs in the past — follow them strictly):
@@ -62,35 +55,24 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
 `;
 
-export function buildUserPrompt(cues: SrtCue[], scene: Scene, country: Country): string {
+export function buildUserPrompt(cues: SrtCue[]): string {
   const cuesJson = cues
     .map((c) => `${c.index}\t${c.time.toFixed(2)}\t${c.endTime.toFixed(2)}\t${JSON.stringify(c.text)}`)
     .join("\n");
-  return `Scene: ${scene}
-Target country: ${country}
-
-Subtitle cues (tab-separated: index<TAB>start<TAB>end<TAB>JSON-encoded text):
+  return `Subtitle cues (tab-separated: index<TAB>start<TAB>end<TAB>JSON-encoded text):
 ${cuesJson}
 
 Produce one JSON-line per cue in order, then one summary line at the end. Output JSON only.`;
 }
 
-export function buildContinuationPrompt(
-  cues: SrtCue[],
-  scene: Scene,
-  country: Country,
-  isLastBatch: boolean
-): string {
+export function buildContinuationPrompt(cues: SrtCue[], isLastBatch: boolean): string {
   const cuesJson = cues
     .map((c) => `${c.index}\t${c.time.toFixed(2)}\t${c.endTime.toFixed(2)}\t${JSON.stringify(c.text)}`)
     .join("\n");
   const trailer = isLastBatch
     ? "After this final batch, emit the summary line."
     : "Do NOT emit the summary yet — more batches will follow.";
-  return `Scene: ${scene}
-Target country: ${country}
-
-Continuing analysis. Next batch:
+  return `Continuing analysis. Next batch:
 ${cuesJson}
 
 ${trailer}

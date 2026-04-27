@@ -46,9 +46,15 @@ def get_video_info(video_id):
     return {}
 
 
-def download_subtitle(video_id):
-    """Download English subtitle for a video. Returns path or None."""
-    sub_path = SUBTITLES_DIR / f"{video_id}.en.vtt"
+def download_subtitle(video_id, flat_dir=None):
+    """Download English subtitle for a video. Returns path or None.
+
+    If flat_dir is provided, write directly to that directory; otherwise use
+    the SUBTITLES_DIR cache.
+    """
+    target_dir = flat_dir if flat_dir is not None else SUBTITLES_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+    sub_path = target_dir / f"{video_id}.en.vtt"
     if sub_path.exists() and sub_path.stat().st_size > 0:
         print(f"Subtitle already exists: {sub_path}", flush=True)
         return str(sub_path)
@@ -62,7 +68,7 @@ def download_subtitle(video_id):
             subprocess.run(
                 [YTDLP, *_js_args, *_cookies_args,
                  *sub_args, "--skip-download", "--no-warnings",
-                 "-o", str(SUBTITLES_DIR / f"{video_id}.%(ext)s"),
+                 "-o", str(target_dir / f"{video_id}.%(ext)s"),
                  f"https://www.youtube.com/watch?v={video_id}"],
                 capture_output=True, timeout=120,
             )
@@ -77,11 +83,18 @@ def download_subtitle(video_id):
     return None
 
 
-def download_thumbnail(video_id, scene, output_base=None):
-    """Download video thumbnail to the scene/video_id/ directory."""
-    if output_base is None:
-        output_base = VIDEOS_DIR
-    vid_dir = output_base / scene / video_id
+def download_thumbnail(video_id, scene, output_base=None, flat_dir=None):
+    """Download video thumbnail.
+
+    If flat_dir is provided, write directly to that directory.
+    Otherwise write to {output_base}/{scene}/{video_id}/.
+    """
+    if flat_dir is not None:
+        vid_dir = flat_dir
+    else:
+        if output_base is None:
+            output_base = VIDEOS_DIR
+        vid_dir = output_base / scene / video_id
     vid_dir.mkdir(parents=True, exist_ok=True)
     output_path = vid_dir / f"{video_id}.jpg"
 
@@ -123,11 +136,18 @@ def download_thumbnail(video_id, scene, output_base=None):
     return None
 
 
-def download_video(video_id, scene, output_base=None):
-    """Download video to the scene/video_id/ directory."""
-    if output_base is None:
-        output_base = VIDEOS_DIR
-    vid_dir = output_base / scene / video_id
+def download_video(video_id, scene, output_base=None, flat_dir=None):
+    """Download video.
+
+    If flat_dir is provided, write directly to that directory.
+    Otherwise write to {output_base}/{scene}/{video_id}/.
+    """
+    if flat_dir is not None:
+        vid_dir = flat_dir
+    else:
+        if output_base is None:
+            output_base = VIDEOS_DIR
+        vid_dir = output_base / scene / video_id
     vid_dir.mkdir(parents=True, exist_ok=True)
     output_path = str(vid_dir / f"{video_id}.mp4")
 
@@ -164,23 +184,31 @@ def download_video(video_id, scene, output_base=None):
 
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python process_single.py <youtube_url_or_id> <scene> [country] [--download-video] [--cc]", flush=True)
-        print(f"\nAvailable scenes: {', '.join(SCENE_NAMES.keys())}", flush=True)
-        print("Country: UK (default), US, AU, CA", flush=True)
-        print("Flags:", flush=True)
-        print("  --download-video  Also download the video file", flush=True)
-        print("  --cc              Store in data/cc-video/ instead of data/videos/", flush=True)
-        print("\nExamples:", flush=True)
-        print("  python process_single.py https://www.youtube.com/watch?v=abc123 dining UK", flush=True)
-        print("  python process_single.py abc123 social US --download-video --cc", flush=True)
-        sys.exit(1)
+    import argparse
+    from pathlib import Path
 
-    url = sys.argv[1]
-    scene = sys.argv[2]
-    country = sys.argv[3] if len(sys.argv) > 3 and not sys.argv[3].startswith("--") else "UK"
-    do_download = "--download-video" in sys.argv
-    use_cc = "--cc" in sys.argv
+    parser = argparse.ArgumentParser(
+        description="Download a single YouTube video (subtitle + thumbnail + optional mp4)",
+    )
+    parser.add_argument("url", help="YouTube URL or video_id")
+    parser.add_argument("scene", help=f"One of: {', '.join(SCENE_NAMES.keys())}")
+    parser.add_argument("country", nargs="?", default="UK",
+                        help="Country code for analysis (UK/US/AU/CA, default UK)")
+    parser.add_argument("--download-video", action="store_true",
+                        help="Also download the video mp4 file")
+    parser.add_argument("--cc", action="store_true",
+                        help="Store in data/cc-video/ instead of data/videos/ (ignored if --output-dir set)")
+    parser.add_argument("--output-dir", type=str,
+                        help="Custom output directory. All files (mp4/vtt/jpg) go directly into this directory, "
+                             "no scene/video_id subfolders")
+    args = parser.parse_args()
+
+    url = args.url
+    scene = args.scene
+    country = args.country
+    do_download = args.download_video
+    use_cc = args.cc
+    flat_dir = Path(args.output_dir).resolve() if args.output_dir else None
 
     # Choose output directory
     output_base = CC_VIDEO_DIR if use_cc else VIDEOS_DIR
@@ -194,7 +222,9 @@ def main():
     print(f"Video ID: {video_id}", flush=True)
     print(f"Scene: {scene} ({SCENE_NAMES[scene]})", flush=True)
     print(f"Country: {country}", flush=True)
-    if use_cc:
+    if flat_dir is not None:
+        print(f"Output: {flat_dir} (flat, no subdirs)", flush=True)
+    elif use_cc:
         print(f"Output: cc-video/ (Creative Commons)", flush=True)
     print(f"{'='*50}\n", flush=True)
 
@@ -209,26 +239,26 @@ def main():
 
     # Step 2: Download subtitle
     print("\n[2/4] Downloading subtitle...", flush=True)
-    sub_path = download_subtitle(video_id)
+    sub_path = download_subtitle(video_id, flat_dir=flat_dir)
     if not sub_path:
         print("\nNo subtitle available. Cannot proceed with analysis.", flush=True)
         sys.exit(1)
 
     # Step 3: Download thumbnail
     print(f"\n[3/4] Downloading thumbnail...", flush=True)
-    thumb_path = download_thumbnail(video_id, scene, output_base=output_base)
+    thumb_path = download_thumbnail(video_id, scene, output_base=output_base, flat_dir=flat_dir)
 
     # Step 4: Download video (optional)
     if do_download:
         print(f"\n[4/4] Downloading video...", flush=True)
-        download_video(video_id, scene, output_base=output_base)
+        download_video(video_id, scene, output_base=output_base, flat_dir=flat_dir)
     else:
-        vid_dir = output_base / scene / video_id
+        vid_dir = flat_dir if flat_dir is not None else output_base / scene / video_id
         vid_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n[4/4] Video download skipped (use --download-video to download)", flush=True)
 
     # Summary
-    vid_dir = output_base / scene / video_id
+    vid_dir = flat_dir if flat_dir is not None else output_base / scene / video_id
     analysis_path = vid_dir / f"{video_id}.analysis.json"
     print(f"\n{'='*50}", flush=True)
     print(f"Done! Subtitle ready at: {sub_path}", flush=True)

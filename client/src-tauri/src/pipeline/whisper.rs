@@ -6,11 +6,11 @@ use std::path::Path;
 use tauri::AppHandle;
 
 const MODEL_URLS: &[(&str, &str, u64)] = &[
-    ("tiny",     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",     75),
-    ("base",     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",     145),
-    ("small",    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",    466),
-    ("medium",   "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",   1500),
-    ("large-v3", "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin", 3094),
+    ("tiny",     "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",     75),
+    ("base",     "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",     145),
+    ("small",    "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",    466),
+    ("medium",   "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",   1500),
+    ("large-v3", "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin", 3094),
 ];
 
 pub fn model_info(size: &str) -> Option<(&'static str, u64)> {

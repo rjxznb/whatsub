@@ -1,5 +1,5 @@
 import type { Provider } from "./providers/types";
-import type { Subtitle, SrtCue, Scene, Country, AnalysisResult } from "./types";
+import type { Subtitle, SrtCue, AnalysisResult } from "./types";
 import { batchSubtitles } from "./batchSubtitles";
 import { JsonLineParser } from "./streamingJson";
 import { SYSTEM_PROMPT, buildUserPrompt, buildContinuationPrompt } from "./prompts";
@@ -7,8 +7,6 @@ import { SYSTEM_PROMPT, buildUserPrompt, buildContinuationPrompt } from "./promp
 export interface RunAnalysisOptions {
   provider: Provider;
   cues: SrtCue[];
-  scene: Scene;
-  country: Country;
   onCue: (cue: Subtitle) => void;
   onSummary: (summary: Omit<AnalysisResult, "subtitles">) => void;
   batchSize?: number;
@@ -22,9 +20,7 @@ export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
     const batch = batches[i];
     const isLast = i === batches.length - 1;
     const userPrompt =
-      i === 0
-        ? buildUserPrompt(batch, opts.scene, opts.country)
-        : buildContinuationPrompt(batch, opts.scene, opts.country, isLast);
+      i === 0 ? buildUserPrompt(batch) : buildContinuationPrompt(batch, isLast);
 
     const parser = new JsonLineParser();
     for await (const chunk of opts.provider.stream({

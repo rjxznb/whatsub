@@ -1,5 +1,3 @@
-import type { Scene, Country } from "../llm/types";
-
 export type LibrarySource =
   | { type: "local"; originalPath: string }
   | { type: "url"; url: string };
@@ -10,8 +8,6 @@ export interface LibraryEntry {
   id: string;
   title: string;
   source: LibrarySource;
-  scene: Scene;
-  country: Country;
   durationSec: number;
   thumbnailPath: string;
   createdAt: string;

@@ -9,15 +9,13 @@ import { useVideoSync } from "../hooks/useVideoSync";
 import { VideoPlayer } from "../components/VideoPlayer";
 import { SubtitleList } from "../components/SubtitleList";
 import { KeyPhraseList } from "../components/KeyPhraseList";
-import { RoleSetupCard } from "../components/RoleSetupCard";
 import { ProgressBanner } from "../components/ProgressBanner";
 import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
-import { SCENE_LABELS } from "../llm/types";
-import type { AnalysisResult, Subtitle, Scene, Country } from "../llm/types";
+import type { AnalysisResult, Subtitle } from "../llm/types";
 
-type Tab = "subtitles" | "keyPhrases" | "role";
+type Tab = "subtitles" | "keyPhrases";
 
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
@@ -78,8 +76,6 @@ export function Player() {
         await runAnalysis({
           provider,
           cues,
-          scene: (entry?.scene ?? "social") as Scene,
-          country: (entry?.country ?? "US") as Country,
           onCue: (c: Subtitle) => analysis.appendSubtitle(c),
           onSummary: (s) => analysis.setSummary(s),
         });
@@ -124,11 +120,6 @@ export function Player() {
           ◀ Back
         </Link>
         <div className="flex-1 truncate text-sm">{entry?.title ?? videoId}</div>
-        {entry?.scene && (
-          <span className="bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded text-xs">
-            {SCENE_LABELS[entry.scene as keyof typeof SCENE_LABELS] ?? entry.scene}
-          </span>
-        )}
       </header>
 
       <ProgressBanner />
@@ -139,7 +130,7 @@ export function Player() {
         </div>
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex border-b border-zinc-800 text-sm">
-            {(["subtitles", "keyPhrases", "role"] as Tab[]).map((t) => (
+            {(["subtitles", "keyPhrases"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -152,9 +143,7 @@ export function Player() {
               >
                 {t === "subtitles"
                   ? "字幕"
-                  : t === "keyPhrases"
-                  ? `重点短语 (${analysis.summary?.keyPhrases.length ?? 0})`
-                  : "角色信息"}
+                  : `重点短语 (${analysis.summary?.keyPhrases.length ?? 0})`}
               </button>
             ))}
           </div>
@@ -168,12 +157,6 @@ export function Player() {
             )}
             {tab === "keyPhrases" && (
               <KeyPhraseList phrases={analysis.summary?.keyPhrases ?? []} />
-            )}
-            {tab === "role" && (
-              <RoleSetupCard
-                role={analysis.summary?.roleSetup ?? null}
-                sceneContext={analysis.summary?.sceneContext ?? ""}
-              />
             )}
           </div>
         </div>

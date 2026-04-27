@@ -5,7 +5,6 @@ import { useNavigate } from "react-router-dom";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
-import { SCENE_LABELS, type Scene, type Country } from "../llm/types";
 
 interface Props {
   onClose: () => void;
@@ -20,8 +19,6 @@ export function ImportModal({ onClose }: Props) {
   const [tab, setTab] = useState<"local" | "url">("url");
   const [urlValue, setUrlValue] = useState("");
   const [filePath, setFilePath] = useState("");
-  const [scene, setScene] = useState<Scene>(settings.defaultScene);
-  const [country, setCountry] = useState<Country>(settings.defaultCountry);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,8 +45,6 @@ export function ImportModal({ onClose }: Props) {
           req: {
             sourceKind,
             sourceValue,
-            scene,
-            country,
             whisperModel: settings.whisperModel,
           },
         }
@@ -108,37 +103,6 @@ export function ImportModal({ onClose }: Props) {
             </button>
           </div>
         )}
-
-        <div className="grid grid-cols-2 gap-3 mt-4">
-          <label className="text-sm text-zinc-300">
-            场景
-            <select
-              value={scene}
-              onChange={(e) => setScene(e.target.value as Scene)}
-              className="w-full mt-1 px-2 py-1.5 bg-zinc-800 text-zinc-100 rounded border border-zinc-700"
-            >
-              {Object.entries(SCENE_LABELS).map(([k, label]) => (
-                <option key={k} value={k}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm text-zinc-300">
-            国家
-            <select
-              value={country}
-              onChange={(e) => setCountry(e.target.value as Country)}
-              className="w-full mt-1 px-2 py-1.5 bg-zinc-800 text-zinc-100 rounded border border-zinc-700"
-            >
-              {(["US", "UK", "AU", "CA"] as const).map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
 
         {error && <div className="mt-3 text-sm text-red-400">{error}</div>}
 

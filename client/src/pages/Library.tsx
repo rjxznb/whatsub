@@ -209,6 +209,7 @@ export function Library() {
               <div
                 key={v.id}
                 draggable
+                title={v.title}
                 onDragStart={(e) => onDragStart(e, v.id)}
                 onDragOver={(e) => onDragOver(e, v.id)}
                 onDragLeave={() => onDragLeave(v.id)}

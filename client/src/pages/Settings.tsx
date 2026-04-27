@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -105,8 +106,12 @@ export function Settings() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <header className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800">
-        <Link to="/" className="text-zinc-400 hover:text-zinc-100">
-          ◀ Back
+        <Link
+          to="/"
+          title="返回 Library"
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+        >
+          <ArrowLeft className="h-5 w-5" />
         </Link>
         <h1 className="text-lg font-semibold">设置</h1>
       </header>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { ArrowLeft } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useAnalysis } from "../store/analysis";
 import { useSettings } from "../store/settings";
@@ -184,8 +185,12 @@ export function Player() {
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100">
       <header className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800">
-        <Link to="/" className="text-zinc-400 hover:text-zinc-100 text-sm">
-          ◀ Back
+        <Link
+          to="/"
+          title="返回 Library"
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+        >
+          <ArrowLeft className="h-5 w-5" />
         </Link>
         <div className="flex-1 truncate text-sm">{entry?.title ?? videoId}</div>
       </header>

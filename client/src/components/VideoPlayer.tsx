@@ -316,19 +316,25 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         </div>
       )}
 
-      {/* Center play/replay overlay when paused or ended */}
+      {/* Center play/replay button — interactive on hover */}
       {(!playing || ended) && (
-        <div
-          className="absolute inset-0 flex items-center justify-center pointer-events-none"
-          aria-hidden
-        >
-          <div className="rounded-full bg-black/40 p-5 backdrop-blur-sm">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlay();
+            }}
+            aria-label={ended ? "重播" : "播放"}
+            title={ended ? "重播" : "播放"}
+            className="pointer-events-auto rounded-full bg-black/40 p-5 backdrop-blur-sm text-white transition-all duration-150 hover:bg-black/60 hover:scale-110 active:scale-95 focus:outline-none focus:ring-2 focus:ring-white/40"
+          >
             {ended ? (
-              <RotateCcw className="h-10 w-10 text-white" />
+              <RotateCcw className="h-10 w-10" />
             ) : (
-              <Play className="h-10 w-10 text-white fill-white" />
+              <Play className="h-10 w-10 fill-white" />
             )}
-          </div>
+          </button>
         </div>
       )}
 

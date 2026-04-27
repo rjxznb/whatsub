@@ -9,6 +9,9 @@ import { useAnalysis } from "../store/analysis";
 
 interface Props {
   onClose: () => void;
+  /** Pre-fill the local-file path; switches the modal to the "本地文件" tab.
+   *  Used when a file is dropped onto the window. */
+  initialFilePath?: string;
 }
 
 type PipelineEventPayload =
@@ -32,15 +35,15 @@ const PHASE_LABEL: Record<Phase, string> = {
   error: "失败",
 };
 
-export function ImportModal({ onClose }: Props) {
+export function ImportModal({ onClose, initialFilePath }: Props) {
   const navigate = useNavigate();
   const { settings } = useSettings();
   const { reload } = useLibrary();
   const { startFor } = useAnalysis();
 
-  const [tab, setTab] = useState<"local" | "url">("url");
+  const [tab, setTab] = useState<"local" | "url">(initialFilePath ? "local" : "url");
   const [urlValue, setUrlValue] = useState("");
-  const [filePath, setFilePath] = useState("");
+  const [filePath, setFilePath] = useState(initialFilePath ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);

@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
 import { ImportModal } from "../components/ImportModal";
 import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { formatTime } from "../utils/time";
 import type { LibraryEntry } from "../types/library";
+
+const VIDEO_EXT_RE = /\.(mp4|mkv|mov|webm|avi|m4v)$/i;
 
 interface MenuState {
   x: number;
@@ -17,16 +21,50 @@ interface MenuState {
 export function Library() {
   const navigate = useNavigate();
   const { library, reload, remove, rename, reorder, reveal } = useLibrary();
-  const [showImport, setShowImport] = useState(false);
+  const [importInitial, setImportInitial] = useState<{ filePath?: string } | null>(null);
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [fileHover, setFileHover] = useState(false);
 
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Listen for files dragged from the OS onto the window. Tauri 2 emits a single
+  // event stream covering enter/over/drop/leave with absolute paths.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    win
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter" || p.type === "over") {
+          // Highlight only when the drag includes at least one video file.
+          const hasVideo = p.paths?.some((path) => VIDEO_EXT_RE.test(path));
+          setFileHover(Boolean(hasVideo));
+        } else if (p.type === "leave") {
+          setFileHover(false);
+        } else if (p.type === "drop") {
+          setFileHover(false);
+          const videoPath = p.paths?.find((path) => VIDEO_EXT_RE.test(path));
+          if (videoPath) {
+            setImportInitial({ filePath: videoPath });
+          }
+        }
+      })
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const visible = library.videos.filter((v) =>
     v.title.toLowerCase().includes(search.toLowerCase())
@@ -115,7 +153,7 @@ export function Library() {
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
         <button
-          onClick={() => setShowImport(true)}
+          onClick={() => setImportInitial({})}
           className="px-3 py-1.5 bg-blue-500 text-black text-sm rounded font-medium"
         >
           + Import
@@ -189,7 +227,23 @@ export function Library() {
         </div>
       )}
 
-      {showImport && <ImportModal onClose={() => setShowImport(false)} />}
+      {importInitial && (
+        <ImportModal
+          initialFilePath={importInitial.filePath}
+          onClose={() => setImportInitial(null)}
+        />
+      )}
+
+      {fileHover && (
+        <div className="fixed inset-0 bg-blue-500/10 border-4 border-dashed border-blue-400 rounded-lg flex items-center justify-center z-40 pointer-events-none">
+          <div className="bg-zinc-900 border border-blue-400 rounded-lg px-6 py-4 shadow-xl">
+            <div className="text-blue-300 font-semibold text-lg">松开以导入视频</div>
+            <div className="text-zinc-400 text-xs mt-1">
+              将自动跳转到「导入视频」对话框
+            </div>
+          </div>
+        </div>
+      )}
 
       {menu && (
         <ContextMenu

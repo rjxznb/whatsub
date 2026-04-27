@@ -50,6 +50,11 @@ pub async fn download(
         args.push(c.clone());
     }
     args.extend([
+        // YouTube extraction in v2026+ wants a JS runtime; "node" works if the
+        // user has Node installed (typical dev machine). yt-dlp gracefully
+        // falls back to no-JS mode otherwise — just emits a warning.
+        "--js-runtimes".into(),
+        "node".into(),
         "-f".into(),
         "bv*[ext=mp4][height<=720]+ba/best[ext=mp4]/best".into(),
         "--merge-output-format".into(),

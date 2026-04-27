@@ -23,18 +23,26 @@ export function useSpeech() {
     let cancelled = false;
     const refresh = () => {
       const all = synth.getVoices();
-      const filtered = all
-        .filter((v) => v.lang.toLowerCase().startsWith("en"))
-        .sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
-      if (!cancelled) setVoices(filtered);
-      // Helpful in DevTools when troubleshooting empty voice list.
+      // Sort English voices first (the obvious choice for English content),
+      // then everything else. Don't filter — if the user has no English voice
+      // we still want them to see the dropdown so the hint makes sense.
+      const sorted = [...all].sort((a, b) => {
+        const aEn = a.lang.toLowerCase().startsWith("en") ? 0 : 1;
+        const bEn = b.lang.toLowerCase().startsWith("en") ? 0 : 1;
+        if (aEn !== bEn) return aEn - bEn;
+        return a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name);
+      });
+      if (!cancelled) setVoices(sorted);
+      const enCount = sorted.filter((v) =>
+        v.lang.toLowerCase().startsWith("en")
+      ).length;
       if (all.length === 0) {
         console.log(
           "[useSpeech] getVoices() returned 0 — waiting for voiceschanged or poll"
         );
       } else {
         console.log(
-          `[useSpeech] ${all.length} total voices, ${filtered.length} English`
+          `[useSpeech] ${all.length} total voices, ${enCount} English`
         );
       }
     };
@@ -58,12 +66,17 @@ export function useSpeech() {
       return;
     }
     if (voices.length > 0) {
-      // Prefer a US-English voice if available, else first English voice.
+      // Prefer en-US, else any English, else just the first voice.
       const preferred =
-        voices.find((v) => v.lang.toLowerCase().startsWith("en-us")) ?? voices[0];
+        voices.find((v) => v.lang.toLowerCase().startsWith("en-us")) ??
+        voices.find((v) => v.lang.toLowerCase().startsWith("en")) ??
+        voices[0];
       setVoiceURI(preferred.voiceURI);
     }
   }, [voices, voiceURI]);
+
+  /** True iff at least one voice has an English language tag. */
+  const hasEnglish = voices.some((v) => v.lang.toLowerCase().startsWith("en"));
 
   const speak = useCallback(
     (text: string) => {
@@ -82,5 +95,5 @@ export function useSpeech() {
     [voices, voiceURI]
   );
 
-  return { voices, voiceURI, setVoiceURI, speak };
+  return { voices, voiceURI, setVoiceURI, speak, hasEnglish };
 }

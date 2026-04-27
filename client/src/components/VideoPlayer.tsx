@@ -51,6 +51,15 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
   const [seeking, setSeeking] = useState(false);
+  // Hold ←/→ to engage 2x playback. While engaged, the boost overlay shows.
+  const [boost2x, setBoost2x] = useState(false);
+
+  // Refs for keyboard handlers — avoid stale closures.
+  const speedRef = useRef(speed);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+  const boostActiveRef = useRef(false);
 
   // Resolve the video element via either a function ref or our own internal use.
   const resolveVideo = useCallback((): HTMLVideoElement | null => {
@@ -83,7 +92,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
   // Keyboard shortcuts (when player is mounted and focus is not in an input).
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const downHandler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       switch (e.key) {
@@ -93,12 +102,20 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
           togglePlay();
           break;
         case "ArrowLeft":
-          e.preventDefault();
-          skip(-5);
-          break;
         case "ArrowRight":
-          e.preventDefault();
-          skip(5);
+          // Held key → OS sends repeated keydowns. First repeat activates 2x.
+          if (e.repeat) {
+            if (!boostActiveRef.current) {
+              e.preventDefault();
+              boostActiveRef.current = true;
+              setBoost2x(true);
+              const v = resolveVideo();
+              if (v) v.playbackRate = 2;
+            }
+          } else {
+            e.preventDefault();
+            skip(e.key === "ArrowLeft" ? -5 : 5);
+          }
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -114,8 +131,35 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
           break;
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const upHandler = (e: KeyboardEvent) => {
+      if (
+        (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+        boostActiveRef.current
+      ) {
+        boostActiveRef.current = false;
+        setBoost2x(false);
+        const v = resolveVideo();
+        if (v) v.playbackRate = speedRef.current;
+      }
+    };
+    // If the window loses focus while user is holding the key, restore speed —
+    // otherwise keyup never fires and the player stays stuck at 2x.
+    const blurHandler = () => {
+      if (boostActiveRef.current) {
+        boostActiveRef.current = false;
+        setBoost2x(false);
+        const v = resolveVideo();
+        if (v) v.playbackRate = speedRef.current;
+      }
+    };
+    window.addEventListener("keydown", downHandler);
+    window.addEventListener("keyup", upHandler);
+    window.addEventListener("blur", blurHandler);
+    return () => {
+      window.removeEventListener("keydown", downHandler);
+      window.removeEventListener("keyup", upHandler);
+      window.removeEventListener("blur", blurHandler);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, volume, muted, ended]);
 
@@ -261,6 +305,16 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         onEnded={onEndedEv}
         onClick={togglePlay}
       />
+
+      {/* 2x boost indicator (top-center, while ←/→ held) */}
+      {boost2x && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-20">
+          <div className="flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 backdrop-blur-sm">
+            <span className="text-white text-xs font-medium">2x</span>
+            <span className="text-white/70 text-xs">▶▶</span>
+          </div>
+        </div>
+      )}
 
       {/* Center play/replay overlay when paused or ended */}
       {(!playing || ended) && (

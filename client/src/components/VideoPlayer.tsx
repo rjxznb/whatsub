@@ -7,8 +7,6 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
-  Maximize,
-  Minimize,
   PanelRight,
   PanelRightClose,
   Pause,
@@ -53,9 +51,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
   const [seeking, setSeeking] = useState(false);
-  // App-window "fullscreen" — covers the Tauri window (not OS-level fullscreen).
-  // The container becomes position:fixed inset-0 to overlay header / sidebar / banner.
-  const [expanded, setExpanded] = useState(false);
 
   // Resolve the video element via either a function ref or our own internal use.
   const resolveVideo = useCallback((): HTMLVideoElement | null => {
@@ -85,18 +80,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     };
   }, [playing, resetHideTimer]);
 
-  // Esc exits expanded mode (mirrors browser fullscreen UX).
-  useEffect(() => {
-    if (!expanded) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setExpanded(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [expanded]);
 
   // Keyboard shortcuts (when player is mounted and focus is not in an input).
   useEffect(() => {
@@ -128,10 +111,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         case "m":
           e.preventDefault();
           toggleMute();
-          break;
-        case "f":
-          e.preventDefault();
-          toggleFullscreen();
           break;
       }
     };
@@ -174,10 +153,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     if (!v) return;
     v.muted = !muted;
     setMuted(!muted);
-  }
-
-  function toggleFullscreen() {
-    setExpanded((v) => !v);
   }
 
   function changeSpeed(s: number) {
@@ -268,12 +243,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   return (
     <div
       ref={containerRef}
-      className={
-        "group bg-black overflow-hidden select-none " +
-        (expanded
-          ? "fixed inset-0 z-50"
-          : "relative h-full w-full")
-      }
+      className="group relative h-full w-full bg-black overflow-hidden select-none"
       onMouseMove={resetHideTimer}
       onMouseLeave={() => {
         if (playing) setShowControls(false);
@@ -453,19 +423,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
             </button>
           )}
 
-          {/* Fullscreen (within the app window, not OS-level) */}
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            title={expanded ? "退出全屏 (F / Esc)" : "全屏 (F)"}
-            className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/20 transition-colors"
-          >
-            {expanded ? (
-              <Minimize className="h-6 w-6" />
-            ) : (
-              <Maximize className="h-6 w-6" />
-            )}
-          </button>
         </div>
       </div>
     </div>

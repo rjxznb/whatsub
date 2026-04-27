@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -11,6 +11,37 @@ import { formatTime } from "../utils/time";
 import type { LibraryEntry } from "../types/library";
 
 const VIDEO_EXT_RE = /\.(mp4|mkv|mov|webm|avi|m4v)$/i;
+
+/**
+ * Wrap every case-insensitive occurrence of `query` in `text` with a yellow span,
+ * preserving the original casing of the matched substring.
+ */
+function highlightMatch(text: string, query: string): ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const lowerText = text.toLowerCase();
+  const lowerQuery = q.toLowerCase();
+  const segments: ReactNode[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const idx = lowerText.indexOf(lowerQuery, cursor);
+    if (idx === -1) {
+      segments.push(text.slice(cursor));
+      break;
+    }
+    if (idx > cursor) segments.push(text.slice(cursor, idx));
+    segments.push(
+      <mark
+        key={idx}
+        className="bg-yellow-300 text-black px-0.5 rounded-sm"
+      >
+        {text.slice(idx, idx + q.length)}
+      </mark>
+    );
+    cursor = idx + q.length;
+  }
+  return segments;
+}
 
 interface MenuState {
   x: number;
@@ -216,7 +247,9 @@ export function Library() {
                   )}
                 </div>
                 <div className="p-3 pointer-events-none">
-                  <div className="text-sm font-medium truncate">{v.title}</div>
+                  <div className="text-sm font-medium truncate">
+                    {highlightMatch(v.title, search)}
+                  </div>
                   {v.durationSec > 0 && (
                     <div className="mt-1 text-[10px] text-zinc-500">
                       {formatTime(v.durationSec)}

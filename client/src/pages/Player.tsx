@@ -98,48 +98,101 @@ export function Player() {
     // mount kicks off another LLM call — producing two parallel sets of cues.
     let cancelled = false;
 
+    // Throttled partial-save handle. Every onCue triggers it; if another cue
+    // arrives within 800ms the timer resets. Net effect: at most ~1 disk write
+    // per second of streaming. On unmount we force a final immediate save to
+    // capture the last cues before the throttle window expires.
+    let saveTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushPartialSave = () => {
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+      const state = useAnalysis.getState();
+      if (state.videoId !== videoId || state.subtitles.length === 0) return;
+      const partial: AnalysisResult = {
+        subtitles: dedupSubtitles(state.subtitles),
+        keyPhrases: state.summary?.keyPhrases ?? [],
+      };
+      invoke("save_analysis", { videoId, analysis: partial }).catch((e) =>
+        console.error("partial save failed", e)
+      );
+    };
+    const schedulePartialSave = () => {
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(flushPartialSave, 800);
+    };
+
     (async () => {
       const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
       if (cancelled) return;
 
-      if (cached) {
-        // Dedup any duplicates already on disk from before this fix; if dedup
-        // changed the count, persist the cleaned version back so the file
-        // self-heals on next open.
-        const cleaned = dedupSubtitles(cached.subtitles);
-        analysis.setSubtitles(cleaned);
+      // Need cues count to decide complete / partial / fresh, so load
+      // transcript up-front (cheap — small file on disk).
+      const srt = await invoke<string | null>("load_transcript", { videoId });
+      if (cancelled) return;
+      if (!srt) {
+        // No transcript means import failed somewhere. Whatever's cached is
+        // unusable; show error.
+        if (cached) {
+          analysis.setSubtitles(dedupSubtitles(cached.subtitles));
+          const { subtitles: _drop, ...summary } = cached;
+          analysis.setSummary(summary);
+          analysis.setPhase("complete");
+        } else {
+          analysis.setError("找不到 transcript.srt — 请重新解析");
+        }
+        return;
+      }
+      const cues = parseSrt(srt);
+      const cleanedCachedCues = cached ? dedupSubtitles(cached.subtitles) : [];
+
+      // ── Complete: cached has every cue. Use as-is. ──
+      if (cached && cleanedCachedCues.length >= cues.length) {
+        analysis.setSubtitles(cleanedCachedCues);
         const { subtitles: _drop, ...summary } = cached;
         analysis.setSummary(summary);
         analysis.setPhase("complete");
-        if (cleaned.length !== cached.subtitles.length) {
-          const cleanedAnalysis: AnalysisResult = { ...cached, subtitles: cleaned };
-          await invoke("save_analysis", { videoId, analysis: cleanedAnalysis });
+        // Self-heal: if dedup changed the count, persist cleaned version.
+        if (cleanedCachedCues.length !== cached.subtitles.length) {
+          await invoke("save_analysis", {
+            videoId,
+            analysis: { ...cached, subtitles: cleanedCachedCues },
+          });
         }
         return;
       }
 
+      // ── Partial: cached has some cues but not all. Resume from where we left off. ──
+      // ── Or fresh start: no cache, run from cue 0. ──
       analysis.startFor(videoId);
-      const srt = await invoke<string | null>("load_transcript", { videoId });
-      if (cancelled) return;
-      if (!srt) {
-        analysis.setError("找不到 transcript.srt — 请重新解析");
-        return;
+      const remaining =
+        cleanedCachedCues.length > 0
+          ? cues.slice(cleanedCachedCues.length)
+          : cues;
+      // Pre-seed the store with already-analyzed cues so the UI shows them
+      // immediately rather than blanking on resume.
+      if (cleanedCachedCues.length > 0) {
+        analysis.setSubtitles(cleanedCachedCues);
+        if (cached?.keyPhrases) {
+          analysis.setSummary({ keyPhrases: cached.keyPhrases });
+        }
       }
-
       analysis.setPhase("analyzing");
-      const cues = parseSrt(srt);
       const provider = getProvider(settings);
       try {
         await runAnalysis({
           provider,
-          cues,
+          cues: remaining,
           onCue: (c: Subtitle) => {
             if (cancelled) return;
             analysis.appendSubtitle(c);
+            schedulePartialSave();
           },
           onSummary: (s) => {
             if (cancelled) return;
             analysis.setSummary(s);
+            schedulePartialSave();
           },
         });
         if (cancelled) return;
@@ -149,6 +202,10 @@ export function Player() {
             ...summary,
             subtitles: dedupSubtitles(useAnalysis.getState().subtitles),
           };
+          if (saveTimer) {
+            clearTimeout(saveTimer);
+            saveTimer = null;
+          }
           await invoke("save_analysis", { videoId, analysis: finalAnalysis });
           await invoke("library_set_status", {
             id: videoId,
@@ -172,6 +229,9 @@ export function Player() {
 
     return () => {
       cancelled = true;
+      // Force-save whatever cues have accumulated so the next session can
+      // resume without re-billing the LLM for already-analyzed cues.
+      flushPartialSave();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);

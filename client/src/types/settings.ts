@@ -20,6 +20,11 @@ export interface GeminiConfig {
 
 export interface Settings {
   llmProvider: LlmProvider;
+  /** Vendor preset id (e.g. "deepseek", "openai", "claude", "kimi", "custom").
+   *  Drives the UI dropdown and auto-fills protocol + baseUrl. Optional for
+   *  backward compat with old settings.json files written before this field
+   *  existed — those get inferred from llmProvider + openaiCompatible.baseUrl. */
+  vendorId?: string;
   openaiCompatible: OpenAICompatibleConfig;
   claude: ClaudeConfig;
   gemini: GeminiConfig;
@@ -35,6 +40,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   llmProvider: "openai-compatible",
+  vendorId: "deepseek",
   openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "", model: "deepseek-chat" },
   claude: { apiKey: "", model: "claude-sonnet-4-6" },
   gemini: { apiKey: "", model: "gemini-2.5-pro" },

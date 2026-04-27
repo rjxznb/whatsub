@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
-import type { Settings, WhisperModelSize, LlmProvider } from "../types/settings";
+import type { Settings, WhisperModelSize } from "../types/settings";
+import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
 
 const WHISPER_SIZES: WhisperModelSize[] = ["tiny", "base", "small", "medium", "large-v3"];
 
@@ -119,86 +120,7 @@ export function Settings() {
       <div className="max-w-2xl mx-auto p-6 space-y-8">
         <section>
           <h2 className="font-semibold mb-3">LLM Provider</h2>
-          <select
-            value={draft.llmProvider}
-            onChange={(e) => setDraft({ ...draft, llmProvider: e.target.value as LlmProvider })}
-            className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-full max-w-md"
-          >
-            <option value="openai-compatible">
-              OpenAI 兼容协议（OpenAI / DeepSeek / 智谱GLM / Kimi / 阿里 Qwen / SiliconFlow / Ollama 本地 / 各种代理）
-            </option>
-            <option value="claude">
-              Claude（Anthropic — Sonnet / Opus / Haiku 各版本）
-            </option>
-            <option value="gemini">
-              Gemini（Google — Gemini 2.5 Pro / Flash 等）
-            </option>
-          </select>
-
-          {draft.llmProvider === "openai-compatible" && (
-            <div className="grid grid-cols-1 gap-3 mt-3">
-              <Field
-                label="Base URL"
-                value={draft.openaiCompatible.baseUrl}
-                onChange={(v) =>
-                  setDraft({
-                    ...draft,
-                    openaiCompatible: { ...draft.openaiCompatible, baseUrl: v },
-                  })
-                }
-              />
-              <SecretField
-                label="API Key"
-                value={draft.openaiCompatible.apiKey}
-                onChange={(v) =>
-                  setDraft({
-                    ...draft,
-                    openaiCompatible: { ...draft.openaiCompatible, apiKey: v },
-                  })
-                }
-              />
-              <Field
-                label="Model"
-                value={draft.openaiCompatible.model}
-                onChange={(v) =>
-                  setDraft({
-                    ...draft,
-                    openaiCompatible: { ...draft.openaiCompatible, model: v },
-                  })
-                }
-              />
-            </div>
-          )}
-
-          {draft.llmProvider === "claude" && (
-            <div className="grid grid-cols-1 gap-3 mt-3">
-              <SecretField
-                label="API Key"
-                value={draft.claude.apiKey}
-                onChange={(v) => setDraft({ ...draft, claude: { ...draft.claude, apiKey: v } })}
-              />
-              <Field
-                label="Model"
-                value={draft.claude.model}
-                onChange={(v) => setDraft({ ...draft, claude: { ...draft.claude, model: v } })}
-              />
-            </div>
-          )}
-
-          {draft.llmProvider === "gemini" && (
-            <div className="grid grid-cols-1 gap-3 mt-3">
-              <SecretField
-                label="API Key"
-                value={draft.gemini.apiKey}
-                onChange={(v) => setDraft({ ...draft, gemini: { ...draft.gemini, apiKey: v } })}
-              />
-              <Field
-                label="Model"
-                value={draft.gemini.model}
-                onChange={(v) => setDraft({ ...draft, gemini: { ...draft.gemini, model: v } })}
-              />
-            </div>
-          )}
+          <VendorSection draft={draft} setDraft={setDraft} />
 
           <div className="flex items-center gap-3 mt-3">
             <button
@@ -288,27 +210,184 @@ export function Settings() {
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  type = "text",
+/**
+ * Vendor preset dropdown + auto-filled fields.
+ * The user picks a vendor (DeepSeek / OpenAI / Claude / etc.); we derive
+ * `llmProvider` (protocol) and `baseUrl` from the preset. API key and model
+ * are stored under the matching protocol slot in Settings (so switching among
+ * protocols preserves keys; switching between OpenAI-compatible vendors shares
+ * the same slot — that's a known UX limitation we may revisit later).
+ */
+function VendorSection({
+  draft,
+  setDraft,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
+  draft: Settings;
+  setDraft: (s: Settings) => void;
 }) {
+  const vendorId =
+    draft.vendorId ?? inferVendorId(draft.llmProvider, draft.openaiCompatible.baseUrl);
+  const vendor = getVendor(vendorId) ?? VENDORS[0];
+
+  function pickVendor(id: string) {
+    const v = getVendor(id);
+    if (!v) return;
+    const next: Settings = {
+      ...draft,
+      vendorId: v.id,
+      llmProvider: v.protocol,
+    };
+    if (v.protocol === "openai-compatible") {
+      // Auto-fill baseUrl for known vendors; leave editable for "custom".
+      next.openaiCompatible = {
+        ...draft.openaiCompatible,
+        baseUrl: v.baseUrl || draft.openaiCompatible.baseUrl,
+      };
+    }
+    setDraft(next);
+  }
+
+  // Read/write the active key+model regardless of which protocol slot stores it.
+  const activeKey =
+    vendor.protocol === "claude"
+      ? draft.claude.apiKey
+      : vendor.protocol === "gemini"
+      ? draft.gemini.apiKey
+      : draft.openaiCompatible.apiKey;
+  const activeModel =
+    vendor.protocol === "claude"
+      ? draft.claude.model
+      : vendor.protocol === "gemini"
+      ? draft.gemini.model
+      : draft.openaiCompatible.model;
+
+  function setActiveKey(v: string) {
+    if (vendor.protocol === "claude") {
+      setDraft({ ...draft, claude: { ...draft.claude, apiKey: v } });
+    } else if (vendor.protocol === "gemini") {
+      setDraft({ ...draft, gemini: { ...draft.gemini, apiKey: v } });
+    } else {
+      setDraft({
+        ...draft,
+        openaiCompatible: { ...draft.openaiCompatible, apiKey: v },
+      });
+    }
+  }
+  function setActiveModel(v: string) {
+    if (vendor.protocol === "claude") {
+      setDraft({ ...draft, claude: { ...draft.claude, model: v } });
+    } else if (vendor.protocol === "gemini") {
+      setDraft({ ...draft, gemini: { ...draft.gemini, model: v } });
+    } else {
+      setDraft({
+        ...draft,
+        openaiCompatible: { ...draft.openaiCompatible, model: v },
+      });
+    }
+  }
+
+  const isCustom = vendor.id === "custom";
+  const showBaseUrl = vendor.protocol === "openai-compatible";
+
   return (
-    <label className="text-sm text-zinc-300">
-      {label}
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100"
+    <div className="space-y-3">
+      <div>
+        <label className="text-sm text-zinc-300 block">
+          模型厂商
+          <select
+            value={vendor.id}
+            onChange={(e) => pickVendor(e.target.value)}
+            className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm text-zinc-100"
+          >
+            {VENDORS.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {showBaseUrl && (
+        <div>
+          <label className="text-sm text-zinc-300 block">
+            Base URL
+            <input
+              type="text"
+              value={
+                isCustom
+                  ? draft.openaiCompatible.baseUrl
+                  : vendor.baseUrl
+              }
+              readOnly={!isCustom}
+              onChange={(e) =>
+                isCustom &&
+                setDraft({
+                  ...draft,
+                  openaiCompatible: {
+                    ...draft.openaiCompatible,
+                    baseUrl: e.target.value,
+                  },
+                })
+              }
+              placeholder={isCustom ? "https://your-proxy.example.com/v1" : ""}
+              className={
+                "w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100 " +
+                (isCustom ? "" : "cursor-default")
+              }
+            />
+          </label>
+        </div>
+      )}
+
+      <SecretField
+        label="API Key"
+        value={activeKey}
+        onChange={setActiveKey}
       />
-    </label>
+      {vendor.keyConsoleUrl && (
+        <a
+          href={vendor.keyConsoleUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300"
+        >
+          获取 / 管理 API Key <ExternalLink className="h-3 w-3" />
+        </a>
+      )}
+
+      <div>
+        <label className="text-sm text-zinc-300 block">
+          Model
+          <input
+            type="text"
+            value={activeModel}
+            list={`models-${vendor.id}`}
+            onChange={(e) => setActiveModel(e.target.value)}
+            placeholder={vendor.models[0] ?? "model name"}
+            className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100"
+          />
+          {vendor.models.length > 0 && (
+            <datalist id={`models-${vendor.id}`}>
+              {vendor.models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          )}
+        </label>
+        {vendor.models.length > 0 && (
+          <div className="text-[10px] text-zinc-500 mt-1">
+            可点输入框右侧 ▾ 选预设模型，或手动输入其它模型名
+          </div>
+        )}
+      </div>
+
+      {vendor.note && (
+        <div className="text-[11px] text-zinc-400 italic bg-zinc-900/40 border-l-2 border-zinc-700 px-3 py-1.5 rounded-r">
+          {vendor.note}
+        </div>
+      )}
+    </div>
   );
 }
 

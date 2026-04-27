@@ -4,6 +4,20 @@ use crate::pipeline::spawn::run_sidecar;
 use std::path::Path;
 use tauri::AppHandle;
 
+fn read_cookies_file() -> Option<String> {
+    let path = crate::core::paths::settings_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let f = v.get("cookiesFile")?.as_str()?.trim();
+    if f.is_empty() || !std::path::Path::new(f).exists() {
+        return None;
+    }
+    Some(f.to_string())
+}
+
 #[derive(Debug)]
 pub struct DownloadResult {
     pub video_path: String,
@@ -29,29 +43,38 @@ pub async fn download(
     let thumb_template = format!("thumbnail:{}", thumb_path.trim_end_matches(".jpg"));
     let info_template = format!("infojson:{}", info_path.trim_end_matches(".json"));
 
+    let cookies = read_cookies_file();
+    let mut args: Vec<String> = Vec::new();
+    if let Some(c) = &cookies {
+        args.push("--cookies".into());
+        args.push(c.clone());
+    }
+    args.extend([
+        "-f".into(),
+        "bv*[ext=mp4][height<=720]+ba/best[ext=mp4]/best".into(),
+        "--merge-output-format".into(),
+        "mp4".into(),
+        "-o".into(),
+        video_path.clone(),
+        "--write-thumbnail".into(),
+        "--convert-thumbnails".into(),
+        "jpg".into(),
+        "-o".into(),
+        thumb_template.clone(),
+        "--write-info-json".into(),
+        "-o".into(),
+        info_template.clone(),
+        "--newline".into(),
+        "--progress-template".into(),
+        "[download] %(progress._percent_str)s".into(),
+        url.into(),
+    ]);
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
     run_sidecar(
         app,
         "yt-dlp",
-        &[
-            "-f",
-            "bv*[ext=mp4][height<=720]+ba/best[ext=mp4]/best",
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            &video_path,
-            "--write-thumbnail",
-            "--convert-thumbnails",
-            "jpg",
-            "-o",
-            &thumb_template,
-            "--write-info-json",
-            "-o",
-            &info_template,
-            "--newline",
-            "--progress-template",
-            "[download] %(progress._percent_str)s",
-            url,
-        ],
+        &arg_refs,
         |line| {
             if let Some(p) = parse_percent(line) {
                 emit(

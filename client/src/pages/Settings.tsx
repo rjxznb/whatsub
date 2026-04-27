@@ -215,8 +215,16 @@ export function Settings() {
               defaultHint="默认：%APPDATA%/Get_Video/models"
               onChange={(v) => setDraft({ ...draft, modelsDir: v })}
             />
+            <FileField
+              label="yt-dlp cookies 文件（可选）"
+              value={draft.cookiesFile}
+              defaultHint="未设置（YouTube 偶尔需要 cookies 才能下载）"
+              filterName="cookies.txt"
+              filterExt={["txt"]}
+              onChange={(v) => setDraft({ ...draft, cookiesFile: v })}
+            />
             <p className="text-[10px] text-zinc-500 leading-relaxed">
-              ⚠ 修改路径不会自动迁移已有文件。如需保留历史视频/模型，请先手动把它们移到新路径下。否则旧条目会显示为找不到。
+              ⚠ 修改视频/模型目录不会自动迁移已有文件，但已存在条目会保留原位（不会丢失）。如需集中管理，请手动把它们移到新路径并相应修改 library.json。
             </p>
           </div>
         </section>
@@ -333,7 +341,63 @@ function DirField({
             title="重置为默认"
             className="px-3 py-1.5 bg-zinc-800 text-zinc-300 rounded text-sm hover:bg-zinc-700"
           >
-            重置
+            清除
+          </button>
+        )}
+      </div>
+    </label>
+  );
+}
+
+function FileField({
+  label,
+  value,
+  defaultHint,
+  filterName,
+  filterExt,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  defaultHint: string;
+  filterName: string;
+  filterExt: string[];
+  onChange: (v: string) => void;
+}) {
+  async function pickFile() {
+    const result = await openDialog({
+      directory: false,
+      multiple: false,
+      filters: [{ name: filterName, extensions: filterExt }],
+    });
+    if (typeof result === "string") onChange(result);
+  }
+  return (
+    <label className="text-sm text-zinc-300 block">
+      {label}
+      <div className="mt-1 flex gap-2">
+        <input
+          type="text"
+          value={value}
+          readOnly
+          placeholder={defaultHint}
+          className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100 placeholder:text-zinc-600"
+        />
+        <button
+          type="button"
+          onClick={pickFile}
+          className="px-3 py-1.5 bg-zinc-700 text-zinc-100 rounded text-sm hover:bg-zinc-600"
+        >
+          选择...
+        </button>
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            title="清除"
+            className="px-3 py-1.5 bg-zinc-800 text-zinc-300 rounded text-sm hover:bg-zinc-700"
+          >
+            清除
           </button>
         )}
       </div>

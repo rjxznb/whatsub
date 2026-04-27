@@ -28,6 +28,9 @@ export interface Settings {
   libraryDir: string;
   /** Custom directory for Whisper model files. Empty string = use default (%APPDATA%/Get_Video/models). */
   modelsDir: string;
+  /** Path to a Netscape-format cookies.txt file. When set, yt-dlp uses --cookies <file>
+   *  to bypass age/login walls and bot-detection prompts. Empty = no cookies. */
+  cookiesFile: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -38,4 +41,5 @@ export const DEFAULT_SETTINGS: Settings = {
   whisperModel: "small",
   libraryDir: "",
   modelsDir: "",
+  cookiesFile: "",
 };

@@ -43,6 +43,7 @@ export function ImportModal({ onClose }: Props) {
   const [filePath, setFilePath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
@@ -249,13 +250,70 @@ export function ImportModal({ onClose }: Props) {
         </div>
 
         {tab === "url" ? (
-          <input
-            type="text"
-            value={urlValue}
-            onChange={(e) => setUrlValue(e.target.value)}
-            placeholder="https://www.youtube.com/watch?v=..."
-            className="w-full px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border border-zinc-700"
-          />
+          <>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={urlValue}
+                onChange={(e) => setUrlValue(e.target.value)}
+                placeholder="https://www.youtube.com/watch?v=..."
+                className="flex-1 px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border border-zinc-700"
+              />
+              <button
+                type="button"
+                onClick={() => setShowHelp((v) => !v)}
+                title="下载失败的常见原因"
+                className={
+                  "px-3 py-2 rounded text-sm font-bold w-10 " +
+                  (showHelp
+                    ? "bg-blue-500 text-black"
+                    : "bg-zinc-700 text-zinc-100 hover:bg-zinc-600")
+                }
+              >
+                ?
+              </button>
+            </div>
+            {showHelp && (
+              <div className="mt-3 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2">
+                <div className="text-zinc-100 font-medium">下载失败常见原因</div>
+
+                <div>
+                  <span className="text-amber-300">①  没有梯子（中国大陆）：</span>
+                  YouTube / Bilibili 国际站等都需要梯子。yt-dlp 走系统代理，请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN，浏览器能正常访问对应站点。
+                </div>
+
+                <div>
+                  <span className="text-amber-300">②  YouTube 偶尔需要 cookies：</span>
+                  即使有梯子，YouTube 检测到流量来自代理时会要求登录验证（"Sign in to confirm you're not a bot"），需要 cookies 通过。
+                </div>
+
+                <div>
+                  <span className="text-amber-300">③  导出 cookies.txt：</span>
+                  <ul className="list-disc list-inside mt-1 space-y-0.5 text-zinc-400">
+                    <li>Edge / Chrome 装扩展「Get cookies.txt LOCALLY」</li>
+                    <li>登录 YouTube</li>
+                    <li>点扩展按钮 → Export → 保存为 .txt 文件</li>
+                    <li>回 app 设置页 → 「yt-dlp cookies 文件」选这个 .txt</li>
+                    <li>cookies 通常 1-2 周后过期，再失败时重新导出即可</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <span className="text-amber-300">④  视频本身限制：</span>
+                  会员/付费/年龄限制/区域锁定的视频 yt-dlp 也下不了，跟代理无关。
+                </div>
+
+                <div className="text-zinc-500 text-[10px] pt-1">
+                  当前 cookies 状态：
+                  {settings.cookiesFile ? (
+                    <span className="text-green-400 ml-1">已配置（{settings.cookiesFile.split(/[\\/]/).pop()}）</span>
+                  ) : (
+                    <span className="text-zinc-500 ml-1">未配置</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <div className="flex gap-2">
             <input

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useAnalysis } from "../store/analysis";
 import { useSettings } from "../store/settings";
@@ -20,9 +20,6 @@ type Tab = "subtitles" | "keyPhrases";
 
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
-  const [searchParams] = useSearchParams();
-  const srtPathFromImport = searchParams.get("srt");
-
   const { settings } = useSettings();
   const { library, reload } = useLibrary();
   const analysis = useAnalysis();
@@ -164,8 +161,6 @@ export function Player() {
     return () => {
       cancelled = true;
     };
-    // srtPathFromImport intentionally excluded — its sole purpose is to gate the
-    // initial branch and we don't want a re-run if it changes mid-flight.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 

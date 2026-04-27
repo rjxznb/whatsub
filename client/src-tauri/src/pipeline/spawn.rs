@@ -3,7 +3,10 @@ use tauri::AppHandle;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-/// Run a sidecar to completion, capturing stdout. Streams stderr to a callback for progress parsing.
+/// Run a sidecar to completion, capturing stdout. Streams stderr to a callback
+/// for progress parsing AND retains a tail buffer that gets included in the
+/// error message on non-zero exit, so users see yt-dlp/ffmpeg/whisper's actual
+/// failure reason rather than a bare "exit 1".
 pub async fn run_sidecar<F>(
     app: &AppHandle,
     bin_name: &str,
@@ -24,6 +27,8 @@ where
         .map_err(|e| AppError::Subprocess(format!("spawn {bin_name}: {e}")))?;
 
     let mut stdout = String::new();
+    let mut stderr_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    const TAIL_LINES: usize = 20;
     let mut exit_code: Option<i32> = None;
 
     while let Some(event) = rx.recv().await {
@@ -32,8 +37,18 @@ where
                 stdout.push_str(&String::from_utf8_lossy(&bytes));
             }
             CommandEvent::Stderr(bytes) => {
-                let line = String::from_utf8_lossy(&bytes);
-                on_stderr_line(&line);
+                let chunk = String::from_utf8_lossy(&bytes).to_string();
+                on_stderr_line(&chunk);
+                for line in chunk.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if stderr_tail.len() >= TAIL_LINES {
+                        stderr_tail.pop_front();
+                    }
+                    stderr_tail.push_back(trimmed.to_string());
+                }
             }
             CommandEvent::Terminated(payload) => {
                 exit_code = payload.code;
@@ -44,7 +59,19 @@ where
 
     match exit_code {
         Some(0) => Ok(stdout),
-        Some(c) => Err(AppError::Subprocess(format!("{bin_name} exit {c}"))),
+        Some(c) => {
+            let tail = stderr_tail
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let detail = if tail.is_empty() {
+                String::new()
+            } else {
+                format!("\n--- {bin_name} stderr (last {} lines) ---\n{}", stderr_tail.len(), tail)
+            };
+            Err(AppError::Subprocess(format!("{bin_name} exit {c}{detail}")))
+        }
         None => Err(AppError::Subprocess(format!(
             "{bin_name} terminated abnormally"
         ))),

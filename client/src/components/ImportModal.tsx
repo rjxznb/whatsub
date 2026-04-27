@@ -27,12 +27,22 @@ type Phase = "idle" | "started" | "downloading" | "extracting" | "transcribing" 
 
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
-  started: "准备中...",
+  started: "准备中",
   downloading: "下载视频",
   extracting: "抽取音频",
   transcribing: "本地转录",
-  done: "完成，跳转到播放页...",
+  done: "完成，跳转到播放页",
   error: "失败",
+};
+
+const PHASE_DURATION: Record<Phase, string> = {
+  idle: "",
+  started: "约 5-30 秒",
+  downloading: "随网速：几秒到几分钟",
+  extracting: "约 1-5 秒",
+  transcribing: "约 1-3 分钟 / 10 分钟视频 (small)",
+  done: "立即",
+  error: "",
 };
 
 export function ImportModal({ onClose, initialFilePath }: Props) {
@@ -153,39 +163,51 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   // ------- Progress view -------
   if (submitting) {
     const showBar = phase === "downloading" || phase === "transcribing";
+    // Local-file imports skip the download phase (yt-dlp is not invoked).
+    const visiblePhases: Phase[] =
+      tab === "local"
+        ? ["started", "extracting", "transcribing", "done"]
+        : ["started", "downloading", "extracting", "transcribing", "done"];
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-        <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[480px] max-w-full">
+        <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[520px] max-w-full">
           <h2 className="text-lg font-semibold text-zinc-100 mb-4">解析进行中</h2>
 
           <div className="space-y-3">
-            {(["started", "downloading", "extracting", "transcribing", "done"] as Phase[]).map(
-              (p) => (
+            {visiblePhases.map((p) => {
+              const isCurrent = phase === p;
+              const isDone = phaseOrder(p) < phaseOrder(phase);
+              return (
                 <div
                   key={p}
                   className={
                     "flex items-center gap-3 text-sm " +
-                    (phase === p
+                    (isCurrent
                       ? "text-blue-300"
-                      : phaseOrder(p) < phaseOrder(phase)
+                      : isDone
                       ? "text-green-400"
                       : "text-zinc-500")
                   }
                 >
-                  <span className="w-5">
-                    {phaseOrder(p) < phaseOrder(phase)
-                      ? "✓"
-                      : phase === p
-                      ? "▸"
-                      : "○"}
+                  <span className="w-5 h-5 flex items-center justify-center shrink-0">
+                    {isDone ? (
+                      <span className="text-green-400">✓</span>
+                    ) : isCurrent ? (
+                      <span className="w-3.5 h-3.5 border-2 border-blue-300 border-t-transparent rounded-full animate-spin inline-block" />
+                    ) : (
+                      <span className="w-2 h-2 border border-zinc-600 rounded-full inline-block" />
+                    )}
                   </span>
-                  <span className="flex-1">{PHASE_LABEL[p]}</span>
-                  {phase === p && showBar && (
-                    <span className="text-xs text-zinc-400">{percent}%</span>
+                  <span className="font-medium">{PHASE_LABEL[p]}</span>
+                  <span className="flex-1 text-[10px] text-zinc-600 italic">
+                    {PHASE_DURATION[p]}
+                  </span>
+                  {isCurrent && showBar && (
+                    <span className="text-xs text-zinc-400 tabular-nums">{percent}%</span>
                   )}
                 </div>
-              )
-            )}
+              );
+            })}
           </div>
 
           {showBar && (

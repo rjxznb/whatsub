@@ -31,7 +31,7 @@ pub async fn download(
 
     run_sidecar(
         app,
-        "binaries/yt-dlp",
+        "yt-dlp",
         &[
             "-f",
             "bv*[ext=mp4][height<=720]+ba/best[ext=mp4]/best",

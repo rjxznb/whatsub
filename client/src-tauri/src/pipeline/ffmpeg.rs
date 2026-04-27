@@ -13,7 +13,7 @@ pub async fn extract_audio_wav(
     let out_str = out_path.to_string_lossy().to_string();
     run_sidecar(
         app,
-        "binaries/ffmpeg",
+        "ffmpeg",
         &[
             "-y",
             "-i", &video_str,
@@ -39,7 +39,7 @@ pub async fn extract_thumbnail(
     let out_str = out_path.to_string_lossy().to_string();
     run_sidecar(
         app,
-        "binaries/ffmpeg",
+        "ffmpeg",
         &[
             "-y",
             "-ss", "0.5",

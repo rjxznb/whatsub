@@ -115,7 +115,7 @@ pub async fn transcribe(
     let app_clone = app.clone();
     run_sidecar(
         app,
-        "binaries/whisper-cli",
+        "whisper-cli",
         &[
             "-m", &model_str,
             "-f", &audio_str,

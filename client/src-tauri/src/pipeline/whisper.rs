@@ -3,7 +3,13 @@ use crate::core::progress::{emit, PipelineEvent};
 use crate::error::{AppError, AppResult};
 use crate::pipeline::spawn::run_sidecar;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
+
+/// String used in `AppError::Other` when a download is interrupted by the
+/// user pressing pause. The frontend matches on this so it knows to show
+/// "继续" instead of a hard error message.
+pub const DOWNLOAD_CANCELLED: &str = "cancelled";
 
 const MODEL_URLS: &[(&str, &str, u64)] = &[
     ("tiny",     "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",     75),
@@ -28,7 +34,16 @@ pub fn model_exists(size: &str) -> AppResult<bool> {
     Ok(model_path(size)?.exists())
 }
 
-pub async fn download_model(app: &AppHandle, size: &str) -> AppResult<()> {
+/// Download (or resume) the model file for `size`.
+///
+/// Resume: if `<dest>.partial` already exists, sends `Range: bytes=<offset>-`
+/// and appends to it. Falls back to a fresh download if the server doesn't
+/// honor the range request (200 instead of 206).
+///
+/// Cancel: the loop checks `cancel` once per chunk. On cancel we sync the
+/// .partial file (so the bytes stay on disk for next resume) and return
+/// `AppError::Other("cancelled")`. The frontend matches on that string.
+pub async fn download_model(app: &AppHandle, size: &str, cancel: &AtomicBool) -> AppResult<()> {
     let (url, total_mb) = model_info(size)
         .ok_or_else(|| AppError::InvalidInput(format!("unknown model: {size}")))?;
     let dest = model_path(size)?;
@@ -38,22 +53,72 @@ pub async fn download_model(app: &AppHandle, size: &str) -> AppResult<()> {
     // leaves a "complete-looking" file at `dest`. Rename to the final name
     // only after the stream finishes successfully.
     let partial = dest.with_extension("bin.partial");
-    if partial.exists() {
-        std::fs::remove_file(&partial)?;
-    }
+    let existing: u64 = std::fs::metadata(&partial)
+        .ok()
+        .map(|m| m.len())
+        .unwrap_or(0);
 
-    let resp = reqwest::get(url).await?;
-    let total_bytes = resp.content_length().unwrap_or(total_mb * 1024 * 1024);
-    let mut downloaded: u64 = 0;
-    let mut last_percent: u8 = 0;
+    let client = reqwest::Client::new();
+    let mut req = client.get(url);
+    if existing > 0 {
+        req = req.header("Range", format!("bytes={}-", existing));
+    }
+    let resp = req.send().await?;
+    let status = resp.status();
+    let resume = status == reqwest::StatusCode::PARTIAL_CONTENT;
+
+    // Total expected bytes:
+    //   206 → parse "Content-Range: bytes start-end/total"; fall back to
+    //         existing + content_length if not parseable.
+    //   200 → server ignored Range (or first request); use Content-Length.
+    let total_bytes: u64 = if resume {
+        resp.headers()
+            .get("content-range")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.split('/').nth(1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| existing + resp.content_length().unwrap_or(0))
+    } else {
+        resp.content_length().unwrap_or(total_mb * 1024 * 1024)
+    };
+
+    let starting_offset = if resume { existing } else { 0 };
+    let mut downloaded = starting_offset;
+    let mut last_percent: u8 = ((starting_offset as f64 / total_bytes as f64) * 100.0) as u8;
 
     use futures_util::StreamExt;
     use std::io::Write;
     {
-        let mut file = std::fs::File::create(&partial)?;
+        let mut file = if resume {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(&partial)?
+        } else {
+            // Fresh download — overwrite any stale .partial.
+            std::fs::File::create(&partial)?
+        };
         let mut stream = resp.bytes_stream();
 
+        // Emit an initial progress event so resumed downloads show their
+        // starting % immediately rather than jumping from 0.
+        if resume && starting_offset > 0 {
+            emit(
+                app,
+                PipelineEvent::ModelDownload {
+                    progress: last_percent,
+                    total_mb: total_bytes / 1024 / 1024,
+                    downloaded_mb: downloaded / 1024 / 1024,
+                },
+            );
+        }
+
         while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Relaxed) {
+                // Best-effort flush so what's on disk is durable for resume.
+                let _ = file.sync_all();
+                return Err(AppError::Other(DOWNLOAD_CANCELLED.into()));
+            }
             let bytes = chunk?;
             file.write_all(&bytes)?;
             downloaded += bytes.len() as u64;
@@ -75,7 +140,7 @@ pub async fn download_model(app: &AppHandle, size: &str) -> AppResult<()> {
 
     // Sanity check: if Content-Length was known, refuse to rename a truncated file.
     if resp_had_content_length(total_bytes, total_mb) && downloaded < total_bytes {
-        std::fs::remove_file(&partial).ok();
+        // Don't delete .partial — user can resume.
         return Err(AppError::Other(format!(
             "download truncated: got {} bytes, expected {}",
             downloaded, total_bytes
@@ -90,6 +155,14 @@ fn resp_had_content_length(total_bytes: u64, fallback_mb: u64) -> bool {
     // If total_bytes equals the fallback_mb*1024*1024 exactly, it's the unwrap_or default
     // (no Content-Length). Otherwise the server provided a real value.
     total_bytes != fallback_mb * 1024 * 1024
+}
+
+/// Size of the partial download for `size`, or 0 if no .partial file exists.
+/// Used by the frontend to render "继续 (45%)" on a fresh launch.
+pub fn partial_size(size: &str) -> AppResult<u64> {
+    let dest = model_path(size)?;
+    let partial = dest.with_extension("bin.partial");
+    Ok(std::fs::metadata(&partial).ok().map(|m| m.len()).unwrap_or(0))
 }
 
 pub async fn transcribe(

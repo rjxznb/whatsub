@@ -14,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(commands::analysis::ExportState::default())
+        .manage(commands::models::ModelDownloadState::default())
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -35,7 +36,9 @@ pub fn run() {
             commands::analysis::export_burned_video,
             commands::analysis::cancel_export,
             commands::models::whisper_model_status,
+            commands::models::whisper_model_partial_size,
             commands::models::whisper_model_download,
+            commands::models::whisper_model_download_cancel,
             commands::import::import_video,
             commands::vocabulary::vocab_list,
             commands::vocabulary::vocab_add,

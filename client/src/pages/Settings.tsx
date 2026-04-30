@@ -1,23 +1,24 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, Check, Pause, Play, Download } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
+import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import { useUpdater } from "../hooks/useUpdater";
 import { getVersion } from "@tauri-apps/api/app";
-
-const WHISPER_SIZES: WhisperModelSize[] = ["tiny", "base", "small", "medium", "large-v3"];
 
 export function Settings() {
   const { settings, load, save } = useSettings();
   const [draft, setDraft] = useState<Settings>(settings);
   const [modelDownloaded, setModelDownloaded] = useState<Record<string, boolean>>({});
+  const [modelPartialPct, setModelPartialPct] = useState<Record<string, number>>({});
   const [downloading, setDownloading] = useState<WhisperModelSize | null>(null);
   const [downloadPct, setDownloadPct] = useState(0);
+  const [downloadPaused, setDownloadPaused] = useState<WhisperModelSize | null>(null);
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -28,16 +29,26 @@ export function Settings() {
 
   useEffect(() => {
     Promise.all(
-      WHISPER_SIZES.map(
-        async (s) =>
-          [s, await invoke<boolean>("whisper_model_status", { size: s })] as const
-      )
+      MODEL_TIERS.map(async (t) => {
+        const [ok, partialBytes] = await Promise.all([
+          invoke<boolean>("whisper_model_status", { size: t.size }),
+          invoke<number>("whisper_model_partial_size", { size: t.size }),
+        ]);
+        const totalBytes = t.sizeMB * 1024 * 1024;
+        const p = totalBytes > 0 ? Math.floor((partialBytes / totalBytes) * 100) : 0;
+        return [t.size, ok, p] as const;
+      })
     ).then((results) => {
-      const map: Record<string, boolean> = {};
-      for (const [s, ok] of results) map[s] = ok;
-      setModelDownloaded(map);
+      const dl: Record<string, boolean> = {};
+      const pp: Record<string, number> = {};
+      for (const [s, ok, p] of results) {
+        dl[s] = ok;
+        pp[s] = p;
+      }
+      setModelDownloaded(dl);
+      setModelPartialPct(pp);
     });
-  }, [downloading]);
+  }, [downloading, downloadPaused]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -53,16 +64,30 @@ export function Settings() {
 
   async function downloadModel(size: WhisperModelSize) {
     setDownloading(size);
-    setDownloadPct(0);
+    setDownloadPaused(null);
+    // If resuming a paused tier, the % already reflects the partial; otherwise
+    // reset to 0 and let the first event update it.
+    if (downloadPaused !== size) setDownloadPct(0);
     try {
       await invoke("whisper_model_download", { size });
     } catch (e) {
-      // Reset model state so a partial file doesn't show as "downloaded"
-      console.error("model download failed", e);
-      alert(`下载失败：${e}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      // Rust returns AppError::Other("cancelled") on user pause — treat as
+      // a paused state instead of a hard error so 继续 can resume from .partial.
+      if (msg.toLowerCase().includes("cancelled")) {
+        setDownloadPaused(size);
+      } else {
+        console.error("model download failed", e);
+        alert(`下载失败：${msg}`);
+      }
     } finally {
       setDownloading(null);
     }
+  }
+
+  async function pauseDownload() {
+    await invoke("whisper_model_download_cancel");
+    // The downloadModel() promise will reject shortly; its catch sets paused.
   }
 
   async function testConnection() {
@@ -165,29 +190,135 @@ export function Settings() {
         </section>
 
         <section>
-          <h2 className="font-semibold mb-3">Whisper 模型</h2>
-          <select
-            value={draft.whisperModel}
-            onChange={(e) =>
-              setDraft({ ...draft, whisperModel: e.target.value as WhisperModelSize })
-            }
-            className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm"
-          >
-            {WHISPER_SIZES.map((s) => (
-              <option key={s} value={s}>
-                {s} {modelDownloaded[s] ? "(已下载)" : "(未下载)"}
-              </option>
-            ))}
-          </select>
-          {!modelDownloaded[draft.whisperModel] && (
-            <button
-              onClick={() => downloadModel(draft.whisperModel)}
-              disabled={downloading !== null}
-              className="ml-3 px-3 py-1.5 bg-blue-500 text-black text-sm rounded disabled:opacity-50"
-            >
-              {downloading === draft.whisperModel ? `下载中 ${downloadPct}%` : "下载"}
-            </button>
-          )}
+          <h2 className="font-semibold mb-1">字幕识别引擎</h2>
+          <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">
+            从视频里识别出英文字幕。质量越高、文件越大、占的硬盘越多。可以下载多个版本随时切换。
+          </p>
+          <div className="space-y-1.5">
+            {MODEL_TIERS.map((t) => {
+              const isActive = t.size === draft.whisperModel;
+              const isDownloaded = modelDownloaded[t.size];
+              const partial = modelPartialPct[t.size] ?? 0;
+              const isCurrentDownload = downloading === t.size;
+              const isPausedHere = downloadPaused === t.size;
+              const lockedDuringDownload = downloading !== null && downloading !== t.size;
+              return (
+                <label
+                  key={t.size}
+                  className={
+                    "flex items-start gap-3 p-3 rounded border text-left transition " +
+                    (isActive
+                      ? "border-blue-500 bg-blue-500/10"
+                      : "border-zinc-800 hover:border-zinc-700") +
+                    (lockedDuringDownload ? " opacity-40 cursor-not-allowed" : " cursor-pointer")
+                  }
+                >
+                  <input
+                    type="radio"
+                    name="whisper-tier"
+                    checked={isActive}
+                    disabled={lockedDuringDownload}
+                    onChange={() =>
+                      setDraft({ ...draft, whisperModel: t.size })
+                    }
+                    className="mt-1 accent-blue-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">{t.name}</span>
+                      <span className="text-[11px] text-zinc-500">
+                        {formatModelSize(t.sizeMB)}
+                      </span>
+                      {t.recommended && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                          推荐
+                        </span>
+                      )}
+                      {isDownloaded ? (
+                        <span className="ml-auto text-[11px] text-green-400 inline-flex items-center gap-1">
+                          <Check className="h-3.5 w-3.5" /> 已下载
+                        </span>
+                      ) : isPausedHere || (partial > 0 && !isCurrentDownload) ? (
+                        <span className="ml-auto text-[11px] text-amber-400">
+                          已下载 {isPausedHere ? downloadPct : partial}%
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
+                      {t.description}
+                    </p>
+
+                    {/* Action row for THIS tier when it's selected as the
+                        active draft and either not yet downloaded, or being
+                        actively downloaded / paused. */}
+                    {isActive && !isDownloaded && (
+                      <div className="mt-2.5">
+                        {isCurrentDownload ? (
+                          <div>
+                            <div className="h-1.5 bg-zinc-800 rounded overflow-hidden">
+                              <div
+                                className="h-full bg-blue-500 transition-all duration-200"
+                                style={{ width: `${downloadPct}%` }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between mt-1.5 gap-2">
+                              <span className="text-[11px] text-zinc-400">
+                                下载中 {downloadPct}%
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  pauseDownload();
+                                }}
+                                className="text-[11px] px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded inline-flex items-center gap-1"
+                              >
+                                <Pause className="h-3 w-3" /> 暂停
+                              </button>
+                            </div>
+                          </div>
+                        ) : isPausedHere ? (
+                          <div>
+                            <div className="h-1.5 bg-zinc-800 rounded overflow-hidden">
+                              <div
+                                className="h-full bg-amber-500"
+                                style={{ width: `${downloadPct}%` }}
+                              />
+                            </div>
+                            <div className="flex items-center justify-between mt-1.5 gap-2">
+                              <span className="text-[11px] text-amber-400">
+                                已暂停（{downloadPct}%）
+                              </span>
+                              <button
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  downloadModel(t.size);
+                                }}
+                                className="text-[11px] px-2.5 py-1 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1"
+                              >
+                                <Play className="h-3 w-3" /> 继续
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              downloadModel(t.size);
+                            }}
+                            disabled={downloading !== null}
+                            className="text-[11px] px-2.5 py-1 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1 disabled:opacity-50"
+                          >
+                            <Download className="h-3 w-3" />
+                            {partial > 0 ? `继续下载（已 ${partial}%）` : "下载"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
           <div className="mt-3 text-xs">
             <span className="text-zinc-500">GPU 加速：</span>
             {draft.whisperBackend ? (
@@ -202,7 +333,7 @@ export function Settings() {
               </span>
             ) : (
               <span className="text-zinc-500 italic">
-                未检测（首次运行解析后自动识别）
+                未检测（首次解析视频后自动识别）
               </span>
             )}
           </div>

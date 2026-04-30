@@ -30,6 +30,13 @@ Thumbs.db
 # Exclude the actual binaries but keep README.md for documentation
 client/src-tauri/binaries/*.exe
 client/src-tauri/binaries/*.dll
+client/src-tauri/binaries/*.dylib
+client/src-tauri/binaries/*.metallib
+# Mac sidecars are extension-less Mach-O — exclude by name pattern
+client/src-tauri/binaries/*-aarch64-apple-darwin
+client/src-tauri/binaries/*-x86_64-apple-darwin
+# BLAS backup folder from the Vulkan migration
+client/src-tauri/binaries/backup-blas/
 
 # Existing video pipeline data (not part of the client) — anchored to repo root
 # so client/public/data/ assets are NOT ignored.

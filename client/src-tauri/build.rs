@@ -17,16 +17,17 @@ fn main() {
             "whisper.dll",
         ]);
     } else if cfg!(target_os = "macos") {
+        // whisper-cli @rpath references the major-version names — these are
+        // what dyld looks up. Metal shader bytecode is embedded directly into
+        // libggml-metal.0.dylib (whisper.cpp builds with
+        // GGML_METAL_EMBED_LIBRARY=ON since v1.7+), no separate .metallib.
         copy_companion_files(&[
             "libwhisper.1.dylib",
-            "libggml.dylib",
-            "libggml-base.dylib",
-            "libggml-cpu.dylib",
-            "libggml-metal.dylib",
-            // Metal shader bytecode — ggml-metal looks for this next to the
-            // executable / in the bundle Resources. In dev mode (running from
-            // target/debug/) "next to executable" is what works.
-            "ggml-metal.metallib",
+            "libggml.0.dylib",
+            "libggml-base.0.dylib",
+            "libggml-blas.0.dylib",
+            "libggml-cpu.0.dylib",
+            "libggml-metal.0.dylib",
         ]);
     }
 }

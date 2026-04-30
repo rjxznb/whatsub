@@ -76,19 +76,48 @@ jobs:
       - name: Copy whisper artifacts (with target-triple suffix)
         run: |
           # Tauri sidecar naming convention: <basename>-<target-triple>
-          cp whisper-src/build/bin/whisper-cli out/whisper-cli-aarch64-apple-darwin
+          # On Mac (Makefile/Ninja generator) cmake doesn't use a Release/
+          # subdir, and the binary may sit in build/bin/ or be symlinked
+          # elsewhere — find it instead of hardcoding.
+          WHISPER_CLI=$(find whisper-src/build -name whisper-cli -type f ! -name "*.dSYM*" | head -1)
+          if [ -z "$WHISPER_CLI" ]; then
+            echo "::error::whisper-cli binary not found"
+            find whisper-src/build -type f -name "whisper*"
+            exit 1
+          fi
+          cp "$WHISPER_CLI" out/whisper-cli-aarch64-apple-darwin
 
-          # Dylibs (no triple — frameworks/ folder)
-          cp whisper-src/build/bin/libwhisper.*.dylib out/    || true
-          cp whisper-src/build/bin/libggml.dylib       out/    || true
-          cp whisper-src/build/bin/libggml-base.dylib  out/    || true
-          cp whisper-src/build/bin/libggml-cpu.dylib   out/    || true
-          cp whisper-src/build/bin/libggml-metal.dylib out/    || true
+          # Dylibs: resolve symlinks (cp -L) and ship the REAL file at the
+          # name whisper-cli has linked against. We need the files matching
+          # the @rpath names whisper-cli/whisper.dll embedded — typically
+          # versioned like libwhisper.1.dylib, libggml.0.dylib, etc.
+          # Grab every produced dylib in the build tree.
+          find whisper-src/build -name "*.dylib" -type f -print | while read f; do
+            name=$(basename "$f")
+            # Avoid clobbering with multiple symlinks/aliases pointing to the
+            # same content — only copy if not already there.
+            if [ ! -f "out/$name" ]; then
+              cp "$f" "out/$name"
+            fi
+          done
+          # Also follow symlinks in case some are needed (e.g. libwhisper.1.dylib → libwhisper.1.8.4.dylib)
+          find whisper-src/build \( -name "*.dylib" \) -print | while read f; do
+            name=$(basename "$f")
+            if [ ! -f "out/$name" ]; then
+              cp -L "$f" "out/$name" 2>/dev/null || true
+            fi
+          done
 
           # CRITICAL: Metal shader bytecode. Without this, GPU fails silently → CPU fallback.
           # whisper.cpp may name it ggml-metal.metallib OR default.metallib depending on version.
-          find whisper-src/build -name "*.metallib" -exec cp {} out/ggml-metal.metallib \; || true
+          METALLIB=$(find whisper-src/build -name "*.metallib" -type f | head -1)
+          if [ -n "$METALLIB" ]; then
+            cp "$METALLIB" out/ggml-metal.metallib
+          else
+            echo "::warning::No .metallib found — Metal GPU acceleration will fail to init at runtime"
+          fi
 
+          echo "=== final out/ ==="
           ls -la out/
 
       # ─── Rewrite dylib install names to @loader_path/... ──────────────

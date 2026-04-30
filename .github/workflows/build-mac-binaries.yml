@@ -120,18 +120,24 @@ jobs:
           echo "=== final out/ ==="
           ls -la out/
 
-      # ─── Rewrite dylib install names to @loader_path/... ──────────────
+      # ─── Rewrite dylib install names ──────────────────────────────────
       # Without this, dylibs reference each other by absolute build-time
       # paths and won't load from inside the user's .app bundle.
+      #
+      # Layout:
+      #   dev:  target/debug/whisper-cli   → dylibs in target/debug/ (co-located)
+      #   prod: Contents/MacOS/whisper-cli → dylibs in Contents/Frameworks/
+      #         (Tauri's bundle.macOS.frameworks puts dylibs there)
+      #
+      # The 6 dylibs are always co-located with each other → inter-dylib
+      # refs use @loader_path/. whisper-cli is NOT co-located in prod, so
+      # its refs go through @rpath with two LC_RPATH covering both layouts.
       - name: Fix dylib install_names
         working-directory: out
         run: |
           for dylib in *.dylib; do
             if [ -f "$dylib" ]; then
-              # Set the dylib's own install name
               install_name_tool -id "@loader_path/$dylib" "$dylib" || true
-
-              # Rewrite any cross-references between our dylibs to @loader_path
               for ref in $(otool -L "$dylib" | awk 'NR>1 {print $1}'); do
                 base=$(basename "$ref")
                 if [ -f "$base" ] && [ "$ref" != "@loader_path/$base" ]; then
@@ -141,13 +147,15 @@ jobs:
             fi
           done
 
-          # Same for the whisper-cli executable
+          # whisper-cli: rewrite refs to @rpath/<name> + two LC_RPATH entries
           for ref in $(otool -L whisper-cli-aarch64-apple-darwin | awk 'NR>1 {print $1}'); do
             base=$(basename "$ref")
             if [ -f "$base" ]; then
-              install_name_tool -change "$ref" "@loader_path/$base" whisper-cli-aarch64-apple-darwin || true
+              install_name_tool -change "$ref" "@rpath/$base" whisper-cli-aarch64-apple-darwin || true
             fi
           done
+          install_name_tool -add_rpath "@executable_path/" whisper-cli-aarch64-apple-darwin || true
+          install_name_tool -add_rpath "@executable_path/../Frameworks/" whisper-cli-aarch64-apple-darwin || true
 
       # ─── ffmpeg ────────────────────────────────────────────────────────
       - name: Download static ffmpeg (arm64)

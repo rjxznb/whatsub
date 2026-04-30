@@ -122,11 +122,15 @@ jobs:
         working-directory: client
         run: pnpm install --frozen-lockfile
 
-      - name: Tauri build (.dmg + .app, no updater bundle)
+      - name: Tauri build (.dmg + .app + updater .app.tar.gz)
         working-directory: client
-        # No TAURI_SIGNING_PRIVATE_KEY → skip updater artifacts; createUpdater-
-        # Artifacts is also false in tauri.macos.conf.json so this is double-safe.
-        run: pnpm tauri build --bundles dmg,app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # createUpdaterArtifacts: true in tauri.conf.json — Tauri auto-adds the
+        # app.tar.gz updater bundle to the output set. No --bundles flag → all
+        # configured targets are produced.
+        run: pnpm tauri build
 
       - name: Show bundle output
         run: |
@@ -152,5 +156,7 @@ jobs:
           path: |
             client/src-tauri/target/release/bundle/dmg/*.dmg
             client/src-tauri/target/release/bundle/macos/*.app
+            client/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            client/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
           retention-days: 30
           if-no-files-found: error

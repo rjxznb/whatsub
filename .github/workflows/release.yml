@@ -334,11 +334,17 @@ jobs:
           TAG="v$VERSION"
           REPO=rjxznb/Get_Video-releases
 
-          MSI=$(ls dist/windows/*.msi | head -1)
-          MSI_SIG=$(ls dist/windows/*.msi.sig | head -1)
-          DMG=$(ls dist/macos/*.dmg | head -1)
-          APP_TARGZ=$(ls dist/macos/*.app.tar.gz | head -1)
-          APP_SIG=$(ls dist/macos/*.app.tar.gz.sig | head -1)
+          # actions/upload-artifact@v4 preserves directory structure when
+          # multiple paths span different parent dirs. Our macOS upload
+          # patterns (.../bundle/dmg/*.dmg + .../bundle/macos/*.app.tar.gz)
+          # land as `dmg/*.dmg` and `macos/*.app.tar.gz` inside the artifact,
+          # so after download we have nested `dist/macos/dmg/...` and
+          # `dist/macos/macos/...`. Use `find` to locate them regardless.
+          MSI=$(find dist/windows -name "*.msi" -type f | head -1)
+          MSI_SIG=$(find dist/windows -name "*.msi.sig" -type f | head -1)
+          DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
+          APP_TARGZ=$(find dist/macos -name "*.app.tar.gz" -type f | head -1)
+          APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
 
           for f in "$MSI" "$MSI_SIG" "$DMG" "$APP_TARGZ" "$APP_SIG"; do
             [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }

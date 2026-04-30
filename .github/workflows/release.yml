@@ -15,6 +15,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      targets:
+        description: 'Which platforms to build & publish'
+        type: choice
+        options:
+          - both
+          - windows
+          - macos
+        default: both
       release_notes:
         description: 'User-facing release notes (shown in the in-app update toast)'
         required: true
@@ -43,6 +51,7 @@ on:
 jobs:
   # ─────────────────────────────────────────────────────────────────
   build-windows:
+    if: inputs.targets == 'both' || inputs.targets == 'windows'
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -215,6 +224,7 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   build-macos:
+    if: inputs.targets == 'both' || inputs.targets == 'macos'
     runs-on: macos-14   # Apple Silicon
     timeout-minutes: 30
     steps:
@@ -235,7 +245,10 @@ jobs:
             client/src-tauri/binaries/libggml-blas.0.dylib
             client/src-tauri/binaries/libggml-cpu.0.dylib
             client/src-tauri/binaries/libggml-metal.0.dylib
-          key: whisper-macos-${{ inputs.whisper_tag }}
+          # Cache key includes an install_name version tag — bump when changing
+          # the install_name_tool / RPATH layout so old cached binaries with
+          # incompatible loader paths don't get reused.
+          key: whisper-macos-${{ inputs.whisper_tag }}-rpath2
 
       - name: Build whisper.cpp (Metal)
         if: steps.whisper-cache-mac.outputs.cache-hit != 'true'
@@ -278,6 +291,10 @@ jobs:
         if: steps.whisper-cache-mac.outputs.cache-hit != 'true'
         run: |
           cd client/src-tauri/binaries
+
+          # Each dylib's own id + inter-dylib refs → @loader_path/<name>.
+          # The 6 dylibs are always co-located (target/debug/ in dev,
+          # Contents/Frameworks/ in the bundled .app), so @loader_path works.
           for f in *.dylib; do
             install_name_tool -id "@loader_path/$f" "$f" || true
             for ref in $(otool -L "$f" | awk 'NR>1 {print $1}'); do
@@ -287,12 +304,24 @@ jobs:
               fi
             done
           done
+
+          # whisper-cli is NOT co-located with the dylibs in production:
+          #   dev:  target/debug/whisper-cli   → dylibs in target/debug/
+          #   prod: Contents/MacOS/whisper-cli → dylibs in Contents/Frameworks/
+          # (the Frameworks/ path is where Tauri's bundle.macOS.frameworks
+          #  copies them — see tauri.macos.conf.json.)
+          # Rewrite refs to @rpath/<name> and add two LC_RPATH entries
+          # covering both layouts; dyld tries each rpath in order.
           for ref in $(otool -L whisper-cli-aarch64-apple-darwin | awk 'NR>1 {print $1}'); do
             base=$(basename "$ref")
             if [ -f "$base" ]; then
-              install_name_tool -change "$ref" "@loader_path/$base" whisper-cli-aarch64-apple-darwin || true
+              install_name_tool -change "$ref" "@rpath/$base" whisper-cli-aarch64-apple-darwin || true
             fi
           done
+          install_name_tool -add_rpath "@executable_path/" whisper-cli-aarch64-apple-darwin || true
+          install_name_tool -add_rpath "@executable_path/../Frameworks/" whisper-cli-aarch64-apple-darwin || true
+
+          # install_name_tool invalidates code signatures — re-sign everything.
           for f in *; do
             [ -f "$f" ] && codesign --force --sign - "$f" || true
           done
@@ -365,9 +394,16 @@ jobs:
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────
+  # Publish runs as long as at least one platform built. Platforms whose
+  # build was skipped have their entry carried over from the latest existing
+  # release on the releases repo, so latest.json stays complete for users on
+  # the un-rebuilt platform.
   publish:
     needs: [build-windows, build-macos]
-    if: ${{ !inputs.dry_run }}
+    if: |
+      !inputs.dry_run &&
+      !cancelled() &&
+      (needs.build-windows.result == 'success' || needs.build-macos.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -375,12 +411,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download Windows artifact
+        if: needs.build-windows.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: windows-bundle
           path: dist/windows
 
       - name: Download macOS artifact
+        if: needs.build-macos.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: macos-bundle
@@ -388,81 +426,128 @@ jobs:
 
       - name: List downloaded files
         run: |
-          ls -la dist/windows
-          ls -la dist/macos
+          echo "--- dist/windows ---"; ls -la dist/windows 2>/dev/null || echo "(no Windows artifacts — skipped)"
+          echo "--- dist/macos ---"; ls -la dist/macos 2>/dev/null || echo "(no macOS artifacts — skipped)"
 
       - name: Publish to releases repo
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           NOTES: ${{ inputs.release_notes }}
+          BUILT_WIN: ${{ needs.build-windows.result == 'success' }}
+          BUILT_MAC: ${{ needs.build-macos.result == 'success' }}
         run: |
           set -e
           VERSION=$(jq -r .version client/src-tauri/tauri.conf.json)
           TAG="v$VERSION"
           REPO=rjxznb/Get_Video-releases
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # GitHub asset URLs replace spaces with dots.
+          urlify() { basename "$1" | sed 's/ /./g'; }
 
-          # actions/upload-artifact@v4 preserves directory structure when
-          # multiple paths span different parent dirs. Our macOS upload
-          # patterns (.../bundle/dmg/*.dmg + .../bundle/macos/*.app.tar.gz)
-          # land as `dmg/*.dmg` and `macos/*.app.tar.gz` inside the artifact,
-          # so after download we have nested `dist/macos/dmg/...` and
-          # `dist/macos/macos/...`. Use `find` to locate them regardless.
-          MSI=$(find dist/windows -name "*.msi" -type f | head -1)
-          MSI_SIG=$(find dist/windows -name "*.msi.sig" -type f | head -1)
-          DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
-          APP_TARGZ=$(find dist/macos -name "*.app.tar.gz" -type f | head -1)
-          APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
+          # ── Locate fresh artifacts (only those whose build ran) ─────
+          MSI=""; MSI_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
+          if [ "$BUILT_WIN" = "true" ]; then
+            MSI=$(find dist/windows -name "*.msi" -type f | head -1)
+            MSI_SIG=$(find dist/windows -name "*.msi.sig" -type f | head -1)
+            [ -f "$MSI" ] && [ -f "$MSI_SIG" ] || { echo "::error::Windows artifact incomplete"; exit 1; }
+          fi
+          if [ "$BUILT_MAC" = "true" ]; then
+            DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
+            APP_TARGZ=$(find dist/macos -name "*.app.tar.gz" -type f | head -1)
+            APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
+            [ -f "$DMG" ] && [ -f "$APP_TARGZ" ] && [ -f "$APP_SIG" ] || { echo "::error::macOS artifact incomplete"; exit 1; }
+          fi
+          echo "BUILT_WIN=$BUILT_WIN MSI=$MSI"
+          echo "BUILT_MAC=$BUILT_MAC DMG=$DMG APP_TARGZ=$APP_TARGZ"
 
-          for f in "$MSI" "$MSI_SIG" "$DMG" "$APP_TARGZ" "$APP_SIG"; do
-            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
-          done
-          echo "MSI=$MSI"
-          echo "DMG=$DMG"
-          echo "APP_TARGZ=$APP_TARGZ"
+          # ── For platforms NOT built this run, fetch the carry-over entry
+          #    from the most recent existing release's latest.json ──────
+          PREV_LATEST=""
+          PREV_TAG=$(gh release list --repo "$REPO" --limit 5 \
+                       --json tagName,isDraft,isPrerelease \
+                       --jq 'map(select(.isDraft==false and .isPrerelease==false)) | .[0].tagName // ""')
+          if [ -n "$PREV_TAG" ]; then
+            PREV_LATEST=$(gh release download "$PREV_TAG" --repo "$REPO" \
+                          --pattern "latest.json" -O - 2>/dev/null || echo "")
+            echo "Carry-over base: $PREV_TAG"
+          else
+            echo "No previous release found — fresh manifest."
+          fi
 
-          # Create release if missing
+          # ── Create or reuse this release tag ───────────────────────
           if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
               --title "Eversay Studio $TAG" \
               --notes "$NOTES"
           fi
 
-          # Upload binaries + signatures
-          gh release upload "$TAG" "$MSI" "$MSI_SIG" "$DMG" "$APP_TARGZ" "$APP_SIG" \
-            --repo "$REPO" --clobber
+          # ── Upload only the freshly-built assets (--clobber to overwrite
+          #    same-name assets if re-running this platform) ───────────
+          UPLOAD_LIST=()
+          [ -n "$MSI" ]       && UPLOAD_LIST+=("$MSI" "$MSI_SIG")
+          [ -n "$APP_TARGZ" ] && UPLOAD_LIST+=("$DMG" "$APP_TARGZ" "$APP_SIG")
+          if [ ${#UPLOAD_LIST[@]} -gt 0 ]; then
+            gh release upload "$TAG" "${UPLOAD_LIST[@]}" --repo "$REPO" --clobber
+          fi
 
-          # GitHub asset URLs replace spaces with dots — compute accordingly.
-          urlify() { basename "$1" | sed 's/ /./g'; }
-          MSI_URL="https://github.com/$REPO/releases/download/$TAG/$(urlify "$MSI")"
-          APP_URL="https://github.com/$REPO/releases/download/$TAG/$(urlify "$APP_TARGZ")"
+          # ── Build platform entries for latest.json ──────────────────
+          # If we built it: use this run's signature + URL anchored to $TAG.
+          # If we didn't build it but the existing release ALSO has it, use
+          # that entry (carry over from $TAG). Otherwise, fall back to PREV.
+          win_entry=""
+          if [ -n "$MSI" ]; then
+            url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$MSI")"
+            sig=$(cat "$MSI_SIG")
+            win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
+          else
+            # Try the current $TAG release first (e.g. previously published Win at this tag);
+            # fall back to the previous release.
+            cur=$(gh release download "$TAG" --repo "$REPO" --pattern "latest.json" -O - 2>/dev/null || echo "")
+            for src in "$cur" "$PREV_LATEST"; do
+              if [ -n "$src" ]; then
+                e=$(echo "$src" | jq -c '.platforms["windows-x86_64"] // empty')
+                if [ -n "$e" ]; then win_entry="$e"; break; fi
+              fi
+            done
+          fi
 
-          # Tauri 2 expects the raw .sig file content (minisign-formatted text).
-          # jq --arg properly escapes embedded newlines as \n in the JSON output.
-          MSI_SIG_CONTENT=$(cat "$MSI_SIG")
-          APP_SIG_CONTENT=$(cat "$APP_SIG")
-          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          mac_entry=""
+          if [ -n "$APP_TARGZ" ]; then
+            url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$APP_TARGZ")"
+            sig=$(cat "$APP_SIG")
+            mac_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
+          else
+            cur=$(gh release download "$TAG" --repo "$REPO" --pattern "latest.json" -O - 2>/dev/null || echo "")
+            for src in "$cur" "$PREV_LATEST"; do
+              if [ -n "$src" ]; then
+                e=$(echo "$src" | jq -c '.platforms["darwin-aarch64"] // empty')
+                if [ -n "$e" ]; then mac_entry="$e"; break; fi
+              fi
+            done
+          fi
 
-          jq -n \
+          # ── Assemble manifest. Both entries optional; at least one will
+          #    exist because we required at least one build to succeed. ──
+          MANIFEST=$(jq -n \
             --arg version "$VERSION" \
             --arg notes "$NOTES" \
             --arg now "$NOW" \
-            --arg win_sig "$MSI_SIG_CONTENT" \
-            --arg win_url "$MSI_URL" \
-            --arg mac_sig "$APP_SIG_CONTENT" \
-            --arg mac_url "$APP_URL" \
-            '{
-              version: $version,
-              notes: $notes,
-              pub_date: $now,
-              platforms: {
-                "windows-x86_64": { signature: $win_sig, url: $win_url },
-                "darwin-aarch64": { signature: $mac_sig, url: $mac_url }
-              }
-            }' > latest.json
+            '{version:$version, notes:$notes, pub_date:$now, platforms:{}}')
+          if [ -n "$win_entry" ]; then
+            MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$win_entry" '.platforms["windows-x86_64"] = $e')
+          fi
+          if [ -n "$mac_entry" ]; then
+            MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$mac_entry" '.platforms["darwin-aarch64"] = $e')
+          fi
+          echo "$MANIFEST" > latest.json
 
           echo "=== latest.json ==="
           cat latest.json
 
           gh release upload "$TAG" latest.json --repo "$REPO" --clobber
 
-          echo "::notice::Published $TAG (windows-x86_64 + darwin-aarch64)"
+          # Notice line — shows which platforms went out in this run
+          PLATS=""
+          [ -n "$win_entry" ] && PLATS="$PLATS windows-x86_64"
+          [ -n "$mac_entry" ] && PLATS="$PLATS darwin-aarch64"
+          echo "::notice::Published $TAG (manifest covers:$PLATS)"

@@ -1,8 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createClaudeProvider } from "./claude";
 import { DEFAULT_SETTINGS } from "../../types/settings";
 
-beforeEach(() => vi.restoreAllMocks());
+// claude.ts imports fetch from @tauri-apps/plugin-http (Rust-side fetch to
+// bypass CORS); mock it so the test can drive the SSE response without a
+// Tauri runtime. vi.hoisted lets the mock fn survive vi.mock's top-of-file
+// hoist.
+const { mockFetch } = vi.hoisted(() => ({ mockFetch: vi.fn() }));
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mockFetch }));
+
+import { createClaudeProvider } from "./claude";
+
+beforeEach(() => mockFetch.mockReset());
 
 function makeStream(chunks: string[]) {
   const encoder = new TextEncoder();
@@ -24,7 +32,7 @@ describe("claude provider", () => {
       `event: message_stop\n` +
       `data: {"type":"message_stop"}\n\n`;
 
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    mockFetch.mockResolvedValue(
       new Response(makeStream([sse]), { status: 200 })
     );
     const p = createClaudeProvider({

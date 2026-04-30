@@ -1,5 +1,10 @@
 import type { Provider, ProviderRequest } from "./types";
 import type { Settings } from "../../types/settings";
+// Anthropic's API does not send Access-Control-Allow-Origin, so a webview
+// fetch() is blocked by CORS. plugin-http issues the request from the Rust
+// side (no CORS), and is otherwise a drop-in replacement for window.fetch.
+// URL allowlist is in src-tauri/capabilities/default.json.
+import { fetch } from "@tauri-apps/plugin-http";
 
 export function createClaudeProvider(settings: Settings): Provider {
   const cfg = settings.claude;

@@ -1,3 +1,16 @@
+# Eversay 工作区
+
+这个仓库包含两个独立的部分：
+
+| 目录 | 用途 | 入口文档 |
+|------|------|---------|
+| `scripts/` (本文件其余内容) | **Python 视频素材采集 pipeline**：从 YouTube 自动搜索、过滤、转写、AI 评分、下载 | 见下文 |
+| [`client/`](./client/) | **Tauri 桌面客户端**（Eversay Studio）：本地 whisper.cpp + LLM 翻译 + 双语播放器 | [`client/README.md`](./client/README.md) · [`client/CLAUDE.md`](./client/CLAUDE.md) |
+
+最新客户端下载：[v0.1.2 release](https://github.com/rjxznb/Get_Video-releases/releases/latest)（Windows .msi + macOS arm64 .dmg）。
+
+---
+
 # Eversay 视频素材自动化采集
 
 为 EngHub 平台的 18 个英语场景自动搜索、筛选、转写、分析、下载 YouTube 视频素材。

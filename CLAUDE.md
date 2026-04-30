@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository.
+
+> **Two distinct sub-projects.** This document covers the **Python data-collection pipeline** under `scripts/`. The Tauri desktop client (Eversay Studio) lives in [`client/`](./client/) — see [`client/CLAUDE.md`](./client/CLAUDE.md) for its architecture, build, and release flow. The two share no code or runtime; the only overlap is that the pipeline produces training/demo `.mp4`s that occasionally get imported into the client for QA.
 
 ## Project Overview
 

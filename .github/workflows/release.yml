@@ -52,7 +52,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ── Caches ──────────────────────────────────────────────────────
+      # Whisper outputs are reproducible from (whisper_tag, vulkan_sdk_version);
+      # cache the staged sidecar + DLLs so subsequent runs skip ~5-8 min of
+      # cmake build + linker work entirely.
+      - name: Cache Whisper Windows binaries
+        id: whisper-cache-win
+        uses: actions/cache@v4
+        with:
+          path: |
+            client/src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe
+            client/src-tauri/binaries/whisper.dll
+            client/src-tauri/binaries/ggml.dll
+            client/src-tauri/binaries/ggml-base.dll
+            client/src-tauri/binaries/ggml-cpu.dll
+            client/src-tauri/binaries/ggml-vulkan.dll
+          key: whisper-windows-${{ inputs.whisper_tag }}-vk${{ inputs.vulkan_sdk_version }}
+
+      # Vulkan SDK is only consumed by the whisper.cpp compile, so when the
+      # whisper cache hits we don't need it at all. Otherwise the cache below
+      # restores a ~500 MB install and skips the LunarG download.
+      - name: Cache Vulkan SDK
+        id: vulkan-cache
+        if: steps.whisper-cache-win.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: C:\VulkanSDK\${{ inputs.vulkan_sdk_version }}
+          key: vulkan-sdk-${{ inputs.vulkan_sdk_version }}
+
       - name: Install Vulkan SDK
+        if: steps.whisper-cache-win.outputs.cache-hit != 'true' && steps.vulkan-cache.outputs.cache-hit != 'true'
         run: |
           $version = "${{ inputs.vulkan_sdk_version }}"
           $url = "https://sdk.lunarg.com/sdk/download/$version/windows/VulkanSDK-$version-Installer.exe"
@@ -71,10 +100,16 @@ jobs:
             Write-Error "Vulkan SDK install incomplete: $sdk"
             exit 1
           }
+
+      - name: Set Vulkan env (always when whisper miss)
+        if: steps.whisper-cache-win.outputs.cache-hit != 'true'
+        run: |
+          $sdk = "C:\VulkanSDK\${{ inputs.vulkan_sdk_version }}"
           "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Build whisper.cpp (Vulkan)
+        if: steps.whisper-cache-win.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch "${{ inputs.whisper_tag }}" `
             https://github.com/ggerganov/whisper.cpp.git whisper-src
@@ -87,6 +122,7 @@ jobs:
           cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
 
       - name: Stage Windows binaries/
+        if: steps.whisper-cache-win.outputs.cache-hit != 'true'
         run: |
           $bin = "client/src-tauri/binaries"
           New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -148,6 +184,12 @@ jobs:
         working-directory: client
         run: pnpm install --frozen-lockfile
 
+      - name: Cache Cargo (Windows)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri
+          shared-key: tauri-build-windows
+
       - name: Tauri build (.msi + .sig)
         working-directory: client
         env:
@@ -179,7 +221,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Reproducible from whisper_tag alone (no Vulkan SDK on Mac). On a hit
+      # we skip the full clone+cmake+install_name_tool+codesign chain (~3 min).
+      - name: Cache Whisper macOS binaries
+        id: whisper-cache-mac
+        uses: actions/cache@v4
+        with:
+          path: |
+            client/src-tauri/binaries/whisper-cli-aarch64-apple-darwin
+            client/src-tauri/binaries/libwhisper.1.dylib
+            client/src-tauri/binaries/libggml.0.dylib
+            client/src-tauri/binaries/libggml-base.0.dylib
+            client/src-tauri/binaries/libggml-blas.0.dylib
+            client/src-tauri/binaries/libggml-cpu.0.dylib
+            client/src-tauri/binaries/libggml-metal.0.dylib
+          key: whisper-macos-${{ inputs.whisper_tag }}
+
       - name: Build whisper.cpp (Metal)
+        if: steps.whisper-cache-mac.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch ${{ inputs.whisper_tag }} \
             https://github.com/ggerganov/whisper.cpp.git whisper-src
@@ -191,6 +250,7 @@ jobs:
           cmake --build build --config Release -j$(sysctl -n hw.ncpu)
 
       - name: Stage whisper artifacts into binaries/
+        if: steps.whisper-cache-mac.outputs.cache-hit != 'true'
         run: |
           set -e
           BIN=client/src-tauri/binaries
@@ -215,6 +275,7 @@ jobs:
           ls -la $BIN/
 
       - name: Fix dylib install_names + ad-hoc codesign
+        if: steps.whisper-cache-mac.outputs.cache-hit != 'true'
         run: |
           cd client/src-tauri/binaries
           for f in *.dylib; do
@@ -265,6 +326,12 @@ jobs:
       - name: Install JS dependencies
         working-directory: client
         run: pnpm install --frozen-lockfile
+
+      - name: Cache Cargo (macOS)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri
+          shared-key: tauri-build-macos
 
       - name: Tauri build (.dmg + .app + updater .app.tar.gz)
         working-directory: client

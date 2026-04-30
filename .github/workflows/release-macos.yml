@@ -149,7 +149,7 @@ jobs:
             codesign -dv "$APP" 2>&1 | head -5
           fi
 
-      - name: Upload artifacts
+      - name: Upload artifacts (workflow run, for inspection)
         uses: actions/upload-artifact@v4
         with:
           name: macos-installer
@@ -160,3 +160,56 @@ jobs:
             client/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
           retention-days: 30
           if-no-files-found: error
+
+      # ─── Publish to public release repo ────────────────────────────────
+      # Uses a fine-grained PAT (RELEASES_REPO_TOKEN) scoped only to
+      # rjxznb/Get_Video-releases. Uploads the Mac bundles and merges the
+      # darwin-aarch64 entry into latest.json — only if the release already
+      # has a latest.json for this version (i.e. Windows side has been done).
+      # Mac is the "follower": it adds itself to the existing manifest.
+      - name: Publish to releases repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+        run: |
+          set -e
+          VERSION=$(jq -r .version client/src-tauri/tauri.conf.json)
+          TAG="v$VERSION"
+          REPO=rjxznb/Get_Video-releases
+          BUNDLE=client/src-tauri/target/release/bundle
+          DMG="$BUNDLE/dmg/Eversay Studio_${VERSION}_aarch64.dmg"
+          TARGZ="$BUNDLE/macos/Eversay Studio.app.tar.gz"
+          SIGFILE="$BUNDLE/macos/Eversay Studio.app.tar.gz.sig"
+
+          # Sanity
+          for f in "$DMG" "$TARGZ" "$SIGFILE"; do
+            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
+          done
+
+          # Ensure release exists; create draft if not.
+          if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "::notice::release $TAG not found — creating"
+            gh release create "$TAG" --repo "$REPO" \
+              --title "Eversay Studio $TAG" \
+              --notes "Automated release from macOS CI"
+          fi
+
+          gh release upload "$TAG" "$DMG" "$TARGZ" "$SIGFILE" \
+            --repo "$REPO" --clobber
+
+          # Update latest.json — preserve other platforms (e.g. windows-x86_64).
+          # If no latest.json yet on this release, skip (Windows side will create
+          # it first; Mac follower can re-run after).
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          URL="https://github.com/$REPO/releases/download/$TAG/Eversay.Studio.app.tar.gz"
+          # Tauri's signature value is base64 of the entire .sig file content.
+          SIG=$(base64 < "$SIGFILE" | tr -d '\n')
+
+          if gh release download "$TAG" --repo "$REPO" --pattern latest.json -O existing.json 2>/dev/null; then
+            jq --arg sig "$SIG" --arg now "$NOW" --arg url "$URL" \
+              '.pub_date = $now | .platforms["darwin-aarch64"] = {signature: $sig, url: $url}' \
+              existing.json > latest.json
+            gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+            echo "::notice::Updated latest.json with darwin-aarch64 entry"
+          else
+            echo "::warning::No latest.json in $TAG yet — skipping. Run Windows release first, then re-trigger this workflow."
+          fi

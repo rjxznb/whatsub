@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "binaries/ggml.dll",
+      "binaries/ggml-base.dll",
+      "binaries/ggml-cpu.dll",
+      "binaries/ggml-vulkan.dll",
+      "binaries/whisper.dll"
+    ]
+  }
+}

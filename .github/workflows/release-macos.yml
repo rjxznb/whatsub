@@ -44,17 +44,30 @@ jobs:
 
       - name: Stage whisper artifacts into binaries/
         run: |
+          set -e
           BIN=client/src-tauri/binaries
           mkdir -p $BIN
-          WHISPER_CLI=$(find whisper-src/build -name whisper-cli -type f ! -name "*.dSYM*" | head -1)
-          cp "$WHISPER_CLI" "$BIN/whisper-cli-aarch64-apple-darwin"
+          WHISPER_CLI=$(find whisper-src/build -name whisper-cli ! -name "*.dSYM*" | head -1)
+          cp -L "$WHISPER_CLI" "$BIN/whisper-cli-aarch64-apple-darwin"
 
-          # Copy major-version dylibs (the names whisper-cli @rpath references)
+          # whisper.cpp produces libwhisper.X.dylib as a symlink to the real
+          # libwhisper.X.Y.Z.dylib. We must dereference (-L) when copying so
+          # the destination is a real file (Tauri rejects dangling symlinks).
+          # Drop -type f from find so the symlink itself is matched.
           for name in libwhisper.1 libggml.0 libggml-base.0 libggml-blas.0 libggml-cpu.0 libggml-metal.0; do
-            f=$(find whisper-src/build -name "${name}.dylib" -type f | head -1)
-            [ -n "$f" ] && cp "$f" "$BIN/${name}.dylib"
+            f=$(find whisper-src/build -name "${name}.dylib" | head -1)
+            if [ -z "$f" ]; then
+              echo "::error::Missing dylib match for ${name}.dylib"
+              find whisper-src/build -name "lib*.dylib"
+              exit 1
+            fi
+            cp -L "$f" "$BIN/${name}.dylib"
           done
+
+          echo "=== staged $BIN/ ==="
           ls -la $BIN/
+          echo "=== sanity: whisper-cli rpath deps ==="
+          otool -L "$BIN/whisper-cli-aarch64-apple-darwin"
 
       - name: Fix dylib install_names + ad-hoc codesign
         run: |

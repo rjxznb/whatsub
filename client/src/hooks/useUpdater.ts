@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 
 export type UpdateStatus =
   | { type: "idle" }
@@ -65,8 +64,15 @@ export function useUpdater() {
           setStatus({ type: "installing" });
         }
       });
-      // Restart the app to apply the new binary.
-      await relaunch();
+      // After this returns the platform-specific installer is running:
+      //   - Windows: msiexec /i <msi> with `installMode: basicUi` (UAC pops,
+      //     small progress dialog shown). msiexec waits for our app to exit,
+      //     replaces files, then auto-relaunches the app. We must NOT call
+      //     relaunch() here — that would spawn a new instance pointing at
+      //     the OLD exe, file-locking msiexec out and breaking the install.
+      //   - macOS: replaces the .app bundle in place; subsequent restart
+      //     loads the new bundle. Tauri also handles the exit on Mac.
+      // So just wait for Tauri's installer to take over.
     } catch (e) {
       setStatus({ type: "error", message: String(e) });
     }

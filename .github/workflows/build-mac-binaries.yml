@@ -1,0 +1,185 @@
+# Build the platform-specific Mac (Apple Silicon) sidecar binaries that the
+# Tauri client bundles. This workflow is MANUALLY TRIGGERED — re-run it only
+# when whisper.cpp is upgraded or when ffmpeg / yt-dlp need bumping.
+#
+# Output: an artifact zip you download, unzip, and commit to
+#   client/src-tauri/binaries/
+#
+# Toolchain choice:
+#   - whisper.cpp built from source with -DGGML_METAL=ON (Metal GPU + CPU fallback).
+#   - ffmpeg pulled as a STATIC arm64 binary from www.osxexperts.net so we
+#     don't have to bundle dylib dependencies (FFmpeg has dozens — static
+#     side-steps the whole problem).
+#   - yt-dlp from its official GitHub release as `yt-dlp_macos` — already a
+#     single-file PyInstaller bundle, no deps.
+#
+# Dylib path fix-up:
+#   whisper.cpp dylibs reference each other by absolute homebrew paths or
+#   @rpath. We rewrite those to @loader_path/<name>.dylib so loading works
+#   regardless of where the .app sits, then ad-hoc codesign so macOS doesn't
+#   refuse to load unsigned dylibs from inside an app bundle.
+
+name: Build Mac binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_tag:
+        description: 'whisper.cpp tag to build (e.g. v1.8.4)'
+        required: true
+        default: 'v1.8.4'
+      ffmpeg_url:
+        description: 'Static ffmpeg arm64 zip URL (osxexperts/evermeet)'
+        required: true
+        default: 'https://www.osxexperts.net/ffmpeg711arm.zip'
+      ytdlp_version:
+        description: 'yt-dlp release tag (or "latest")'
+        required: true
+        default: 'latest'
+
+jobs:
+  build:
+    runs-on: macos-14    # Apple Silicon runner
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ─── whisper.cpp ──────────────────────────────────────────────────
+      - name: Clone whisper.cpp
+        run: |
+          git clone --depth 1 --branch ${{ github.event.inputs.whisper_tag }} \
+            https://github.com/ggerganov/whisper.cpp.git whisper-src
+
+      - name: Configure whisper.cpp (Metal)
+        working-directory: whisper-src
+        run: |
+          cmake -S . -B build \
+            -DGGML_METAL=ON \
+            -DBUILD_SHARED_LIBS=ON \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build whisper.cpp
+        working-directory: whisper-src
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: List build output
+        working-directory: whisper-src/build/bin
+        run: ls -la
+
+      # ─── Stage everything into out/ ───────────────────────────────────
+      - name: Create staging dir
+        run: mkdir -p out
+
+      - name: Copy whisper artifacts (with target-triple suffix)
+        run: |
+          # Tauri sidecar naming convention: <basename>-<target-triple>
+          cp whisper-src/build/bin/whisper-cli out/whisper-cli-aarch64-apple-darwin
+
+          # Dylibs (no triple — frameworks/ folder)
+          cp whisper-src/build/bin/libwhisper.*.dylib out/    || true
+          cp whisper-src/build/bin/libggml.dylib       out/    || true
+          cp whisper-src/build/bin/libggml-base.dylib  out/    || true
+          cp whisper-src/build/bin/libggml-cpu.dylib   out/    || true
+          cp whisper-src/build/bin/libggml-metal.dylib out/    || true
+
+          # CRITICAL: Metal shader bytecode. Without this, GPU fails silently → CPU fallback.
+          # whisper.cpp may name it ggml-metal.metallib OR default.metallib depending on version.
+          find whisper-src/build -name "*.metallib" -exec cp {} out/ggml-metal.metallib \; || true
+
+          ls -la out/
+
+      # ─── Rewrite dylib install names to @loader_path/... ──────────────
+      # Without this, dylibs reference each other by absolute build-time
+      # paths and won't load from inside the user's .app bundle.
+      - name: Fix dylib install_names
+        working-directory: out
+        run: |
+          for dylib in *.dylib; do
+            if [ -f "$dylib" ]; then
+              # Set the dylib's own install name
+              install_name_tool -id "@loader_path/$dylib" "$dylib" || true
+
+              # Rewrite any cross-references between our dylibs to @loader_path
+              for ref in $(otool -L "$dylib" | awk 'NR>1 {print $1}'); do
+                base=$(basename "$ref")
+                if [ -f "$base" ] && [ "$ref" != "@loader_path/$base" ]; then
+                  install_name_tool -change "$ref" "@loader_path/$base" "$dylib" || true
+                fi
+              done
+            fi
+          done
+
+          # Same for the whisper-cli executable
+          for ref in $(otool -L whisper-cli-aarch64-apple-darwin | awk 'NR>1 {print $1}'); do
+            base=$(basename "$ref")
+            if [ -f "$base" ]; then
+              install_name_tool -change "$ref" "@loader_path/$base" whisper-cli-aarch64-apple-darwin || true
+            fi
+          done
+
+      # ─── ffmpeg ────────────────────────────────────────────────────────
+      - name: Download static ffmpeg (arm64)
+        run: |
+          curl -L -o ffmpeg.zip "${{ github.event.inputs.ffmpeg_url }}"
+          unzip -o ffmpeg.zip -d ffmpeg-extract
+          # The zip layouts vary across providers — find the actual binary
+          FFMPEG_BIN=$(find ffmpeg-extract -name ffmpeg -type f | head -1)
+          if [ -z "$FFMPEG_BIN" ]; then
+            echo "ffmpeg binary not found in zip — listing contents:"
+            ls -laR ffmpeg-extract
+            exit 1
+          fi
+          cp "$FFMPEG_BIN" out/ffmpeg-aarch64-apple-darwin
+          chmod +x out/ffmpeg-aarch64-apple-darwin
+          file out/ffmpeg-aarch64-apple-darwin
+
+      # ─── yt-dlp ────────────────────────────────────────────────────────
+      - name: Download yt-dlp_macos
+        run: |
+          if [ "${{ github.event.inputs.ytdlp_version }}" = "latest" ]; then
+            URL="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          else
+            URL="https://github.com/yt-dlp/yt-dlp/releases/download/${{ github.event.inputs.ytdlp_version }}/yt-dlp_macos"
+          fi
+          curl -L -o out/yt-dlp-aarch64-apple-darwin "$URL"
+          chmod +x out/yt-dlp-aarch64-apple-darwin
+          file out/yt-dlp-aarch64-apple-darwin
+
+      # ─── Ad-hoc codesign ──────────────────────────────────────────────
+      # Without ANY signature, macOS refuses to load dylibs from a bundle.
+      # Ad-hoc (codesign --sign -) doesn't carry developer identity but
+      # makes the loader happy. It does NOT bypass Gatekeeper for first
+      # launch — that's the user's responsibility.
+      - name: Ad-hoc codesign
+        working-directory: out
+        run: |
+          for f in *; do
+            if [ -f "$f" ]; then
+              codesign --force --sign - --timestamp=none --options=runtime "$f" || codesign --force --sign - "$f" || true
+            fi
+          done
+
+      # ─── Sanity: print otool of whisper-cli ───────────────────────────
+      - name: Verify whisper-cli linkage
+        working-directory: out
+        run: |
+          echo "=== file ==="
+          file whisper-cli-aarch64-apple-darwin
+          echo "=== otool -L ==="
+          otool -L whisper-cli-aarch64-apple-darwin
+          echo "=== signatures ==="
+          codesign -dv whisper-cli-aarch64-apple-darwin 2>&1 | head -5
+          echo "=== contents ==="
+          ls -la
+
+      # ─── Upload ────────────────────────────────────────────────────────
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-aarch64-binaries
+          path: out/
+          retention-days: 30
+          if-no-files-found: error

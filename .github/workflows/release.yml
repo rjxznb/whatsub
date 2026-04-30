@@ -24,9 +24,9 @@ on:
         required: true
         default: 'v1.8.4'
       vulkan_sdk_version:
-        description: 'LunarG Vulkan SDK version (Windows whisper-cli build)'
+        description: 'LunarG Vulkan SDK version (Windows whisper-cli build). Note: LunarG removes older versions; check https://vulkan.lunarg.com/sdk/home if download fails.'
         required: true
-        default: '1.4.341.0'
+        default: '1.4.309.0'
       ffmpeg_url_macos:
         description: 'Static ffmpeg arm64 zip URL'
         required: true

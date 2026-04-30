@@ -30,15 +30,15 @@ client/
 | `core/paths.rs` | `%APPDATA%/Get_Video/` resolution. `video_dir(id)` consults library.json's per-entry `videoDir` first (frozen at import). Adds `vocabulary_path()` |
 | `core/ids.rs` | sha256 / YouTube ID / URL hash for `video_id` |
 | `core/srt.rs` | SRT parser |
-| `core/progress.rs` | `PipelineEvent` enum + `emit()`. Variants: Started, Downloading, ExtractingAudio, Transcribing, Transcribed, Failed, ModelDownload, Log, **BackendDetected** |
+| `core/progress.rs` | `PipelineEvent` enum + `emit()`. Variants: Started, Downloading, ExtractingAudio, Transcribing, Transcribed, Failed, ModelDownload, Log, BackendDetected, **Exporting** + **Exported** (burn-in flow) |
 | `commands/settings.rs` | `get/save_settings` (Value-based; schema-agnostic) |
 | `commands/library.rs` | list/get/upsert/delete/set_status/rename/reorder/freeze_paths/reveal_in_explorer |
-| `commands/analysis.rs` | save/load_analysis, load_transcript, video_source_path, **write_text_file** (used for SRT/CSV export) |
+| `commands/analysis.rs` | save/load_analysis, load_transcript, video_source_path, **write_text_file** (SRT/CSV export), **export_burned_video** + **cancel_export** (ffmpeg burn-in pipeline; `ExportState` held in Tauri `.manage()`) |
 | `commands/vocabulary.rs` | `vocab_list/add/remove`. Storage: `vocabulary.json` at app data root. Dedupe by id = `expression.toLowerCase().trim()` |
 | `commands/models.rs` | whisper_model_status / download |
 | `commands/import.rs` | `import_video` orchestrator |
-| `pipeline/spawn.rs` | `run_sidecar()` — spawn + stderr tail for error diagnostics |
-| `pipeline/ytdlp.rs` | URL → source.mp4 + thumb.jpg + info.json (reads `cookiesFile` from settings) |
+| `pipeline/spawn.rs` | `run_sidecar()` — spawn + stderr tail for error diagnostics. "terminated abnormally" branch includes captured stderr + Mac-specific dyld hint |
+| `pipeline/ytdlp.rs` | URL → source.mp4 + thumb.jpg + info.json (reads `cookiesFile` from settings). Resolves the bundled ffmpeg sidecar path at runtime and passes `--ffmpeg-location <path>` so yt-dlp can find it (otherwise YouTube downloads fail with `ffmpeg not found`). Best-effort `--js-runtimes node:<path>` lookup at common Mac/Linux Homebrew paths |
 | `pipeline/ffmpeg.rs` | extract_audio_wav (16 kHz mono PCM), extract_thumbnail |
 | `pipeline/whisper.rs` | transcribe via whisper-cli; model download (`.partial` → atomic rename, hf-mirror.com URLs); parses `ggml_<backend>: 0 = <name>` to emit `BackendDetected` |
 
@@ -57,6 +57,7 @@ Started{video_id} → Downloading{percent}* → ExtractingAudio → Transcribing
   → Transcribed{srt_path, duration_sec}        (Failed{error} at any step)
 ModelDownload{progress, total_mb, downloaded_mb}    (model fetch, separate stream)
 BackendDetected{name}                                (once per transcribe; persisted into settings)
+Exporting{video_id, percent}* → Exported{video_id, output_path}    (subtitle burn-in)
 ```
 
 ## whisper.cpp build
@@ -76,11 +77,13 @@ Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.34
 |------|------|
 | `App.tsx` | Routes (/library, /player/:id, /vocab, /settings); mounts `BackendListener` at root |
 | `pages/Library.tsx` | Card grid; drag-drop reorder; right-click menu; OS file drop → ImportModal; status badges; header has ⭐ vocab + ⚙ settings links |
-| `pages/Player.tsx` | Resizable split (localStorage %); left video, right tabs `[字幕 \| 重点短语]`. Owns LLM analysis effect with AbortController + StrictMode dedup. Reads `?t=<sec>` deep-link and seeks on `loadedmetadata`. Throttled partial-save of analysis.json every 800 ms while streaming. SRT export (en/zh/both) via save dialog + `write_text_file` |
+| `pages/Player.tsx` | Resizable split (localStorage %); left video, right tabs `[字幕 \| 重点短语]`. Owns LLM analysis effect with AbortController + StrictMode dedup. Reads `?t=<sec>` deep-link and seeks on `loadedmetadata`. Throttled partial-save of analysis.json every 800 ms while streaming. **Export menu**: SRT en/zh/both + burn-in mp4 via `ExportVideoModal`. **Caption overlay toggle** + **auto-scroll toggle** + **edit mode toggle** (in subtitle tab header). On videoId change, synchronously calls `useAnalysis.getState().reset()` before the async load to avoid showing the previous video's cues during the await window |
 | `pages/Settings.tsx` | VendorSection (preset → autofill base URL); SecretField/DirField/FileField; Whisper model dropdown + download progress; **GPU 加速 status** (read from `whisperBackend`) |
 | `pages/Vocab.tsx` | Sort modes (按视频/最近/最早/字母); flat or grouped view; CSV export via `write_text_file` (RFC4180 escape + BOM); per-entry deep link to `/player/:id?t=<cueTime>` |
-| `components/VideoPlayer.tsx` | YouTube-like controls; hold ←/→ = 2x boost; speed 0.5–2x; panel toggle |
-| `components/SubtitleList.tsx` | Auto-scroll to current cue; **freeze on highlight hover** (event delegation on `[data-highlight="true"]`); freeze ~2s on user wheel/touch/keyboard |
+| `components/VideoPlayer.tsx` | YouTube-like controls; hold ←/→ = 2x boost; speed 0.5–2x; panel toggle; bilingual caption overlay toggle (renders `CaptionOverlay`) |
+| `components/CaptionOverlay.tsx` | Cinema-style EN+ZH overlay anchored at `bottom-20` over the video. Same highlight splice as SubtitleList but plain `<span>` (no tooltip); the whole layer is `pointer-events-none` so it never intercepts player clicks |
+| `components/SubtitleList.tsx` | View mode: auto-scroll to current cue; **freeze on highlight hover** (event delegation on `[data-highlight="true"]`); freeze ~2s on user wheel/touch/keyboard via `userScrollingRef` (synchronous read) + `programmaticScrollRef` discriminator. Edit mode (`editing` prop): per-row `EditableRow` with text/timestamp `<input>` + Plus/Trash2 + GripVertical drag handle; **only the grip is `draggable=true`** (avoids HTML5 drag conflicts with input/textarea text-selection); on each mutation calls `onChanged` which schedules a partial save in Player |
+| `components/ExportVideoModal.tsx` | 4-phase modal (config / running / done / failed). 3 checkboxes (en / zh / 高亮); on start, generates ASS via `subtitlesToAss`, calls `export_burned_video` invoke. Subscribes to `Exporting` + `Log` events for live percent + ffmpeg stderr tail (debug visibility). Cancel button calls `cancel_export` |
 | `components/KeyPhraseList.tsx` | Phrase cards (amber expr + IPA + 🔊 + ⭐ + meaning + usage); voice dropdown; install hint if no English voices; resolves first source cue per phrase to seed StarButton's deep-link |
 | `components/HighlightWord.tsx` | Inline yellow span with `data-highlight="true"`; hover/click → keyNote tooltip |
 | `components/StarButton.tsx` | Toggle (filled/outlined) — calls `useVocabulary.toggle(...)` |
@@ -105,6 +108,8 @@ Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.34
 | `llm/phonetic.ts` | Lazy `/data/ipa-en-us.json`; multi-word looked up by token |
 | `types/{settings,library,vocab}.ts` | Interfaces + defaults; `whisperBackend` field on Settings |
 | `utils/srt.ts` | `subtitlesToSrt(en|zh)` + `sanitizeFilename` (used by export) |
+| `utils/ass.ts` | `subtitlesToAss(subs, opts)` for video burn-in. Two ASS styles (EN: Arial 42, ZH: Microsoft YaHei 38), bottom-anchored. Highlights wrapped in `{\c&H00FFFF&}…{\r}` (BGR yellow). Centisecond time format rounded once to dodge fp loss. Vitest covers escapes + highlight splice |
+| `utils/time.ts` | `formatTime` (mm:ss / h:mm:ss for display) + `formatEditTime` / `parseEditTime` (m:ss.ms format used by SubtitleList edit mode) |
 
 ## Storage layout (`%APPDATA%/Get_Video/` on Windows, `~/Library/Application Support/Get_Video/` on macOS)
 
@@ -179,12 +184,13 @@ Stop button: `abortRef.current.abort()`; phase=paused; force-flush partial save.
 # Frontend (run from client/)
 pnpm install
 pnpm tauri dev          # First cargo build 5–15 min; incremental ~10s
-pnpm test               # Vitest, ~23 unit tests
+pnpm test               # Vitest, ~32 unit tests (incl. ASS generator, time parsing, providers)
 pnpm typecheck          # tsc --noEmit
 pnpm tauri build        # → src-tauri/target/release/bundle/
 
 # Rust unit tests (from src-tauri/)
-cargo test              # paths, ids, srt, ytdlp, whisper, library, settings
+cargo test              # paths, ids, srt, ytdlp, whisper, library, settings,
+                        # commands::analysis::extract_time_field (ffmpeg progress parser)
                         # NB: library + settings tests pollute real %APPDATA%/Get_Video/
 ```
 
@@ -192,32 +198,40 @@ cargo test              # paths, ids, srt, ytdlp, whisper, library, settings
 
 ## Release workflow
 
-Two repos: source `rjxznb/Get_Video` (private), release artifacts `rjxznb/Get_Video-releases` (public). Updater endpoint: `https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json`. Private signing key at `~/.tauri/eversay-studio.key` (also `secrets/eversay-studio.key` in private repo for backup). Public key embedded in `tauri.conf.json` `plugins.updater.pubkey`.
+Two repos: source `rjxznb/Get_Video` (private), release artifacts `rjxznb/Get_Video-releases` (public). Updater endpoint: `https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json`. Private signing key in repo secret `TAURI_SIGNING_PRIVATE_KEY` (also `secrets/eversay-studio.key` locally for backup). Public key embedded in `tauri.conf.json` `plugins.updater.pubkey`.
+
+Releases are **automated via `.github/workflows/release.yml`** — `workflow_dispatch` only, no auto-trigger on push. The workflow has three jobs: `build-windows` (windows-latest), `build-macos` (macos-14, Apple Silicon), and `publish` (ubuntu-latest, downloads both artifacts and stitches `latest.json`).
 
 ### Per-release checklist
 
 1. Bump version in 3 places: `client/package.json`, `client/src-tauri/tauri.conf.json`, `client/src-tauri/Cargo.toml` (must match).
-2. Build (Git Bash):
-   ```bash
-   cd client
-   TAURI_SIGNING_PRIVATE_KEY="$(cat $USERPROFILE/.tauri/eversay-studio.key)" \
-   TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
-   pnpm tauri build --bundles msi
-   ```
-   Output: `src-tauri/target/release/bundle/msi/Eversay Studio_X.Y.Z_x64_en-US.msi` + `.sig`.
-3. Hand-author `latest.json` (Tauri does NOT generate). Template:
-   ```json
-   {"version":"X.Y.Z","notes":"...","pub_date":"2026-04-30T...","platforms":{
-     "windows-x86_64":{"signature":"<paste .sig content>","url":"https://github.com/rjxznb/Get_Video-releases/releases/download/vX.Y.Z/Eversay.Studio_X.Y.Z_x64_en-US.msi"}}}
-   ```
-   Note: GitHub asset URLs replace spaces with dots — write the URL post-upload.
-4. `gh release create vX.Y.Z --repo rjxznb/Get_Video-releases ...` with the .msi, .sig, and latest.json.
-5. Verify: `curl <updater endpoint>` returns the JSON.
-6. Test upgrade flow on a machine with prior version installed.
+2. Commit + push to `main`.
+3. GitHub Actions UI → **Release** → Run workflow. Inputs:
+   - `targets`: `both` / `windows` / `macos` (build only one platform when iterating; the un-rebuilt platform's manifest entry is carried over from the most recent existing release so `latest.json` stays complete)
+   - `release_notes`: shown in the in-app update toast
+   - `whisper_tag`: defaults `v1.8.4`
+   - `vulkan_sdk_version`: defaults `1.4.309.0` (LunarG removes older versions periodically — bump to a known-available version if download 404s)
+   - `dry_run`: `true` to upload artifacts to the run page only, skip publishing
+4. Workflow runs ~5–25 min depending on cache hit (see "CI caching" below). On success, `v$VERSION` release on the public repo gets `.msi` + `.msi.sig` + `.dmg` + `.app.tar.gz` + `.app.tar.gz.sig` + `latest.json`.
+5. Verify: `curl https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json` returns the manifest with both platforms. (Note: fastly CDN can lag 5–30 min behind a fresh upload — re-upload `latest.json --clobber` if stale, or wait.)
+6. Test upgrade flow on a machine running the prior version.
 
-### macOS release path
+### CI caching
 
-`macos-14` GitHub Actions runner builds whisper.cpp Metal binaries via `.github/workflows/build-mac-binaries.yml` (manual `workflow_dispatch`; ~6 min on private repo, costs ~60 min from 2000 min/month quota). Future Phase 3 workflow will add tag-triggered `pnpm tauri build --bundles dmg,app` + minisign + GitHub Release upload. **No Apple Developer account / no notarization** — first-launch users hit Gatekeeper "已损坏" and must do System Settings → 隐私与安全性 → 仍要打开 (or `xattr -cr <app>`). README documents the 5-step bypass.
+The workflow caches three things to keep re-runs fast:
+
+| Cache | Key | Skips when hit |
+|------|-----|----------------|
+| Whisper Win sidecar + DLLs | `whisper-windows-{whisper_tag}-vk{vulkan_sdk_version}` | clone + cmake build + Vulkan SDK install (~5–8 min) |
+| Vulkan SDK install dir | `vulkan-sdk-{vulkan_sdk_version}` | LunarG download + silent install (~2–3 min). Only consulted on whisper miss |
+| Whisper Mac sidecar + dylibs | `whisper-macos-{whisper_tag}` | clone + cmake build + install_name_tool + ad-hoc codesign (~3 min) |
+| Cargo target + registry (per-platform) | via `Swatinem/rust-cache@v2` | ~half of cargo compile time |
+
+Cache invalidation on `whisper_tag` / `vulkan_sdk_version` change is automatic. Net: a no-op release re-build drops from ~25 min Win + 5 min Mac (cold) to ~5–8 min Win + 2–3 min Mac (warm).
+
+### macOS bundle
+
+The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf.json` overlay supplying `bundle.macOS.frameworks` for the 6 `.dylib`s. dylibs are `install_name_tool`'d to `@loader_path/...` and ad-hoc codesigned post-build; the resulting `.app` is then re-signed `--deep --sign -`. **No Apple Developer account / no notarization** — first-launch users hit Gatekeeper "已损坏" and must do System Settings → 隐私与安全性 → 仍要打开 (or `xattr -cr <app>` then `codesign --force --deep --sign -`). README documents the bypass.
 
 ### User-facing update behavior
 
@@ -236,9 +250,11 @@ Two repos: source `rjxznb/Get_Video` (private), release artifacts `rjxznb/Get_Vi
 
 - All OpenAI-compatible vendors share one API-key slot (`settings.openaiCompatible`) — switching DeepSeek ↔ Kimi loses prior key.
 - `settings.modelsDir` change does NOT migrate existing `.bin` files in old dir.
-- Mac release pipeline (Phase 3) not yet wired — `build-mac-binaries.yml` produces sidecar artifacts but full `.app` / `.dmg` build + signed update json not done.
 - Rust tests pollute real `%APPDATA%/Get_Video/` (library / settings tests). Should use temp dir.
 - ARM64 Windows / Intel Mac not built.
+- ffprobe not bundled — yt-dlp's standard download path doesn't need it, but if a video happens to require fragment probing the export will fail with `ffprobe not found`. Bundle alongside ffmpeg if it ever shows up.
+- Burn-in export uses libx264 only (no NVENC). ~1–2x realtime CPU; would need a NVENC-enabled ffmpeg build to accelerate.
+- Updater endpoint via fastly CDN can lag 5–30 min behind a fresh upload — known GitHub release behavior, no fix on our side.
 
 ## Quick map
 
@@ -257,3 +273,7 @@ Two repos: source `rjxznb/Get_Video` (private), release artifacts `rjxznb/Get_Vi
 | Asset protocol issue (video won't load) | `src-tauri/tauri.conf.json` `assetProtocol.scope` |
 | Sidecar permission errors | `src-tauri/capabilities/default.json` `shell:allow-execute.allow` |
 | Mac binary build / dylib swap | `.github/workflows/build-mac-binaries.yml` + `tauri.macos.conf.json` |
+| Caption overlay rendering / styling | `src/components/CaptionOverlay.tsx` |
+| Subtitle edit mode UI / drag-reorder | `src/components/SubtitleList.tsx` (`EditableRow`) + edit mutators in `src/store/analysis.ts` |
+| Video burn-in export (ASS / ffmpeg) | `src/utils/ass.ts` + `src/components/ExportVideoModal.tsx` + `src-tauri/src/commands/analysis.rs` (`export_burned_video`, `cancel_export`, `extract_time_field`) |
+| Cross-platform release pipeline | `.github/workflows/release.yml` (single-platform via `targets` input; cache-aware) |

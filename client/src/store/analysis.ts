@@ -20,6 +20,7 @@ export type AnalysisPhase =
   | "extracting"
   | "transcribing"
   | "analyzing"
+  | "paused"
   | "complete"
   | "error";
 
@@ -37,6 +38,10 @@ interface AnalysisState {
   setSubtitles: (s: Subtitle[]) => void;
   setSummary: (s: Omit<AnalysisResult, "subtitles">) => void;
   setError: (msg: string) => void;
+  updateSubtitle: (idx: number, partial: Partial<Subtitle>) => void;
+  deleteSubtitle: (idx: number) => void;
+  insertSubtitle: (idx: number, sub: Subtitle) => void;
+  reorderSubtitles: (fromIdx: number, toIdx: number) => void;
   reset: () => void;
 }
 
@@ -72,6 +77,29 @@ export const useAnalysis = create<AnalysisState>((set) => ({
   setSubtitles: (s) => set({ subtitles: dedupSubtitles(s) }),
   setSummary: (s) => set({ summary: s }),
   setError: (msg) => set({ phase: "error", errorMessage: msg }),
+  updateSubtitle: (idx, partial) =>
+    set((st) => ({
+      subtitles: st.subtitles.map((s, i) => (i === idx ? { ...s, ...partial } : s)),
+    })),
+  deleteSubtitle: (idx) =>
+    set((st) => ({ subtitles: st.subtitles.filter((_, i) => i !== idx) })),
+  insertSubtitle: (idx, sub) =>
+    set((st) => {
+      const next = [...st.subtitles];
+      const at = Math.max(0, Math.min(idx, next.length));
+      next.splice(at, 0, sub);
+      return { subtitles: next };
+    }),
+  reorderSubtitles: (fromIdx, toIdx) =>
+    set((st) => {
+      if (fromIdx === toIdx) return st;
+      if (fromIdx < 0 || fromIdx >= st.subtitles.length) return st;
+      const next = [...st.subtitles];
+      const [moved] = next.splice(fromIdx, 1);
+      const at = Math.max(0, Math.min(toIdx, next.length));
+      next.splice(at, 0, moved);
+      return { subtitles: next };
+    }),
   reset: () =>
     set({
       videoId: null,

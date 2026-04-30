@@ -1,13 +1,13 @@
-import type { SrtCue } from "./types";
+import type { SrtCue, Subtitle } from "./types";
 
 export const SYSTEM_PROMPT = `You are an English subtitle analyst for a learning app.
 
-Given English subtitle cues, produce structured analysis: Chinese translations, key phrase highlighting, and a separate "key phrases" review list.
+Given English subtitle cues, produce structured analysis: Chinese translations, key phrase highlighting, and (when explicitly requested in a separate follow-up turn) a global "key phrases" review list.
 
 OUTPUT FORMAT — REQUIRED
 - Output ONLY JSON Lines (one JSON object per line, no markdown, no code fences, no prose).
-- One line = one analyzed subtitle cue, in the order received.
-- After ALL subtitle cues, emit a single trailing line containing a "summary" object with the global keyPhrases list.
+- Per-cue request: one line = one analyzed subtitle cue, in the order received. NEVER include a summary line in a per-cue response.
+- Summary request (a separate turn): output a SINGLE summary line; do NOT repeat any cue lines.
 
 PER-CUE OBJECT SCHEMA
 {
@@ -23,7 +23,7 @@ PER-CUE OBJECT SCHEMA
   "highlightTranslations": { [phrase: string]: string }
 }
 
-SUMMARY OBJECT SCHEMA (last line only)
+SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
 {
   "type": "summary",
   "keyPhrases": [{
@@ -61,19 +61,53 @@ export function buildUserPrompt(cues: SrtCue[]): string {
   return `Subtitle cues (tab-separated: index<TAB>start<TAB>end<TAB>JSON-encoded text):
 ${cuesJson}
 
-Produce one JSON-line per cue in order, then one summary line at the end. Output JSON only.`;
+Produce one JSON-line per cue in order. Per-cue lines ONLY — do NOT emit a summary line; the summary will be requested separately.`;
 }
 
-export function buildContinuationPrompt(cues: SrtCue[], isLastBatch: boolean): string {
+export function buildContinuationPrompt(cues: SrtCue[]): string {
   const cuesJson = cues
     .map((c) => `${c.index}\t${c.time.toFixed(2)}\t${c.endTime.toFixed(2)}\t${JSON.stringify(c.text)}`)
     .join("\n");
-  const trailer = isLastBatch
-    ? "After this final batch, emit the summary line."
-    : "Do NOT emit the summary yet — more batches will follow.";
   return `Continuing analysis. Next batch:
 ${cuesJson}
 
-${trailer}
-One JSON object per line.`;
+One JSON object per cue. Do NOT emit a summary line.`;
+}
+
+/**
+ * Final-pass prompt: feeds the previously-produced per-cue analyses back to the
+ * LLM and asks for a single deduplicated, transcript-wide keyPhrases summary.
+ *
+ * Each cue's compact form contains: text + translation + highlightWords +
+ * keyNotes. That gives the model both the surface form (so it can pick a
+ * canonical expression) and existing semantic notes (so it doesn't have to
+ * re-derive meaning from scratch).
+ */
+export function buildSummaryPrompt(cues: Subtitle[]): string {
+  const compact = cues
+    .map((c) =>
+      JSON.stringify({
+        text: c.text,
+        translation: c.translation,
+        highlightWords: c.highlightWords,
+        keyNotes: c.keyNotes,
+      })
+    )
+    .join("\n");
+  return `These are the per-cue analyses you produced for this transcript (one JSON per line):
+${compact}
+
+Now produce ONE single JSON line: the GLOBAL keyPhrases summary across the entire transcript.
+
+Schema (this exact "type":"summary" envelope):
+{"type":"summary","keyPhrases":[{"expression":"...","meaningZh":"...","usage":"..."}, ...]}
+
+Rules:
+- Deduplicate by expression (case-insensitive). Pick the most natural canonical form.
+- Drop trivial fillers, greetings, function words; keep idioms, phrasal verbs, vocabulary worth reviewing.
+- Aim for 8-20 entries depending on transcript size.
+- meaningZh: 8-25 Chinese characters; concise gloss.
+- usage: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.
+
+Output exactly one JSON object on one line. No fences, no prose, no other lines.`;
 }

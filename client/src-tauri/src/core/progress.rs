@@ -40,6 +40,24 @@ pub enum PipelineEvent {
         source: String,
         line: String,
     },
+    /// Emitted once per transcribe call when whisper-cli reports which compute
+    /// backend it picked. Frontend persists this in settings.json so the
+    /// Settings page can show the user how their machine is accelerating.
+    BackendDetected {
+        /// Human-readable backend name, e.g. "Vulkan / NVIDIA GeForce RTX 4090"
+        /// or "CPU".
+        name: String,
+    },
+    /// Burn-in subtitle export progress (ffmpeg re-encode).
+    Exporting {
+        video_id: String,
+        percent: u8,
+    },
+    /// Burn-in subtitle export finished successfully.
+    Exported {
+        video_id: String,
+        output_path: String,
+    },
 }
 
 pub fn emit(app: &AppHandle, event: PipelineEvent) {

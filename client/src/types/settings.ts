@@ -36,6 +36,10 @@ export interface Settings {
   /** Path to a Netscape-format cookies.txt file. When set, yt-dlp uses --cookies <file>
    *  to bypass age/login walls and bot-detection prompts. Empty = no cookies. */
   cookiesFile: string;
+  /** Last detected whisper compute backend, persisted across launches.
+   *  Format: "Vulkan / NVIDIA GeForce RTX 4090" | "CUDA / ..." | "CPU".
+   *  Empty until the first transcribe completes. */
+  whisperBackend?: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -48,4 +52,5 @@ export const DEFAULT_SETTINGS: Settings = {
   libraryDir: "",
   modelsDir: "",
   cookiesFile: "",
+  whisperBackend: "",
 };

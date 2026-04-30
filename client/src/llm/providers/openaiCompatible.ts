@@ -20,6 +20,7 @@ export function createOpenAICompatibleProvider(settings: Settings): Provider {
             { role: "user", content: req.userPrompt },
           ],
         }),
+        signal: req.signal,
       });
 
       if (!resp.ok) {

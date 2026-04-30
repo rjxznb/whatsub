@@ -3,6 +3,7 @@ import type { Settings } from "../../types/settings";
 export interface ProviderRequest {
   systemPrompt: string;
   userPrompt: string;
+  signal?: AbortSignal;
 }
 
 /**

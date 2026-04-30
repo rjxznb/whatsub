@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { ArrowLeft, FileOutput } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
+import { ContextMenu } from "../components/ContextMenu";
+import { ExportVideoModal } from "../components/ExportVideoModal";
+import { subtitlesToSrt, sanitizeFilename } from "../utils/srt";
 import { useAnalysis } from "../store/analysis";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
+import { useVocabulary } from "../store/vocab";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useVideoSync } from "../hooks/useVideoSync";
 import { VideoPlayer } from "../components/VideoPlayer";
@@ -15,18 +20,58 @@ import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
 import { dedupSubtitles } from "../store/analysis";
-import type { AnalysisResult, Subtitle } from "../llm/types";
+import type { AnalysisResult, Subtitle, SrtCue } from "../llm/types";
 
 type Tab = "subtitles" | "keyPhrases";
 
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
+  // Optional ?t=<seconds> deep-link target — used by the vocab page to jump
+  // back to the cue where a phrase was first starred. Consumed once on
+  // loadedmetadata; subsequent seeks are user-driven.
+  const [searchParams] = useSearchParams();
+  const seekTarget = (() => {
+    const raw = searchParams.get("t");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  })();
   const { settings } = useSettings();
   const { library, reload } = useLibrary();
   const analysis = useAnalysis();
+  const vocab = useVocabulary();
+  useEffect(() => {
+    if (!vocab.loaded) void vocab.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [tab, setTab] = useState<Tab>("subtitles");
   const [videoSrc, setVideoSrc] = useState<string>("");
+  const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null);
+  const [showExportVideo, setShowExportVideo] = useState(false);
+  const [autoScrollSubtitle, setAutoScrollSubtitle] = useState<boolean>(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("autoScrollSubtitle")
+        : null;
+    return saved === null ? true : saved === "1";
+  });
+  useEffect(() => {
+    window.localStorage.setItem("autoScrollSubtitle", autoScrollSubtitle ? "1" : "0");
+  }, [autoScrollSubtitle]);
+
+  const [showCaptions, setShowCaptions] = useState<boolean>(() => {
+    const saved =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("showCaptions")
+        : null;
+    return saved === "1";
+  });
+  useEffect(() => {
+    window.localStorage.setItem("showCaptions", showCaptions ? "1" : "0");
+  }, [showCaptions]);
+
+  const [editingSubtitle, setEditingSubtitle] = useState(false);
 
   // Resizable split between video pane (left) and subtitle pane (right).
   // Persisted as a percentage in localStorage; clamped to 25%-80%.
@@ -91,50 +136,173 @@ export function Player() {
     );
   }, [videoId]);
 
+  // Honor ?t=<seconds> once the video element has metadata. We bind to
+  // loadedmetadata on the underlying element each time videoSrc/seekTarget
+  // changes; React's effect cleanup removes the prior listener.
+  useEffect(() => {
+    if (seekTarget == null) return;
+    const el = videoRef.current;
+    if (!el || !videoSrc) return;
+    const seek = () => {
+      try {
+        el.currentTime = seekTarget;
+      } catch {
+        // some browsers throw if seeking before duration is known; ignore.
+      }
+    };
+    if (el.readyState >= 1) {
+      seek();
+    } else {
+      el.addEventListener("loadedmetadata", seek, { once: true });
+      return () => el.removeEventListener("loadedmetadata", seek);
+    }
+  }, [videoSrc, seekTarget]);
+
+  // Throttled partial-save: every appended cue calls schedulePartialSave;
+  // if another cue arrives within 800 ms the timer resets. Net effect:
+  // ~1 disk write per second of streaming. flushPartialSave is also invoked
+  // by onStop and on unmount to force an immediate final save.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // AbortController for the in-flight LLM run. onStop calls .abort() — the
+  // fetch unblocks and runAnalysis returns; the catch path checks
+  // signal.aborted to distinguish user-stop from genuine errors.
+  const abortRef = useRef<AbortController | null>(null);
+  // Parsed SRT cues, cached so 继续 doesn't re-load the transcript.
+  const cuesRef = useRef<SrtCue[] | null>(null);
+
+  const flushPartialSave = () => {
+    if (!videoId) return;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const state = useAnalysis.getState();
+    if (state.videoId !== videoId || state.subtitles.length === 0) return;
+    const partial: AnalysisResult = {
+      subtitles: dedupSubtitles(state.subtitles),
+      keyPhrases: state.summary?.keyPhrases ?? [],
+    };
+    invoke("save_analysis", { videoId, analysis: partial }).catch((e) =>
+      console.error("partial save failed", e)
+    );
+  };
+
+  const schedulePartialSave = () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(flushPartialSave, 800);
+  };
+
+  const startAnalysisFrom = async (startIdx: number) => {
+    if (!videoId) return;
+    const cues = cuesRef.current;
+    if (!cues) return;
+    const remaining = cues.slice(startIdx);
+    if (remaining.length === 0) {
+      analysis.setPhase("complete");
+      return;
+    }
+    abortRef.current = new AbortController();
+    const localController = abortRef.current;
+    analysis.setPhase("analyzing");
+    const provider = getProvider(settings);
+    // Snapshot whatever's already in the store (cached cues from a prior
+    // session, after the partial-cache branch in the mount effect seeded
+    // them). The summary phase needs to see all analyzed cues, not just this
+    // run's slice, so keyPhrases reflect the FULL transcript.
+    const previouslyAnalyzed = useAnalysis.getState().subtitles.slice();
+    try {
+      await runAnalysis({
+        provider,
+        cues: remaining,
+        previouslyAnalyzed,
+        signal: localController.signal,
+        onCue: (c: Subtitle) => {
+          if (localController.signal.aborted) return;
+          analysis.appendSubtitle(c);
+          schedulePartialSave();
+        },
+        onSummary: (s) => {
+          if (localController.signal.aborted) return;
+          analysis.setSummary(s);
+          schedulePartialSave();
+        },
+      });
+      if (localController.signal.aborted) return;
+      const summary = useAnalysis.getState().summary;
+      if (summary) {
+        const finalAnalysis: AnalysisResult = {
+          ...summary,
+          subtitles: dedupSubtitles(useAnalysis.getState().subtitles),
+        };
+        if (saveTimerRef.current) {
+          clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = null;
+        }
+        await invoke("save_analysis", { videoId, analysis: finalAnalysis });
+        await invoke("library_set_status", {
+          id: videoId,
+          status: "ready",
+          error: null,
+        });
+      }
+      analysis.setPhase("complete");
+      await reload();
+    } catch (e: unknown) {
+      // User-initiated stop: phase is already "paused" (set by onStop),
+      // abort propagated as AbortError or fetch threw. Persist what we have.
+      const isAbort =
+        localController.signal.aborted ||
+        (e instanceof DOMException && e.name === "AbortError") ||
+        (typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError");
+      if (isAbort) {
+        flushPartialSave();
+        return;
+      }
+      analysis.setError(String(e));
+      await invoke("library_set_status", {
+        id: videoId,
+        status: "failed",
+        error: String(e),
+      });
+      await reload();
+    }
+  };
+
+  const onStop = () => {
+    abortRef.current?.abort();
+    analysis.setPhase("paused");
+    flushPartialSave();
+  };
+
+  const onContinue = () => {
+    const startIdx = useAnalysis.getState().subtitles.length;
+    void startAnalysisFrom(startIdx);
+  };
+
   useEffect(() => {
     if (!videoId) return;
-    // StrictMode in dev double-mounts components. Without this token, the first
-    // mount's runAnalysis would keep streaming and appending while the second
-    // mount kicks off another LLM call — producing two parallel sets of cues.
+    // StrictMode in dev double-mounts components. The pre-LLM phase still
+    // needs `cancelled` so we don't transition phases after unmount; the
+    // LLM call itself is aborted via abortRef in the cleanup.
     let cancelled = false;
 
-    // Throttled partial-save handle. Every onCue triggers it; if another cue
-    // arrives within 800ms the timer resets. Net effect: at most ~1 disk write
-    // per second of streaming. On unmount we force a final immediate save to
-    // capture the last cues before the throttle window expires.
-    let saveTimer: ReturnType<typeof setTimeout> | null = null;
-    const flushPartialSave = () => {
-      if (saveTimer) {
-        clearTimeout(saveTimer);
-        saveTimer = null;
-      }
-      const state = useAnalysis.getState();
-      if (state.videoId !== videoId || state.subtitles.length === 0) return;
-      const partial: AnalysisResult = {
-        subtitles: dedupSubtitles(state.subtitles),
-        keyPhrases: state.summary?.keyPhrases ?? [],
-      };
-      invoke("save_analysis", { videoId, analysis: partial }).catch((e) =>
-        console.error("partial save failed", e)
-      );
-    };
-    const schedulePartialSave = () => {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(flushPartialSave, 800);
-    };
+    // Synchronously clear any state left over from the previous video so the
+    // SubtitleList doesn't briefly render the old video's cues during the
+    // async load below. Reset is a no-op if the store is already empty.
+    if (useAnalysis.getState().videoId !== videoId) {
+      useAnalysis.getState().reset();
+      cuesRef.current = null;
+    }
 
     (async () => {
       const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
       if (cancelled) return;
 
-      // Need cues count to decide complete / partial / fresh, so load
-      // transcript up-front (cheap — small file on disk).
       const srt = await invoke<string | null>("load_transcript", { videoId });
       if (cancelled) return;
       if (!srt) {
-        // No transcript means import failed somewhere. Whatever's cached is
-        // unusable; show error.
         if (cached) {
+          analysis.startFor(videoId);
           analysis.setSubtitles(dedupSubtitles(cached.subtitles));
           const { subtitles: _drop, ...summary } = cached;
           analysis.setSummary(summary);
@@ -145,15 +313,16 @@ export function Player() {
         return;
       }
       const cues = parseSrt(srt);
+      cuesRef.current = cues;
       const cleanedCachedCues = cached ? dedupSubtitles(cached.subtitles) : [];
 
       // ── Complete: cached has every cue. Use as-is. ──
       if (cached && cleanedCachedCues.length >= cues.length) {
+        analysis.startFor(videoId);
         analysis.setSubtitles(cleanedCachedCues);
         const { subtitles: _drop, ...summary } = cached;
         analysis.setSummary(summary);
         analysis.setPhase("complete");
-        // Self-heal: if dedup changed the count, persist cleaned version.
         if (cleanedCachedCues.length !== cached.subtitles.length) {
           await invoke("save_analysis", {
             videoId,
@@ -163,74 +332,29 @@ export function Player() {
         return;
       }
 
-      // ── Partial: cached has some cues but not all. Resume from where we left off. ──
-      // ── Or fresh start: no cache, run from cue 0. ──
-      analysis.startFor(videoId);
-      const remaining =
-        cleanedCachedCues.length > 0
-          ? cues.slice(cleanedCachedCues.length)
-          : cues;
-      // Pre-seed the store with already-analyzed cues so the UI shows them
-      // immediately rather than blanking on resume.
+      // ── Partial: cached has some cues but not all. Show as paused;
+      //    user clicks 继续 to resume.
       if (cleanedCachedCues.length > 0) {
+        analysis.startFor(videoId);
         analysis.setSubtitles(cleanedCachedCues);
         if (cached?.keyPhrases) {
           analysis.setSummary({ keyPhrases: cached.keyPhrases });
         }
+        analysis.setPhase("paused");
+        return;
       }
-      analysis.setPhase("analyzing");
-      const provider = getProvider(settings);
-      try {
-        await runAnalysis({
-          provider,
-          cues: remaining,
-          onCue: (c: Subtitle) => {
-            if (cancelled) return;
-            analysis.appendSubtitle(c);
-            schedulePartialSave();
-          },
-          onSummary: (s) => {
-            if (cancelled) return;
-            analysis.setSummary(s);
-            schedulePartialSave();
-          },
-        });
-        if (cancelled) return;
-        const summary = useAnalysis.getState().summary;
-        if (summary) {
-          const finalAnalysis: AnalysisResult = {
-            ...summary,
-            subtitles: dedupSubtitles(useAnalysis.getState().subtitles),
-          };
-          if (saveTimer) {
-            clearTimeout(saveTimer);
-            saveTimer = null;
-          }
-          await invoke("save_analysis", { videoId, analysis: finalAnalysis });
-          await invoke("library_set_status", {
-            id: videoId,
-            status: "ready",
-            error: null,
-          });
-        }
-        analysis.setPhase("complete");
-        await reload();
-      } catch (e) {
-        if (cancelled) return;
-        analysis.setError(String(e));
-        await invoke("library_set_status", {
-          id: videoId,
-          status: "failed",
-          error: String(e),
-        });
-        await reload();
-      }
+
+      // ── Fresh start: no cache, kick off from cue 0. ──
+      analysis.startFor(videoId);
+      if (cancelled) return;
+      void startAnalysisFrom(0);
     })();
 
     return () => {
       cancelled = true;
-      // Force-save whatever cues have accumulated so the next session can
-      // resume without re-billing the LLM for already-analyzed cues.
+      // Cancel any in-flight LLM stream (kills the HTTP fetch) and force-save
+      // whatever cues have accumulated so the next session can resume.
+      abortRef.current?.abort();
       flushPartialSave();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -241,6 +365,47 @@ export function Player() {
   function jump(t: number) {
     if (videoRef.current) videoRef.current.currentTime = t;
   }
+
+  const baseName = sanitizeFilename(entry?.title ?? videoId ?? "subtitle");
+
+  async function exportOne(lang: "en" | "zh") {
+    const subs = analysis.subtitles;
+    if (subs.length === 0) return;
+    const suffix = lang === "en" ? ".en.srt" : ".zh.srt";
+    const path = await save({
+      defaultPath: `${baseName}${suffix}`,
+      filters: [{ name: "SubRip Subtitle", extensions: ["srt"] }],
+    });
+    if (!path) return;
+    const content = subtitlesToSrt(subs, lang);
+    try {
+      await invoke("write_text_file", { path, content });
+    } catch (e) {
+      alert(`导出失败：${e}`);
+    }
+  }
+
+  async function exportBoth() {
+    const subs = analysis.subtitles;
+    if (subs.length === 0) return;
+    const dir = await open({ directory: true, multiple: false });
+    if (!dir || typeof dir !== "string") return;
+    const sep = dir.includes("\\") ? "\\" : "/";
+    try {
+      await invoke("write_text_file", {
+        path: `${dir}${sep}${baseName}.en.srt`,
+        content: subtitlesToSrt(subs, "en"),
+      });
+      await invoke("write_text_file", {
+        path: `${dir}${sep}${baseName}.zh.srt`,
+        content: subtitlesToSrt(subs, "zh"),
+      });
+    } catch (e) {
+      alert(`导出失败：${e}`);
+    }
+  }
+
+  const canExport = analysis.subtitles.length > 0;
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100">
@@ -253,9 +418,21 @@ export function Player() {
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div className="flex-1 truncate text-sm">{entry?.title ?? videoId}</div>
+        <button
+          type="button"
+          disabled={!canExport}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setExportMenu({ x: r.right - 200, y: r.bottom + 4 });
+          }}
+          title={canExport ? "导出字幕为 SRT" : "字幕分析完成后可导出"}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
+        >
+          <FileOutput className="h-4 w-4" />
+        </button>
       </header>
 
-      <ProgressBanner />
+      <ProgressBanner onStop={onStop} onContinue={onContinue} />
 
       <div ref={splitContainerRef} className="flex-1 flex min-h-0">
         <div
@@ -268,6 +445,11 @@ export function Player() {
               src={videoSrc}
               panelOpen={panelOpen}
               onTogglePanel={() => setPanelOpen((v) => !v)}
+              currentSubtitle={
+                currentIdx >= 0 ? analysis.subtitles[currentIdx] ?? null : null
+              }
+              showCaptions={showCaptions}
+              onToggleCaptions={() => setShowCaptions((v) => !v)}
             />
           )}
         </div>
@@ -280,7 +462,7 @@ export function Player() {
               className="w-1 bg-zinc-800 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize shrink-0 transition-colors"
             />
             <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex border-b border-zinc-800 text-sm">
+          <div className="flex border-b border-zinc-800 text-sm items-center">
             {(["subtitles", "keyPhrases"] as Tab[]).map((t) => (
               <button
                 key={t}
@@ -297,6 +479,44 @@ export function Player() {
                   : `重点短语 (${analysis.summary?.keyPhrases.length ?? 0})`}
               </button>
             ))}
+            {tab === "subtitles" && (
+              <div className="ml-auto mr-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAutoScrollSubtitle((v) => !v)}
+                  title={
+                    autoScrollSubtitle
+                      ? "已开启：字幕会跟随播放进度自动滚动"
+                      : "已关闭：字幕不会自动滚动"
+                  }
+                  className={
+                    "text-xs px-2 py-1 rounded border transition-colors " +
+                    (autoScrollSubtitle
+                      ? "border-blue-500/50 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20"
+                      : "border-zinc-700 text-zinc-400 hover:bg-zinc-800")
+                  }
+                >
+                  📍 自动跳转：{autoScrollSubtitle ? "开" : "关"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingSubtitle((v) => !v)}
+                  title={
+                    editingSubtitle
+                      ? "退出编辑模式"
+                      : "进入编辑模式：修改文本、时间戳、增删、拖拽排序"
+                  }
+                  className={
+                    "text-xs px-2 py-1 rounded border transition-colors " +
+                    (editingSubtitle
+                      ? "border-amber-500/50 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
+                      : "border-zinc-700 text-zinc-400 hover:bg-zinc-800")
+                  }
+                >
+                  ✎ 编辑：{editingSubtitle ? "开" : "关"}
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex-1 min-h-0">
             {tab === "subtitles" && (
@@ -304,16 +524,57 @@ export function Player() {
                 subtitles={analysis.subtitles}
                 currentIdx={currentIdx}
                 onJump={jump}
+                autoScroll={autoScrollSubtitle}
+                editing={editingSubtitle}
+                onChanged={schedulePartialSave}
               />
             )}
             {tab === "keyPhrases" && (
-              <KeyPhraseList phrases={analysis.summary?.keyPhrases ?? []} />
+              <KeyPhraseList
+                phrases={analysis.summary?.keyPhrases ?? []}
+                subtitles={analysis.subtitles}
+                videoId={videoId ?? ""}
+                videoTitle={entry?.title ?? videoId ?? ""}
+              />
             )}
           </div>
             </div>
           </>
         )}
       </div>
+
+      {exportMenu && (
+        <ContextMenu
+          x={exportMenu.x}
+          y={exportMenu.y}
+          onClose={() => setExportMenu(null)}
+          items={[
+            { label: "导出英文字幕 (.en.srt)", onClick: () => void exportOne("en") },
+            { label: "导出中文字幕 (.zh.srt)", onClick: () => void exportOne("zh") },
+            { label: "同时导出两个 SRT…", onClick: () => void exportBoth() },
+            {
+              label: "导出带字幕视频 (.mp4)…",
+              onClick: () => setShowExportVideo(true),
+            },
+          ]}
+        />
+      )}
+
+      {showExportVideo && videoId && (
+        <ExportVideoModal
+          videoId={videoId}
+          videoTitle={entry?.title ?? videoId}
+          subtitles={analysis.subtitles}
+          durationSec={
+            (entry?.durationSec ?? 0) > 0
+              ? entry!.durationSec
+              : analysis.subtitles.length > 0
+              ? analysis.subtitles[analysis.subtitles.length - 1].endTime
+              : 0
+          }
+          onClose={() => setShowExportVideo(false)}
+        />
+      )}
     </div>
   );
 }

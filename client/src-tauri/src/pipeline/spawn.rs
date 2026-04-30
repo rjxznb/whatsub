@@ -72,8 +72,27 @@ where
             };
             Err(AppError::Subprocess(format!("{bin_name} exit {c}{detail}")))
         }
-        None => Err(AppError::Subprocess(format!(
-            "{bin_name} terminated abnormally"
-        ))),
+        None => {
+            // No Terminated event arrived — usually means dyld/exec failed before
+            // the child could even run. Include any stderr we did capture, plus
+            // a Mac-specific hint, so the user can diagnose.
+            let tail = stderr_tail
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let detail = if tail.is_empty() {
+                String::new()
+            } else {
+                format!("\n--- {bin_name} stderr (last {} lines) ---\n{}", stderr_tail.len(), tail)
+            };
+            #[cfg(target_os = "macos")]
+            let hint = "\n（macOS 提示：可能是 Gatekeeper 隔离或动态库未签名。在终端里手动执行该 sidecar 可以看到 dyld 错误。）";
+            #[cfg(not(target_os = "macos"))]
+            let hint = "";
+            Err(AppError::Subprocess(format!(
+                "{bin_name} terminated abnormally{detail}{hint}"
+            )))
+        }
     }
 }

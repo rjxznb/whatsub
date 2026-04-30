@@ -188,6 +188,24 @@ export function Settings() {
               {downloading === draft.whisperModel ? `下载中 ${downloadPct}%` : "下载"}
             </button>
           )}
+          <div className="mt-3 text-xs">
+            <span className="text-zinc-500">GPU 加速：</span>
+            {draft.whisperBackend ? (
+              <span
+                className={
+                  draft.whisperBackend.startsWith("CPU")
+                    ? "text-zinc-300"
+                    : "text-emerald-400 font-medium"
+                }
+              >
+                {draft.whisperBackend.startsWith("CPU") ? "❌ 仅 CPU" : `✅ ${draft.whisperBackend}`}
+              </span>
+            ) : (
+              <span className="text-zinc-500 italic">
+                未检测（首次运行解析后自动识别）
+              </span>
+            )}
+          </div>
         </section>
 
         <div className="flex items-center gap-3">

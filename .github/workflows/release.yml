@@ -1,0 +1,395 @@
+# Unified release workflow.
+#
+# Builds Windows (.msi + .sig) and macOS (.dmg + .app.tar.gz + .sig) in
+# parallel, then publishes both to rjxznb/Get_Video-releases as a single
+# GitHub Release with one assembled latest.json.
+#
+# Triggered manually from Actions UI. Use dry_run=true to produce
+# artifacts without publishing — useful for installing/testing the .msi
+# or .dmg before committing it to the public release repo. After verifying,
+# re-trigger with dry_run=false (or fetch artifacts and run the publish
+# job logic locally).
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: 'User-facing release notes (shown in the in-app update toast)'
+        required: true
+        default: 'Bug fixes and improvements'
+      whisper_tag:
+        description: 'whisper.cpp git tag to build from source (Win + Mac)'
+        required: true
+        default: 'v1.8.4'
+      vulkan_sdk_version:
+        description: 'LunarG Vulkan SDK version (Windows whisper-cli build)'
+        required: true
+        default: '1.4.341.0'
+      ffmpeg_url_macos:
+        description: 'Static ffmpeg arm64 zip URL'
+        required: true
+        default: 'https://www.osxexperts.net/ffmpeg711arm.zip'
+      ffmpeg_url_windows:
+        description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe)'
+        required: true
+        default: 'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip'
+      dry_run:
+        description: 'Build artifacts only — do not publish to release repo'
+        type: boolean
+        default: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        run: |
+          $version = "${{ inputs.vulkan_sdk_version }}"
+          $url = "https://sdk.lunarg.com/sdk/download/$version/windows/VulkanSDK-$version-Installer.exe"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe -UseBasicParsing
+          Write-Host "Installing VulkanSDK $version (silent)..."
+          $proc = Start-Process -FilePath .\VulkanSDK.exe `
+            -ArgumentList '--accept-licenses','--default-answer','--confirm-command','install' `
+            -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "Vulkan SDK installer failed with exit code $($proc.ExitCode)"
+            exit 1
+          }
+          $sdk = "C:\VulkanSDK\$version"
+          if (-not (Test-Path "$sdk\Include\vulkan\vulkan.h")) {
+            Write-Error "Vulkan SDK install incomplete: $sdk"
+            exit 1
+          }
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Build whisper.cpp (Vulkan)
+        run: |
+          git clone --depth 1 --branch "${{ inputs.whisper_tag }}" `
+            https://github.com/ggerganov/whisper.cpp.git whisper-src
+          cd whisper-src
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DGGML_VULKAN=ON `
+            -DBUILD_SHARED_LIBS=ON `
+            -DWHISPER_BUILD_TESTS=OFF `
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Stage Windows binaries/
+        run: |
+          $bin = "client/src-tauri/binaries"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+
+          # whisper-cli sidecar — Tauri externalBin requires the host triple suffix
+          $cli = Get-ChildItem -Path "whisper-src/build" -Recurse -Filter "whisper-cli.exe" `
+            | Select-Object -First 1
+          if (-not $cli) { Write-Error "whisper-cli.exe not found"; exit 1 }
+          Copy-Item $cli.FullName "$bin/whisper-cli-x86_64-pc-windows-msvc.exe"
+
+          # Companion DLLs — bare names, referenced by tauri.windows.conf.json
+          # bundle.resources and copied next to the exe by build.rs at compile time.
+          $dlls = @('whisper.dll','ggml.dll','ggml-base.dll','ggml-cpu.dll','ggml-vulkan.dll')
+          foreach ($d in $dlls) {
+            # Prefer Release/ build output if present (multi-config generator)
+            $f = Get-ChildItem -Path "whisper-src/build" -Recurse -Filter $d `
+              | Where-Object { $_.FullName -match 'Release' } `
+              | Select-Object -First 1
+            if (-not $f) {
+              $f = Get-ChildItem -Path "whisper-src/build" -Recurse -Filter $d | Select-Object -First 1
+            }
+            if (-not $f) { Write-Error "missing $d in whisper-src/build"; exit 1 }
+            Copy-Item $f.FullName "$bin/$d"
+          }
+
+          Write-Host "=== staged $bin/ ==="
+          Get-ChildItem $bin
+
+      - name: Download yt-dlp
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -OutFile "client/src-tauri/binaries/yt-dlp-x86_64-pc-windows-msvc.exe" `
+            -UseBasicParsing
+
+      - name: Download static ffmpeg
+        run: |
+          $url = "${{ inputs.ffmpeg_url_windows }}"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract -Force
+          $ffmpeg = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter "ffmpeg.exe" `
+            | Select-Object -First 1
+          if (-not $ffmpeg) { Write-Error "ffmpeg.exe not found in archive"; exit 1 }
+          Copy-Item $ffmpeg.FullName "client/src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Tauri build (.msi + .sig)
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # --bundles msi: skip the nsis target (base tauri.conf.json has
+        # bundle.targets="all", which on Windows would also produce nsis).
+        # createUpdaterArtifacts:true ensures the .msi.sig is emitted.
+        run: pnpm tauri build --bundles msi
+
+      - name: Show bundle output
+        run: Get-ChildItem -Recurse client/src-tauri/target/release/bundle/msi
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle
+          path: |
+            client/src-tauri/target/release/bundle/msi/*.msi
+            client/src-tauri/target/release/bundle/msi/*.msi.sig
+          retention-days: 7
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-14   # Apple Silicon
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build whisper.cpp (Metal)
+        run: |
+          git clone --depth 1 --branch ${{ inputs.whisper_tag }} \
+            https://github.com/ggerganov/whisper.cpp.git whisper-src
+          cd whisper-src
+          cmake -S . -B build \
+            -DGGML_METAL=ON -DBUILD_SHARED_LIBS=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Stage whisper artifacts into binaries/
+        run: |
+          set -e
+          BIN=client/src-tauri/binaries
+          mkdir -p $BIN
+          WHISPER_CLI=$(find whisper-src/build -name whisper-cli ! -name "*.dSYM*" | head -1)
+          cp -L "$WHISPER_CLI" "$BIN/whisper-cli-aarch64-apple-darwin"
+
+          # whisper.cpp emits libwhisper.X.dylib as a symlink to the real
+          # libwhisper.X.Y.Z.dylib. Dereference (-L) so destination is a real
+          # file (Tauri rejects dangling symlinks in bundle resources).
+          for name in libwhisper.1 libggml.0 libggml-base.0 libggml-blas.0 libggml-cpu.0 libggml-metal.0; do
+            f=$(find whisper-src/build -name "${name}.dylib" | head -1)
+            if [ -z "$f" ]; then
+              echo "::error::Missing dylib match for ${name}.dylib"
+              find whisper-src/build -name "lib*.dylib"
+              exit 1
+            fi
+            cp -L "$f" "$BIN/${name}.dylib"
+          done
+
+          echo "=== staged $BIN/ ==="
+          ls -la $BIN/
+
+      - name: Fix dylib install_names + ad-hoc codesign
+        run: |
+          cd client/src-tauri/binaries
+          for f in *.dylib; do
+            install_name_tool -id "@loader_path/$f" "$f" || true
+            for ref in $(otool -L "$f" | awk 'NR>1 {print $1}'); do
+              base=$(basename "$ref")
+              if [ -f "$base" ] && [ "$ref" != "@loader_path/$base" ]; then
+                install_name_tool -change "$ref" "@loader_path/$base" "$f" || true
+              fi
+            done
+          done
+          for ref in $(otool -L whisper-cli-aarch64-apple-darwin | awk 'NR>1 {print $1}'); do
+            base=$(basename "$ref")
+            if [ -f "$base" ]; then
+              install_name_tool -change "$ref" "@loader_path/$base" whisper-cli-aarch64-apple-darwin || true
+            fi
+          done
+          for f in *; do
+            [ -f "$f" ] && codesign --force --sign - "$f" || true
+          done
+
+      - name: Download static ffmpeg (arm64)
+        run: |
+          curl -L -o ffmpeg.zip "${{ inputs.ffmpeg_url_macos }}"
+          unzip -o ffmpeg.zip -d ffmpeg-extract
+          BIN=$(find ffmpeg-extract -name ffmpeg -type f | head -1)
+          cp "$BIN" client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+          chmod +x client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+
+      - name: Download yt-dlp
+        run: |
+          curl -L -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          chmod +x client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Tauri build (.dmg + .app + updater .app.tar.gz)
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build
+
+      - name: Ad-hoc codesign .app
+        run: |
+          APP=$(find client/src-tauri/target/release/bundle/macos -name "*.app" -maxdepth 2 -type d | head -1)
+          if [ -n "$APP" ]; then
+            codesign --force --deep --sign - "$APP" || true
+            codesign -dv "$APP" 2>&1 | head -5
+          fi
+
+      - name: Show bundle output
+        run: |
+          ls -la client/src-tauri/target/release/bundle/dmg/ || true
+          ls -la client/src-tauri/target/release/bundle/macos/ || true
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: |
+            client/src-tauri/target/release/bundle/dmg/*.dmg
+            client/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            client/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          retention-days: 7
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────
+  publish:
+    needs: [build-windows, build-macos]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (need tauri.conf.json for version)
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-bundle
+          path: dist/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-bundle
+          path: dist/macos
+
+      - name: List downloaded files
+        run: |
+          ls -la dist/windows
+          ls -la dist/macos
+
+      - name: Publish to releases repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -e
+          VERSION=$(jq -r .version client/src-tauri/tauri.conf.json)
+          TAG="v$VERSION"
+          REPO=rjxznb/Get_Video-releases
+
+          MSI=$(ls dist/windows/*.msi | head -1)
+          MSI_SIG=$(ls dist/windows/*.msi.sig | head -1)
+          DMG=$(ls dist/macos/*.dmg | head -1)
+          APP_TARGZ=$(ls dist/macos/*.app.tar.gz | head -1)
+          APP_SIG=$(ls dist/macos/*.app.tar.gz.sig | head -1)
+
+          for f in "$MSI" "$MSI_SIG" "$DMG" "$APP_TARGZ" "$APP_SIG"; do
+            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
+          done
+          echo "MSI=$MSI"
+          echo "DMG=$DMG"
+          echo "APP_TARGZ=$APP_TARGZ"
+
+          # Create release if missing
+          if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" \
+              --title "Eversay Studio $TAG" \
+              --notes "$NOTES"
+          fi
+
+          # Upload binaries + signatures
+          gh release upload "$TAG" "$MSI" "$MSI_SIG" "$DMG" "$APP_TARGZ" "$APP_SIG" \
+            --repo "$REPO" --clobber
+
+          # GitHub asset URLs replace spaces with dots — compute accordingly.
+          urlify() { basename "$1" | sed 's/ /./g'; }
+          MSI_URL="https://github.com/$REPO/releases/download/$TAG/$(urlify "$MSI")"
+          APP_URL="https://github.com/$REPO/releases/download/$TAG/$(urlify "$APP_TARGZ")"
+
+          # Tauri 2 expects the raw .sig file content (minisign-formatted text).
+          # jq --arg properly escapes embedded newlines as \n in the JSON output.
+          MSI_SIG_CONTENT=$(cat "$MSI_SIG")
+          APP_SIG_CONTENT=$(cat "$APP_SIG")
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$NOTES" \
+            --arg now "$NOW" \
+            --arg win_sig "$MSI_SIG_CONTENT" \
+            --arg win_url "$MSI_URL" \
+            --arg mac_sig "$APP_SIG_CONTENT" \
+            --arg mac_url "$APP_URL" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $now,
+              platforms: {
+                "windows-x86_64": { signature: $win_sig, url: $win_url },
+                "darwin-aarch64": { signature: $mac_sig, url: $mac_url }
+              }
+            }' > latest.json
+
+          echo "=== latest.json ==="
+          cat latest.json
+
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
+
+          echo "::notice::Published $TAG (windows-x86_64 + darwin-aarch64)"

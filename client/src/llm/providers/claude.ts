@@ -19,6 +19,7 @@ export function createClaudeProvider(settings: Settings): Provider {
           system: req.systemPrompt,
           messages: [{ role: "user", content: req.userPrompt }],
         }),
+        signal: req.signal,
       });
 
       if (!resp.ok) throw new Error(`Claude API ${resp.status}: ${await resp.text()}`);

@@ -13,6 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(commands::analysis::ExportState::default())
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -30,9 +31,15 @@ pub fn run() {
             commands::analysis::load_analysis,
             commands::analysis::load_transcript,
             commands::analysis::video_source_path,
+            commands::analysis::write_text_file,
+            commands::analysis::export_burned_video,
+            commands::analysis::cancel_export,
             commands::models::whisper_model_status,
             commands::models::whisper_model_download,
             commands::import::import_video,
+            commands::vocabulary::vocab_list,
+            commands::vocabulary::vocab_add,
+            commands::vocabulary::vocab_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

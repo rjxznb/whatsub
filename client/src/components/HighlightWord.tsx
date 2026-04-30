@@ -10,6 +10,7 @@ export function HighlightWord({ word, note }: Props) {
   return (
     <span className="relative inline-block">
       <span
+        data-highlight="true"
         className="bg-amber-300 text-black px-0.5 rounded cursor-help font-medium"
         onMouseEnter={() => setOpen(true)}
         onMouseLeave={() => setOpen(false)}

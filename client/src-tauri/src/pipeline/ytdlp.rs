@@ -1,8 +1,61 @@
 use crate::core::progress::{emit, PipelineEvent};
 use crate::error::AppResult;
 use crate::pipeline::spawn::run_sidecar;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::AppHandle;
+
+/// Compile-time target triple — Tauri renames sidecars at build time to
+/// `<name>-<target_triple><exe_suffix>` and drops them next to the main
+/// executable, so we need the same triple at runtime to find them.
+const TARGET_TRIPLE: &str = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    "aarch64-apple-darwin"
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+    "x86_64-apple-darwin"
+} else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    "x86_64-pc-windows-msvc"
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    "x86_64-unknown-linux-gnu"
+} else {
+    ""
+};
+
+/// Find the bundled sidecar binary on disk so we can hand its path to yt-dlp
+/// (yt-dlp invokes ffmpeg as a separate child process and won't find ours
+/// unless we tell it explicitly via --ffmpeg-location).
+fn sidecar_path(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let candidates: [PathBuf; 2] = if TARGET_TRIPLE.is_empty() {
+        [dir.join(format!("{name}{suffix}")), dir.join(name)]
+    } else {
+        [
+            dir.join(format!("{name}-{TARGET_TRIPLE}{suffix}")),
+            dir.join(format!("{name}{suffix}")),
+        ]
+    };
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Best-effort node lookup on macOS / Linux. yt-dlp v2026 wants a JS runtime
+/// for full YouTube format support; without one it emits a warning but still
+/// works for most videos. So this lookup is purely a "nice to have".
+fn find_js_runtime() -> Option<(String, String)> {
+    // (name, path) — name is what yt-dlp expects for --js-runtimes <name>:<path>
+    let candidates = [
+        ("node", "/opt/homebrew/bin/node"), // Apple Silicon Homebrew
+        ("node", "/usr/local/bin/node"),    // Intel Homebrew / system
+        ("node", "/usr/bin/node"),
+        ("deno", "/opt/homebrew/bin/deno"),
+        ("deno", "/usr/local/bin/deno"),
+    ];
+    for (name, path) in candidates {
+        if std::path::Path::new(path).exists() {
+            return Some((name.into(), path.into()));
+        }
+    }
+    None
+}
 
 fn read_cookies_file() -> Option<String> {
     let path = crate::core::paths::settings_path().ok()?;
@@ -71,12 +124,25 @@ pub async fn download(
         args.push("--cookies".into());
         args.push(c.clone());
     }
+
+    // ffmpeg is needed by yt-dlp to merge bv+ba streams into a single mp4.
+    // The bundled sidecar isn't in $PATH, so point yt-dlp at it explicitly.
+    // Without this, downloads fail with `ERROR: Preprocessing: ffmpeg not found`.
+    if let Some(ffmpeg) = sidecar_path("ffmpeg") {
+        args.push("--ffmpeg-location".into());
+        args.push(ffmpeg.to_string_lossy().to_string());
+    }
+
+    // JS runtime (best-effort). With one, YouTube extraction is fully reliable;
+    // without one, yt-dlp emits a "no JS runtime" warning but most videos still
+    // download. Skip the flag entirely if we can't find a runtime — passing
+    // `--js-runtimes node` when node isn't installed anywhere doesn't help.
+    if let Some((name, path)) = find_js_runtime() {
+        args.push("--js-runtimes".into());
+        args.push(format!("{name}:{path}"));
+    }
+
     args.extend([
-        // YouTube extraction in v2026+ wants a JS runtime; "node" works if the
-        // user has Node installed (typical dev machine). yt-dlp gracefully
-        // falls back to no-JS mode otherwise — just emits a warning.
-        "--js-runtimes".into(),
-        "node".into(),
         "-f".into(),
         "bv*[ext=mp4][height<=720]+ba/best[ext=mp4]/best".into(),
         "--merge-output-format".into(),

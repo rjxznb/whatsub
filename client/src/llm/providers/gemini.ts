@@ -16,6 +16,7 @@ export function createGeminiProvider(settings: Settings): Provider {
           systemInstruction: { parts: [{ text: req.systemPrompt }] },
           contents: [{ role: "user", parts: [{ text: req.userPrompt }] }],
         }),
+        signal: req.signal,
       });
       if (!resp.ok) throw new Error(`Gemini API ${resp.status}: ${await resp.text()}`);
       if (!resp.body) throw new Error("response body missing");

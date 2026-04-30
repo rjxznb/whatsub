@@ -7,6 +7,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
+  Captions,
+  CaptionsOff,
   PanelRight,
   PanelRightClose,
   Pause,
@@ -17,6 +19,8 @@ import {
   VolumeX,
 } from "lucide-react";
 import { formatTime } from "../utils/time";
+import { CaptionOverlay } from "./CaptionOverlay";
+import type { Subtitle } from "../llm/types";
 
 interface Props {
   src: string;
@@ -26,12 +30,18 @@ interface Props {
   /** Called when the user clicks the subtitle pane toggle button. The parent
    *  owns the split layout. */
   onTogglePanel?: () => void;
+  /** Subtitle whose [time, endTime] currently contains the playhead, or null. */
+  currentSubtitle?: Subtitle | null;
+  /** Whether the bilingual caption overlay is enabled. */
+  showCaptions?: boolean;
+  /** Called when the user toggles the caption overlay. */
+  onToggleCaptions?: () => void;
 }
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
-  { src, panelOpen, onTogglePanel },
+  { src, panelOpen, onTogglePanel, currentSubtitle, showCaptions, onToggleCaptions },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -306,6 +316,10 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         onClick={togglePlay}
       />
 
+      {/* Bilingual caption overlay — sits above where the controls render,
+          stays visible regardless of control auto-hide. */}
+      {showCaptions && <CaptionOverlay subtitle={currentSubtitle ?? null} />}
+
       {/* 2x boost indicator (top-center, while ←/→ held) */}
       {boost2x && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-none z-20">
@@ -463,6 +477,25 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
               </div>
             )}
           </div>
+
+          {/* Toggle bilingual caption overlay */}
+          {onToggleCaptions && (
+            <button
+              type="button"
+              onClick={onToggleCaptions}
+              title={showCaptions ? "关闭字幕叠加" : "在视频下方显示中英文字幕"}
+              className={
+                "flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors " +
+                (showCaptions ? "bg-white/15 hover:bg-white/25" : "hover:bg-white/20")
+              }
+            >
+              {showCaptions ? (
+                <Captions className="h-6 w-6" />
+              ) : (
+                <CaptionsOff className="h-6 w-6" />
+              )}
+            </button>
+          )}
 
           {/* Toggle subtitle pane (only if parent provided handler) */}
           {onTogglePanel && (

@@ -191,6 +191,13 @@ export function Library() {
         >
           + Import
         </button>
+        <Link
+          to="/vocab"
+          className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
+          title="我的词汇本"
+        >
+          ⭐ 词汇本
+        </Link>
         <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
           ⚙
         </Link>

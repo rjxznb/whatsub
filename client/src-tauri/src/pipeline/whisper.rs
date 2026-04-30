@@ -131,6 +131,30 @@ pub async fn transcribe(
             );
         }
     };
+    // Backend detection — whisper-cli prints e.g.
+    //   ggml_vulkan: Found 2 Vulkan devices:
+    //   ggml_vulkan: 0 = NVIDIA GeForce RTX 4090 (NVIDIA) | uma: 0 | fp16: 1 ...
+    // on startup. We capture the first device line (id "0 =") and emit
+    // BackendDetected once per run so the UI can render the active accelerator.
+    let app_for_backend = app.clone();
+    let backend_emitted = std::sync::atomic::AtomicBool::new(false);
+    let backend_emitted = std::sync::Arc::new(backend_emitted);
+    let backend_emitted_clone = backend_emitted.clone();
+    let detect_backend = move |chunk: &str| {
+        if backend_emitted_clone.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        for line in chunk.lines() {
+            if let Some(name) = detect_backend_line(line) {
+                emit(
+                    &app_for_backend,
+                    PipelineEvent::BackendDetected { name },
+                );
+                backend_emitted_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                break;
+            }
+        }
+    };
     run_sidecar(
         app,
         "whisper-cli",
@@ -144,6 +168,7 @@ pub async fn transcribe(
         ],
         move |line| {
             emit_log(line);
+            detect_backend(line);
             if let Some(p) = parse_progress(line) {
                 emit(
                     &app_clone,
@@ -156,6 +181,11 @@ pub async fn transcribe(
         },
     )
     .await?;
+    // If whisper-cli ran without ever printing a Vulkan device line, it fell
+    // back to CPU. Surface that explicitly so the UI doesn't say "未检测".
+    if !backend_emitted.load(std::sync::atomic::Ordering::Relaxed) {
+        emit(app, PipelineEvent::BackendDetected { name: "CPU".into() });
+    }
 
     Ok(out_dir.join("transcript.srt"))
 }
@@ -168,6 +198,38 @@ fn parse_progress(line: &str) -> Option<u8> {
         return pct_str.parse::<u8>().ok();
     }
     None
+}
+
+/// Parse the first whisper.cpp device line, e.g.
+///   `ggml_vulkan: 0 = NVIDIA GeForce RTX 4090 (NVIDIA) | uma: 0 | ...`
+/// into `"Vulkan / NVIDIA GeForce RTX 4090"`.
+/// CUDA / CoreML / Metal builds emit similar `ggml_<backend>: ...` patterns;
+/// we generalize by recognizing any `ggml_<word>: 0 = <name>` form.
+fn detect_backend_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    // Expect "ggml_<backend>:" prefix
+    let rest = trimmed.strip_prefix("ggml_")?;
+    let (backend, after) = rest.split_once(':')?;
+    let after = after.trim();
+    // Only the device-id 0 line is useful (later lines are extra devices).
+    let payload = after.strip_prefix("0 =")?.trim();
+    // Cut off anything from the first " (" or " | " — keeps just the model name.
+    let name_end = payload
+        .find(" (")
+        .or_else(|| payload.find(" | "))
+        .unwrap_or(payload.len());
+    let model = payload[..name_end].trim();
+    if model.is_empty() {
+        return None;
+    }
+    let backend_label = match backend {
+        "vulkan" => "Vulkan",
+        "cuda" => "CUDA",
+        "metal" => "Metal",
+        "sycl" => "SYCL",
+        other => return Some(format!("{other} / {model}")),
+    };
+    Some(format!("{backend_label} / {model}"))
 }
 
 #[cfg(test)]
@@ -187,5 +249,30 @@ mod tests {
     fn model_info_known_size() {
         assert!(model_info("small").is_some());
         assert!(model_info("nonexistent").is_none());
+    }
+
+    #[test]
+    fn parses_vulkan_device_line() {
+        let line = "ggml_vulkan: 0 = NVIDIA GeForce RTX 4090 (NVIDIA) | uma: 0 | fp16: 1";
+        assert_eq!(
+            detect_backend_line(line),
+            Some("Vulkan / NVIDIA GeForce RTX 4090".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_cuda_device_line() {
+        let line = "ggml_cuda: 0 = NVIDIA GeForce RTX 4090 | shared mem: 49152";
+        assert_eq!(
+            detect_backend_line(line),
+            Some("CUDA / NVIDIA GeForce RTX 4090".to_string())
+        );
+    }
+
+    #[test]
+    fn skips_non_device_lines() {
+        assert_eq!(detect_backend_line("ggml_vulkan: Found 2 Vulkan devices:"), None);
+        assert_eq!(detect_backend_line("whisper_init_state: ..."), None);
+        assert_eq!(detect_backend_line("ggml_vulkan: 1 = AMD Radeon"), None);
     }
 }

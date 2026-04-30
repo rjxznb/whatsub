@@ -33,124 +33,128 @@ breaks auto-update for all existing installs (they have the old public key
 burned in and won't accept signatures from a new private key). Users would
 have to manually reinstall.
 
-## Per-release steps
+## Release flow
+
+One workflow (`.github/workflows/release.yml`) builds both Windows and
+macOS in parallel and publishes a single GitHub Release with one
+assembled `latest.json`. No more local-build-and-drag-drop.
+
+```
+                ┌─ build-windows (windows-latest, ~25 min)
+                │     install Vulkan SDK → build whisper.cpp Vulkan
+workflow_       │     → fetch yt-dlp.exe + ffmpeg.exe
+dispatch  ──────┤     → pnpm tauri build --bundles msi
+                │     → upload .msi + .msi.sig artifact
+                │
+                └─ build-macos (macos-14, ~10 min)
+                      build whisper.cpp Metal → install_name_tool
+                      → fetch yt-dlp + ffmpeg arm64
+                      → pnpm tauri build (.dmg + .app.tar.gz + .sig)
+                      → upload artifact
+                                       │
+                                       ▼
+                          publish (ubuntu-latest, ~30 s)
+                          download both artifacts
+                          → create release on rjxznb/Get_Video-releases
+                          → upload all 5 files
+                          → assemble + upload latest.json
+                            (windows-x86_64 + darwin-aarch64)
+```
 
 ### 1. Bump the version (3 places must match)
 
-Edit:
+Commit + push these before triggering the workflow:
 
 - `client/package.json` → `"version": "X.Y.Z"`
 - `client/src-tauri/tauri.conf.json` → `"version": "X.Y.Z"`
 - `client/src-tauri/Cargo.toml` → `version = "X.Y.Z"`
 
-Semver guidance:
+Semver:
 - Patch (0.1.0 → 0.1.1) — bug fixes only
 - Minor (0.1.0 → 0.2.0) — new features, backward compatible
 - Major (0.1.0 → 1.0.0) — breaking changes (rare)
 
-### 2. Build with signing
+If versions don't agree, the Cargo build fails inside the runner — cheap
+to catch but expensive in wall time, so double-check before triggering.
 
-```powershell
-# PowerShell on Windows
-cd C:\Users\renjx\Desktop\Get_Video\client
+### 2. Trigger the workflow
 
-# Read the private key into env (no password set on this key)
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$env:USERPROFILE\.tauri\eversay-studio.key"
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+GitHub UI → **Actions** → **Release** → **Run workflow**. Inputs:
 
-pnpm tauri build
-```
+| Input | Default | Notes |
+|---|---|---|
+| `release_notes` | `Bug fixes and improvements` | Markdown OK; shown in the in-app update toast |
+| `whisper_tag` | `v1.8.4` | whisper.cpp git tag built from source on both runners |
+| `vulkan_sdk_version` | `1.4.341.0` | LunarG Vulkan SDK for the Windows whisper-cli build |
+| `ffmpeg_url_macos` | `https://www.osxexperts.net/ffmpeg711arm.zip` | Static arm64 ffmpeg |
+| `ffmpeg_url_windows` | `https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip` | Static Windows ffmpeg (zip must contain `bin/ffmpeg.exe`) |
+| `dry_run` | `false` | If `true`: produce artifacts only, skip the publish job |
 
-```bash
-# Or in Git Bash
-cd "C:/Users/renjx/Desktop/Get_Video/client"
-TAURI_SIGNING_PRIVATE_KEY="$(cat $USERPROFILE/.tauri/eversay-studio.key)" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
-pnpm tauri build
-```
+Total wall time ~25 min (Windows is the slow one — Vulkan SDK install +
+whisper.cpp Vulkan build + Tauri MSI bundling). Cost: ~25 min Windows
+(2x weight) + ~10 min macOS (10x weight) = ~150 weighted minutes per
+release out of the 2000/month free quota.
 
-Build takes 5–15 minutes. Watch for `--- Bundling .msi ---` near the end.
+### 3. Test before publishing (optional but recommended)
 
-### 3. Find the artifacts
+For the first run, or when changing whisper.cpp / SDK versions, set
+`dry_run=true`. The build jobs run, the publish job is skipped, and you
+can download the artifacts from the workflow run page → `windows-bundle`
+and `macos-bundle`. Install the .msi / .dmg on a real machine to verify.
 
-```
-src-tauri/target/release/bundle/msi/
-├── Eversay Studio_X.Y.Z_x64_en-US.msi          ← installer
-└── Eversay Studio_X.Y.Z_x64_en-US.msi.sig      ← detached signature
-```
+If everything looks good, re-trigger with `dry_run=false`. (Or, since the
+artifacts are retained 7 days, you can re-run only the publish job.)
 
-> Tauri's `bundle.createUpdaterArtifacts: true` setting (already configured)
-> ensures the `.sig` is produced. If missing, double-check the env vars set
-> in step 2.
+### 4. What the publish job does
 
-### 4. Author `latest.json`
+Runs only when `dry_run=false` and both build jobs succeeded. On
+`ubuntu-latest`:
 
-The file the updater fetches to decide if there's a new version. Create
-locally:
+1. Reads version from `client/src-tauri/tauri.conf.json`
+2. Creates `vX.Y.Z` release on `rjxznb/Get_Video-releases` if missing
+   (using `RELEASES_REPO_TOKEN` PAT)
+3. Uploads `.msi`, `.msi.sig`, `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`
+   with `gh release upload --clobber`
+4. Assembles `latest.json` from scratch — both platforms in one call,
+   with raw `.sig` text content (Tauri 2 spec, jq-escaped) — and uploads
 
-```json
-{
-  "version": "X.Y.Z",
-  "notes": "Brief, user-facing release notes (shown in the toast).",
-  "pub_date": "2026-04-28T10:00:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "<paste contents of .msi.sig file here, single line>",
-      "url": "https://github.com/rjxznb/Get_Video-releases/releases/download/vX.Y.Z/Eversay.Studio_X.Y.Z_x64_en-US.msi"
-    }
-  }
-}
-```
-
-Notes on each field:
-- `version` — must match the version in `tauri.conf.json` exactly
-- `notes` — Markdown is OK; shown in the update toast
-- `pub_date` — ISO 8601 UTC, used to display "X days ago"
-- `signature` — the **whole text content** of `.msi.sig` (multiple lines),
-  paste as-is (or join with `\n` if your JSON requires single-line strings)
-- `url` — the full download URL of the .msi as hosted on the release repo.
-  Note the URL uses dots not spaces in the filename — Tauri's GitHub release
-  upload mangles spaces; either rename the file before upload or write the
-  URL with whatever the actual asset URL becomes.
-
-### 5. Cut a GitHub Release
-
-On the public release repo (`rjxznb/Get_Video-releases`):
-
-1. Releases → "Draft a new release"
-2. Tag: `vX.Y.Z` (create new)
-3. Title: `Eversay Studio vX.Y.Z`
-4. Description: paste the same notes as in `latest.json`
-5. Drag-drop the three files as release assets:
-   - `Eversay Studio_X.Y.Z_x64_en-US.msi`
-   - `Eversay Studio_X.Y.Z_x64_en-US.msi.sig`
-   - `latest.json`
-6. **Mark as latest release** (default if vX.Y.Z is the highest tag)
-7. Publish
-
-### 6. Verify
-
-Wait ~30 seconds, then check that the `latest.json` is fetchable from
-the URL the app uses:
+### 5. Verify
 
 ```bash
-curl https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json
+curl -s https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json | jq .
 ```
 
-Should return the JSON you uploaded. If 404, double-check:
-- Release was actually published (not still draft)
-- Asset filename is exactly `latest.json` (case-sensitive)
-
-### 7. Test the update path
+Should show `version`, `pub_date`, and a `platforms` object with both
+`windows-x86_64` and `darwin-aarch64` entries.
 
 On a machine with the previous version installed:
 
 1. Restart the app
-2. ~3 seconds after launch, the bottom-right toast should appear:
+2. ~3 seconds after launch, the bottom-right toast appears:
    "发现新版本 vX.Y.Z"
 3. Click "立即更新" → progress bar → app restarts → new version
 
 Or trigger manually: Settings → 应用版本 → 「检查更新」.
+
+For the `.dmg` on a fresh Mac, first launch hits Gatekeeper "已损坏" —
+documented user bypass is System Settings → 隐私与安全性 → 仍要打开
+(or `xattr -cr <app>`). No notarization yet (no Apple Developer account).
+
+## Required secrets
+
+Set these once on the **private** repo (Settings → Secrets and variables
+→ Actions → Repository secrets):
+
+| Secret | Purpose | Format |
+|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | Sign installers → produce `.sig` (Win + Mac share the same key) | Full PEM contents of `~/.tauri/eversay-studio.key` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Decrypt the key | Empty string for our key |
+| `RELEASES_REPO_TOKEN` | Publish job uses `gh` to upload assets to the public release repo | Fine-grained PAT, expiry ≥ next release, **resource owner = your account, repository access = `rjxznb/Get_Video-releases` only**, permissions: `Contents: Read and write` |
+
+The Tauri signing key in CI must match the public key embedded at
+`client/src-tauri/tauri.conf.json` `plugins.updater.pubkey`. They were
+generated together; don't re-key without rotating both (see "One-time
+setup" above).
 
 ## How users experience updates
 
@@ -167,33 +171,53 @@ Or trigger manually: Settings → 应用版本 → 「检查更新」.
 
 ## Troubleshooting
 
-### `signature verification failed`
+### `signature verification failed` in user's app
 The `.sig` content in `latest.json` doesn't match what Tauri's signing
-produced for the .msi. Common causes:
-- `.sig` was edited (whitespace, missing trailing newline) — re-export
-  fresh and paste the raw contents
-- `.msi` URL points to a different file than the `.sig` was signed for —
-  re-build and re-upload both together
-- The public key in `tauri.conf.json` doesn't match the private key —
-  shouldn't happen unless keys were re-generated mid-cycle
+produced for the .msi / .app.tar.gz. Common causes:
+- The public key in `tauri.conf.json` doesn't match the private key used
+  in CI — shouldn't happen unless keys were re-generated. Don't re-key
+  without rotating both sides.
+- The `.sig` text was mangled in transit. The publish job uses `jq --arg`
+  which preserves multi-line text correctly; if you ever hand-author
+  `latest.json`, paste the **whole** `.sig` content (multiple lines, as
+  produced by Tauri) — do NOT base64-encode it.
 
 ### `Failed to fetch latest.json`
-- Public repo not actually public: verify in repo settings
-- Asset name typo: must be exactly `latest.json` (lowercase, .json suffix)
-- The `/latest/download/` URL only works on the most-recent release tagged
-  as "latest" — make sure you marked it as such
+- Release wasn't actually published (still draft): check the public repo
+- Asset name typo: must be exactly `latest.json`, lowercase
+- `/latest/download/` only works on the release marked "latest" — usually
+  automatic, but if you've published a newer-tagged draft on top of an
+  older live release, check the "Set as latest release" checkbox.
+
+### Vulkan SDK installer step fails
+LunarG occasionally rotates installer URLs. Verify
+`https://sdk.lunarg.com/sdk/download/<version>/windows/VulkanSDK-<version>-Installer.exe`
+returns 200, and bump `vulkan_sdk_version` workflow input as needed.
+
+### Whisper.cpp DLL / dylib missing after build
+Build script copies `whisper.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`,
+`ggml-vulkan.dll` on Windows; matching `lib*.0.dylib` set on Mac. If
+whisper.cpp ever splits the GGML modules differently in a newer tag, the
+"Stage Windows binaries/" / "Stage whisper artifacts" steps fail with
+`missing <name>` — list the actual outputs and update the file lists in
+both the workflow and `client/src-tauri/build.rs`.
 
 ### Auto-check seems disabled
 In dev mode (`pnpm tauri dev`), the auto-check still runs but Tauri's
 endpoint check often fails because the dev binary's version (0.1.0) matches
-or exceeds whatever's deployed. Test the update path in a built MSI instead.
+or exceeds whatever's deployed. Test the update path with an installed
+build (the `.msi` from the workflow artifact) instead.
 
 ## File locations summary
 
 | File | Purpose | Where |
 |---|---|---|
-| Private signing key | Sign .msi → produce .sig | `secrets/eversay-studio.key` (repo backup) + `%USERPROFILE%\.tauri\eversay-studio.key` (active) |
-| Public verification key | Verify .sig in user's app | `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey` (committed) |
-| Built .msi | The installer | `client/src-tauri/target/release/bundle/msi/*.msi` |
-| Built .msi.sig | Detached Ed25519 signature | Same dir as the .msi |
-| `latest.json` | Update manifest the app fetches | Hand-authored each release; uploaded to public release repo |
+| Private signing key | Sign installers → produce `.sig` (shared by Win + Mac) | `secrets/eversay-studio.key` (repo backup) + `%USERPROFILE%\.tauri\eversay-studio.key` (active local copy) + `TAURI_SIGNING_PRIVATE_KEY` GitHub secret |
+| Public verification key | Verify `.sig` in user's app | `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey` (committed) |
+| `RELEASES_REPO_TOKEN` | Publish job → upload assets to public release repo | GitHub secret (fine-grained PAT, scoped only to `rjxznb/Get_Video-releases`, contents: read+write) |
+| `release.yml` | Unified Win+Mac release workflow | `.github/workflows/release.yml` |
+| `build-mac-binaries.yml` | (separate concern) Refresh Mac sidecar binaries committed to repo for local dev | `.github/workflows/build-mac-binaries.yml` |
+| Built `.msi` + `.msi.sig` | Windows installer + signature | Built in CI runner, uploaded to release |
+| Built `.dmg` | Mac installer (first install) | Built in CI runner, uploaded to release |
+| Built `.app.tar.gz` + `.sig` | Mac updater bundle + signature | Built in CI runner, uploaded to release |
+| `latest.json` | Update manifest the app fetches | Generated by the `publish` job each release, both platforms in one file |

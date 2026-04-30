@@ -1,0 +1,143 @@
+# Build the macOS Apple Silicon .dmg installer for a release.
+#
+# Manually triggered: produces .dmg + .app artifacts that you download and
+# upload to the public Get_Video-releases repo as a Release asset.
+#
+# v1 does NOT publish updater artifacts for Mac — first-time install only.
+# (Auto-update for Mac would need TAURI_SIGNING_PRIVATE_KEY in CI secrets +
+#  an entry in latest.json. tauri.macos.conf.json sets createUpdaterArtifacts
+#  to false to skip that whole codepath.)
+
+name: Release macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_tag:
+        description: 'whisper.cpp tag'
+        required: true
+        default: 'v1.8.4'
+      ffmpeg_url:
+        description: 'Static ffmpeg arm64 zip URL'
+        required: true
+        default: 'https://www.osxexperts.net/ffmpeg711arm.zip'
+
+jobs:
+  build:
+    runs-on: macos-14    # Apple Silicon
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ─── Repopulate binaries/ on the runner (gitignored on disk) ─────
+      - name: Build whisper.cpp (Metal)
+        run: |
+          git clone --depth 1 --branch ${{ inputs.whisper_tag }} https://github.com/ggerganov/whisper.cpp.git whisper-src
+          cd whisper-src
+          cmake -S . -B build \
+            -DGGML_METAL=ON -DBUILD_SHARED_LIBS=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Stage whisper artifacts into binaries/
+        run: |
+          BIN=client/src-tauri/binaries
+          mkdir -p $BIN
+          WHISPER_CLI=$(find whisper-src/build -name whisper-cli -type f ! -name "*.dSYM*" | head -1)
+          cp "$WHISPER_CLI" "$BIN/whisper-cli-aarch64-apple-darwin"
+
+          # Copy major-version dylibs (the names whisper-cli @rpath references)
+          for name in libwhisper.1 libggml.0 libggml-base.0 libggml-blas.0 libggml-cpu.0 libggml-metal.0; do
+            f=$(find whisper-src/build -name "${name}.dylib" -type f | head -1)
+            [ -n "$f" ] && cp "$f" "$BIN/${name}.dylib"
+          done
+          ls -la $BIN/
+
+      - name: Fix dylib install_names + ad-hoc codesign
+        run: |
+          cd client/src-tauri/binaries
+          for f in *.dylib; do
+            install_name_tool -id "@loader_path/$f" "$f" || true
+            for ref in $(otool -L "$f" | awk 'NR>1 {print $1}'); do
+              base=$(basename "$ref")
+              if [ -f "$base" ] && [ "$ref" != "@loader_path/$base" ]; then
+                install_name_tool -change "$ref" "@loader_path/$base" "$f" || true
+              fi
+            done
+          done
+          for ref in $(otool -L whisper-cli-aarch64-apple-darwin | awk 'NR>1 {print $1}'); do
+            base=$(basename "$ref")
+            if [ -f "$base" ]; then
+              install_name_tool -change "$ref" "@loader_path/$base" whisper-cli-aarch64-apple-darwin || true
+            fi
+          done
+          for f in *; do
+            [ -f "$f" ] && codesign --force --sign - "$f" || true
+          done
+
+      - name: Download static ffmpeg (arm64)
+        run: |
+          curl -L -o ffmpeg.zip "${{ inputs.ffmpeg_url }}"
+          unzip -o ffmpeg.zip -d ffmpeg-extract
+          BIN=$(find ffmpeg-extract -name ffmpeg -type f | head -1)
+          cp "$BIN" client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+          chmod +x client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+
+      - name: Download yt-dlp
+        run: |
+          curl -L -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          chmod +x client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin
+
+      # ─── Build the Tauri app ───────────────────────────────────────────
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Tauri build (.dmg + .app, no updater bundle)
+        working-directory: client
+        # No TAURI_SIGNING_PRIVATE_KEY → skip updater artifacts; createUpdater-
+        # Artifacts is also false in tauri.macos.conf.json so this is double-safe.
+        run: pnpm tauri build --bundles dmg,app
+
+      - name: Show bundle output
+        run: |
+          ls -la client/src-tauri/target/release/bundle/dmg/ || true
+          ls -la client/src-tauri/target/release/bundle/macos/ || true
+
+      # ─── Ad-hoc codesign the .app inside the .dmg ─────────────────────
+      # Without this, dyld refuses to load the bundled dylibs even after
+      # the user clicks past Gatekeeper. install_name_tool already fixed
+      # rpaths; this just makes the loader accept the unsigned bundle.
+      - name: Ad-hoc codesign .app
+        run: |
+          APP=$(find client/src-tauri/target/release/bundle/macos -name "*.app" -maxdepth 2 -type d | head -1)
+          if [ -n "$APP" ]; then
+            codesign --force --deep --sign - "$APP" || true
+            codesign -dv "$APP" 2>&1 | head -5
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: |
+            client/src-tauri/target/release/bundle/dmg/*.dmg
+            client/src-tauri/target/release/bundle/macos/*.app
+          retention-days: 30
+          if-no-files-found: error

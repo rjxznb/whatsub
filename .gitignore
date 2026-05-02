@@ -54,6 +54,13 @@ __pycache__/
 scripts/video_sourcing/cookies.txt
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+# Signing keys and certs MUST stay out of the repo (history was rewritten
+# in 2026-05 to remove a tracked Tauri minisign private key before going
+# public — never re-commit signing material)
+secrets/
+*.p12
+*.cer
+apple-signing/
 
 # Release artifacts (workflow generates these and uploads to release repo)
 client/latest.json

@@ -8,8 +8,8 @@
 
 | 平台 | 下载 | 说明 |
 |------|------|------|
-| Windows 10/11 x64 | [v0.1.5 .msi](https://github.com/rjxznb/Get_Video-releases/releases/download/v0.1.5/Eversay.Studio_0.1.5_x64_en-US.msi) | 双击安装，自动更新 |
-| macOS Apple Silicon | [v0.1.5 .dmg](https://github.com/rjxznb/Get_Video-releases/releases/download/v0.1.5/Eversay.Studio_0.1.5_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg 拖入 Applications 即可 |
+| Windows 10/11 x64 | [v0.1.5 .msi](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.5/Eversay.Studio_0.1.5_x64_en-US.msi) | 双击安装，自动更新 |
+| macOS Apple Silicon | [v0.1.5 .dmg](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.5/Eversay.Studio_0.1.5_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg 拖入 Applications 即可 |
 | Intel Mac | — | 暂不支持 |
 
 ## 主要功能
@@ -41,4 +41,4 @@
 
 ## 反馈
 
-GitHub Issues: <https://github.com/rjxznb/Get_Video-releases/issues>
+GitHub Issues: <https://github.com/rjxznb/whatsub-releases/issues>

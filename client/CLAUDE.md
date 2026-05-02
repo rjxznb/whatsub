@@ -44,7 +44,7 @@ client/
 
 ### Tauri config
 
-- `tauri.conf.json` (base / Windows): `externalBin` lists 4 sidecar basenames (`yt-dlp`, `ffmpeg`, `whisper-cli`, `node`); `bundle.resources` ships the Vulkan whisper DLLs; assetProtocol scope = `$DATA/whatsub/**`, `$LOCALDATA/whatsub/**`, `**/*.{mp4,jpg,...}`.
+- `tauri.conf.json` (base / Windows): `productName: "whatsub"`, `identifier: "com.whatsub.app"` (drives MSI UpgradeCode + macOS bundle ID); `externalBin` lists 4 sidecar basenames (`yt-dlp`, `ffmpeg`, `whisper-cli`, `node`); `bundle.resources` ships the Vulkan whisper DLLs; assetProtocol scope = `$DATA/whatsub/**`, `$LOCALDATA/whatsub/**`, `**/*.{mp4,jpg,...}`.
 - `tauri.macos.conf.json` (overlay): `bundle.macOS.frameworks` lists the 6 dylibs whisper-cli @rpaths against (`libwhisper.1.dylib`, `libggml.0.dylib`, `libggml-{base,blas,cpu,metal}.0.dylib`).
 - `capabilities/default.json`: scoped `shell:allow-execute` per sidecar.
 

@@ -1,0 +1,190 @@
+# Finalize a Mac release whose notarization didn't complete in the main
+# release.yml run. Use after release.yml's Mac job timed out on the
+# 50-min poll. This workflow:
+#
+#   1. Downloads the signed-but-unstapled artifacts (`macos-bundle-signed`)
+#      from the prior release.yml run.
+#   2. Polls Apple notary for the existing submission until Accepted
+#      (default 5 hour cap — enough for first-time-account warm-up).
+#   3. Staples the ticket to .dmg + .app, repackages .app.tar.gz from
+#      the stapled .app, and re-signs the updater .sig.
+#   4. Uploads the finalized artifacts as `macos-bundle-finalized`.
+#
+# After this completes, manually upload the finalized assets to the
+# public release with `gh release upload <tag> --clobber` and re-stitch
+# latest.json. (Or re-trigger release.yml's publish flow with the macos
+# job skipped — TODO: an `import-finalized` flag.)
+
+name: Finalize Mac (post-notarization)
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        description: 'Apple notary submission UUID (from release.yml run log, or read from submission_id.txt in the artifact)'
+        required: true
+      source_run_id:
+        description: 'release.yml run ID that produced macos-bundle-signed (from the run URL)'
+        required: true
+      poll_max_minutes:
+        description: 'Max minutes to wait for Apple notary (default 300 = 5h, accommodates first-account warm-up)'
+        required: true
+        default: '300'
+
+jobs:
+  finalize:
+    runs-on: macos-14
+    timeout-minutes: 350    # poll_max default + slack
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout (need package.json for tauri signer)
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install JS deps (provides tauri CLI for signer sign)
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Download signed-only artifact from source run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh run download "${{ inputs.source_run_id }}" \
+            --repo "${{ github.repository }}" \
+            --name macos-bundle-signed \
+            --dir dist
+          echo "--- downloaded ---"
+          find dist -maxdepth 3 -type f -o -type d | head -30
+
+      - name: Locate artifacts + verify SID matches
+        id: locate
+        run: |
+          set -e
+          DMG=$(find dist -name "*.dmg" -type f | head -1)
+          APP_TARGZ=$(find dist -name "*.app.tar.gz" -type f | head -1)
+          [ -f "$DMG" ] || { echo "::error::.dmg missing"; exit 1; }
+          [ -f "$APP_TARGZ" ] || { echo "::error::.app.tar.gz missing"; exit 1; }
+          SID_INPUT="${{ inputs.submission_id }}"
+          if [ -f dist/submission_id.txt ]; then
+            SID_FILE=$(cat dist/submission_id.txt)
+            if [ "$SID_INPUT" != "$SID_FILE" ]; then
+              echo "::warning::input submission_id ($SID_INPUT) differs from artifact ($SID_FILE) — using input"
+            fi
+          fi
+          {
+            echo "dmg=$DMG"
+            echo "app_targz=$APP_TARGZ"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Poll Apple notary until Accepted
+        run: |
+          set -e
+          SID="${{ inputs.submission_id }}"
+          MAX_MIN="${{ inputs.poll_max_minutes }}"
+          MAX_POLLS=$((MAX_MIN * 2))   # 30s per poll
+          STATUS="Pending"
+          for i in $(seq 1 "$MAX_POLLS"); do
+            INFO=$(xcrun notarytool info "$SID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --output-format json 2>/dev/null || echo '{}')
+            STATUS=$(echo "$INFO" | jq -r '.status // "Unknown"')
+            printf '[poll %4d / %6ds] status=%s\n' "$i" "$((i*30))" "$STATUS"
+            case "$STATUS" in
+              Accepted)
+                echo "::notice::✓ Apple accepted submission $SID"
+                exit 0
+                ;;
+              Invalid|Rejected)
+                echo "::error::Apple rejected submission $SID ($STATUS)"
+                xcrun notarytool log "$SID" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Notarization still '$STATUS' after $MAX_MIN min — submission=$SID"
+          exit 1
+
+      - name: Extract .app from .app.tar.gz (recover bundle for stapling)
+        id: extract
+        run: |
+          set -e
+          APP_TARGZ="${{ steps.locate.outputs.app_targz }}"
+          WORK=dist/staple-work
+          mkdir -p "$WORK"
+          tar -xzf "$APP_TARGZ" -C "$WORK"
+          APP=$(find "$WORK" -maxdepth 2 -name "*.app" -type d | head -1)
+          [ -d "$APP" ] || { echo "::error::failed to extract .app"; exit 1; }
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+
+      - name: Staple notarization ticket to .dmg + .app
+        run: |
+          set -e
+          xcrun stapler staple "${{ steps.locate.outputs.dmg }}"
+          xcrun stapler staple "${{ steps.extract.outputs.app }}"
+
+      - name: Repackage .app.tar.gz with stapled .app + regenerate updater .sig
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -e
+          APP="${{ steps.extract.outputs.app }}"
+          APP_TARGZ_OLD="${{ steps.locate.outputs.app_targz }}"
+          APP_DIR=$(dirname "$APP")
+          APP_NAME=$(basename "$APP")
+          TARGZ_NAME=$(basename "$APP_TARGZ_OLD")
+          # Re-tar the now-stapled .app under the original name; place it
+          # next to the original artifact so upload-artifact picks it up.
+          rm -f "$APP_TARGZ_OLD"
+          ( cd "$APP_DIR" && tar -czf "$TARGZ_NAME" "$APP_NAME" )
+          mv "$APP_DIR/$TARGZ_NAME" "$APP_TARGZ_OLD"
+          rm -f "${APP_TARGZ_OLD}.sig"
+          pnpm tauri signer sign "$APP_TARGZ_OLD"
+          ls -la "$APP_TARGZ_OLD" "${APP_TARGZ_OLD}.sig"
+
+      - name: Verify signature + notarization
+        run: |
+          set +e
+          DMG="${{ steps.locate.outputs.dmg }}"
+          APP="${{ steps.extract.outputs.app }}"
+          echo "=== codesign -dvv (.app) ==="
+          codesign -dvv "$APP" 2>&1 | head -20
+          echo "=== spctl assess (.app) ==="
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1 | head -5
+          echo "=== stapler validate (.app) ==="
+          xcrun stapler validate "$APP" 2>&1
+          echo "=== stapler validate (.dmg) ==="
+          xcrun stapler validate "$DMG" 2>&1
+
+      - name: Upload finalized macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle-finalized
+          path: |
+            ${{ steps.locate.outputs.dmg }}
+            ${{ steps.locate.outputs.app_targz }}
+            ${{ steps.locate.outputs.app_targz }}.sig
+          retention-days: 14
+          if-no-files-found: error

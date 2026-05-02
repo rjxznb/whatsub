@@ -447,7 +447,8 @@ jobs:
           echo "--- artifacts ---"
           ls -la "$DMG" "$APP_TARGZ"
 
-      - name: Notarize .dmg (submit + poll status, 50 min cap)
+      - name: Submit .dmg to Apple notary
+        id: submit
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
@@ -468,11 +469,33 @@ jobs:
             exit 1
           fi
           echo "::notice::Apple notary submission id=$SID"
+          # Persist SID for the safety-net artifact (consumed by finalize-mac.yml).
+          echo "$SID" > submission_id.txt
+          echo "sid=$SID" >> "$GITHUB_OUTPUT"
 
-          # Poll every 30s, cap total wait at 50 min (100 polls).
-          # Visible progress in CI log; on Invalid/Rejected dump Apple's log
-          # immediately. On timeout, exit non-zero with the submission id so
-          # the user can `notarytool log $SID` later.
+      # Always upload signed-but-unstapled artifacts after a successful submit.
+      # If the next poll step times out (Apple's first-account queue can take
+      # hours), the user can recover via finalize-mac.yml without rebuilding.
+      - name: Upload signed-only macOS artifacts (safety net)
+        if: always() && steps.submit.outputs.sid != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle-signed
+          path: |
+            client/src-tauri/target/release/bundle/dmg/*.dmg
+            client/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            submission_id.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Poll Apple notary status (50 min cap)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SID: ${{ steps.submit.outputs.sid }}
+        run: |
+          set -e
           STATUS="Pending"
           for i in $(seq 1 100); do
             sleep 30
@@ -499,7 +522,7 @@ jobs:
             esac
           done
           echo "::error::Notarization still '$STATUS' after 50 min — submission=$SID"
-          echo "::error::Run \`xcrun notarytool info $SID\` later to check, or staple manually once Accepted"
+          echo "::error::To finalize without rebuild: run finalize-mac.yml with submission_id=$SID, source_run_id=${{ github.run_id }}"
           exit 1
 
       - name: Staple notarization ticket to .dmg + .app

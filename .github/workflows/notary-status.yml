@@ -1,0 +1,42 @@
+# Quick notarytool status check.
+#
+# Run from Actions UI when you want to know whether an Apple notary
+# submission has finished, without spinning up a full release. Useful
+# while waiting on first-time-account queue (can take hours).
+
+name: Notary Status Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      submission_id:
+        description: 'Apple notary submission UUID (from a prior release run log)'
+        required: true
+
+jobs:
+  check:
+    runs-on: macos-14
+    timeout-minutes: 5
+    env:
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: notarytool info
+        run: |
+          set -e
+          SID="${{ inputs.submission_id }}"
+          echo "=== info $SID ==="
+          xcrun notarytool info "$SID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --output-format json | jq .
+
+      - name: notarytool history (last 20)
+        run: |
+          xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --output-format json | jq '.history[:20] | map({id, name, status, createdDate})'

@@ -385,13 +385,39 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 </div>
 
                 <div>
-                  <span className="text-amber-300">①  没有梯子（中国大陆）：</span>
-                  YouTube / Bilibili 国际站等都需要梯子。yt-dlp 走系统代理，请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN，浏览器能正常访问对应站点。
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-amber-300">①  没有梯子（中国大陆）：</span>
+                  </div>
+                  <div className="mt-1">
+                    YouTube / Bilibili 国际站等都需要梯子。yt-dlp 走系统代理，请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN，浏览器能正常访问对应站点。
+                  </div>
+                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug">
+                    📋 报错示例：
+                    <code className="bg-zinc-900 px-1 rounded text-zinc-400 break-all">
+                      ERROR: Unable to download webpage: &lt;urlopen error [Errno 11001] getaddrinfo failed&gt;
+                    </code>
+                    {" "}/ <code className="bg-zinc-900 px-1 rounded text-zinc-400">connection timed out</code>
+                    ，或长时间卡在「准备阶段」无进度。
+                  </div>
                 </div>
 
                 <div>
-                  <span className="text-amber-300">②  YouTube 偶尔需要 cookies：</span>
-                  即使有梯子，YouTube 检测到流量来自代理时会要求登录验证（"Sign in to confirm you're not a bot"），需要 cookies 通过。
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-amber-300">②  YouTube 需要 cookies：</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-medium">
+                      🌟 最常见
+                    </span>
+                  </div>
+                  <div className="mt-1">
+                    即使有梯子，YouTube 检测到流量来自代理时会要求登录验证。这是绝大多数下载失败的原因——按下面 ③ 导出 cookies 后基本能解决。
+                  </div>
+                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug">
+                    📋 报错关键词：
+                    <code className="bg-zinc-900 px-1 rounded text-rose-300">
+                      Sign in to confirm you're not a bot
+                    </code>
+                    {" "}— 看到这条就 100% 是这个问题。
+                  </div>
                 </div>
 
                 <div>
@@ -440,8 +466,33 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 </div>
 
                 <div>
-                  <span className="text-amber-300">④  视频本身限制：</span>
-                  会员/付费/年龄限制/区域锁定的视频 yt-dlp 也下不了，跟代理无关。
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-amber-300">④  视频本身限制：</span>
+                  </div>
+                  <div className="mt-1">
+                    会员/付费/年龄限制/区域锁定/已删除/私密视频 yt-dlp 也下不了，跟代理和 cookies 无关，只能换视频。
+                  </div>
+                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug space-y-0.5">
+                    <div>📋 报错关键词举例：</div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">Members-only video</code>
+                      {" "}→ 频道会员专享
+                    </div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">Sign in to confirm your age</code>
+                      {" "}→ 18+ 年龄限制（需要已确认成年的账号 cookies）
+                    </div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">not made this video available in your country</code>
+                      {" "}→ 区域锁定
+                    </div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">This video is private</code>
+                      {" "}/{" "}
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">removed by the user</code>
+                      {" "}→ 私密 / 已删除
+                    </div>
+                  </div>
                 </div>
 
                 <div className="text-zinc-500 text-[10px] pt-1">

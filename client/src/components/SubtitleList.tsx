@@ -230,10 +230,26 @@ export function SubtitleList({
               e.dataTransfer.setData("text/plain", String(i));
             }}
             onDragOver={(e) => {
-              if (draggedIdx === null || draggedIdx === i) return;
+              // ALWAYS preventDefault during a drag — without it the
+              // browser's default action is "no drop allowed" and the
+              // cursor shows the forbidden symbol. Same-row drops are
+              // filtered later in onDrop. Use the bubble phase here for
+              // the visual highlight, but the capture-phase variant below
+              // is what guarantees the cursor stays "move".
+              if (draggedIdx === null) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              setDragOverIdx(i);
+              if (draggedIdx !== i) setDragOverIdx(i);
+            }}
+            // Capture phase fires BEFORE any nested textarea/input has a
+            // chance to claim the dragover with its native text-drop
+            // behavior. Without this, dragging over a textarea inside a
+            // row caused the browser to set "forbidden" cursor regardless
+            // of the row's bubble-phase handler.
+            onDragOverCapture={(e) => {
+              if (draggedIdx === null) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
             }}
             onDragLeave={() =>
               setDragOverIdx((cur) => (cur === i ? null : cur))
@@ -246,6 +262,12 @@ export function SubtitleList({
               if (from === null || from === i) return;
               reorderSubtitles(from, i);
               notify();
+            }}
+            onDropCapture={(e) => {
+              // Same as above: claim the drop in capture phase so a child
+              // textarea/input can't insert the dragged text/plain payload
+              // ("3" or whatever the source idx is) into its own value.
+              if (draggedIdx !== null) e.preventDefault();
             }}
             onDragEnd={() => {
               setDraggedIdx(null);
@@ -269,8 +291,10 @@ interface EditableRowProps {
   onInsertBelow: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
+  onDragOverCapture: (e: React.DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: React.DragEvent) => void;
+  onDropCapture: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }
 
@@ -285,8 +309,10 @@ function EditableRow({
   onInsertBelow,
   onDragStart,
   onDragOver,
+  onDragOverCapture,
   onDragLeave,
   onDrop,
+  onDropCapture,
   onDragEnd,
 }: EditableRowProps) {
   const [startStr, setStartStr] = useState(formatEditTime(subtitle.time));
@@ -317,8 +343,10 @@ function EditableRow({
       ref={rowRef}
       data-idx={idx}
       onDragOver={onDragOver}
+      onDragOverCapture={onDragOverCapture}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
+      onDropCapture={onDropCapture}
       className={
         "px-2 py-2 border-b border-zinc-800 transition-colors " +
         (isDragged

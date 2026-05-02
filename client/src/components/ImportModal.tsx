@@ -67,6 +67,22 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
+  // Esc closes the help panel first if open; otherwise closes the modal.
+  // The help panel has internal scroll, so we don't want Esc to dismiss the
+  // whole modal while the user is still reading the cookies tutorial.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showHelp) {
+        setShowHelp(false);
+      } else {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showHelp, onClose]);
+
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
@@ -355,8 +371,18 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
               </button>
             </div>
             {showHelp && (
-              <div className="mt-3 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2">
-                <div className="text-zinc-100 font-medium">下载失败常见原因</div>
+              <div className="mt-3 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto">
+                <div className="flex items-start justify-between gap-2 sticky top-0 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-zinc-800 border-b border-zinc-700">
+                  <div className="text-zinc-100 font-medium">下载失败常见原因</div>
+                  <button
+                    type="button"
+                    onClick={() => setShowHelp(false)}
+                    className="text-zinc-500 hover:text-zinc-200 text-base leading-none px-1"
+                    title="关闭 (Esc)"
+                  >
+                    ×
+                  </button>
+                </div>
 
                 <div>
                   <span className="text-amber-300">①  没有梯子（中国大陆）：</span>

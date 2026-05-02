@@ -43,6 +43,10 @@ on:
         description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe)'
         required: true
         default: 'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip'
+      node_version:
+        description: 'Node.js version bundled as sidecar (used by yt-dlp for YouTube n-challenge). Pick an LTS minor — see https://nodejs.org/en/about/previous-releases'
+        required: true
+        default: '22.11.0'
       dry_run:
         description: 'Build artifacts only — do not publish to release repo'
         type: boolean
@@ -176,6 +180,28 @@ jobs:
             | Select-Object -First 1
           if (-not $ffmpeg) { Write-Error "ffmpeg.exe not found in archive"; exit 1 }
           Copy-Item $ffmpeg.FullName "client/src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+
+      # Bundled node.exe for yt-dlp's YouTube n-challenge JS solver.
+      # Without this, downloads fail with "Requested format is not available".
+      - name: Cache Node sidecar (Windows)
+        id: node-cache-win
+        uses: actions/cache@v4
+        with:
+          path: client/src-tauri/binaries/node-x86_64-pc-windows-msvc.exe
+          key: node-windows-${{ inputs.node_version }}
+
+      - name: Download Node sidecar (Windows)
+        if: steps.node-cache-win.outputs.cache-hit != 'true'
+        run: |
+          $v = "${{ inputs.node_version }}"
+          $url = "https://nodejs.org/dist/v$v/node-v$v-win-x64.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile node.zip -UseBasicParsing
+          Expand-Archive -Path node.zip -DestinationPath node-extract -Force
+          $node = Get-ChildItem -Path node-extract -Recurse -Filter "node.exe" `
+            | Select-Object -First 1
+          if (-not $node) { Write-Error "node.exe not found in archive"; exit 1 }
+          Copy-Item $node.FullName "client/src-tauri/binaries/node-x86_64-pc-windows-msvc.exe"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -339,6 +365,30 @@ jobs:
           curl -L -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin \
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
           chmod +x client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin
+
+      # Bundled node for yt-dlp's YouTube n-challenge JS solver — same reason
+      # as Windows. Mac users without Homebrew/node had no fallback before.
+      - name: Cache Node sidecar (macOS arm64)
+        id: node-cache-mac
+        uses: actions/cache@v4
+        with:
+          path: client/src-tauri/binaries/node-aarch64-apple-darwin
+          key: node-macos-arm64-${{ inputs.node_version }}
+
+      - name: Download Node sidecar (macOS arm64)
+        if: steps.node-cache-mac.outputs.cache-hit != 'true'
+        run: |
+          v="${{ inputs.node_version }}"
+          curl -L -o node.tar.gz "https://nodejs.org/dist/v$v/node-v$v-darwin-arm64.tar.gz"
+          tar -xzf node.tar.gz
+          BIN=$(find . -path "*/bin/node" -type f | head -1)
+          if [ -z "$BIN" ]; then
+            echo "::error::node binary not found in archive"
+            find . -name node -type f
+            exit 1
+          fi
+          cp "$BIN" client/src-tauri/binaries/node-aarch64-apple-darwin
+          chmod +x client/src-tauri/binaries/node-aarch64-apple-darwin
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

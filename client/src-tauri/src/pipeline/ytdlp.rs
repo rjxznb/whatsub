@@ -37,21 +37,38 @@ fn sidecar_path(name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
-/// Best-effort node lookup on macOS / Linux. yt-dlp v2026 wants a JS runtime
-/// for full YouTube format support; without one it emits a warning but still
-/// works for most videos. So this lookup is purely a "nice to have".
-fn find_js_runtime() -> Option<(String, String)> {
-    // (name, path) — name is what yt-dlp expects for --js-runtimes <name>:<path>
-    let candidates = [
-        ("node", "/opt/homebrew/bin/node"), // Apple Silicon Homebrew
-        ("node", "/usr/local/bin/node"),    // Intel Homebrew / system
-        ("node", "/usr/bin/node"),
-        ("deno", "/opt/homebrew/bin/deno"),
-        ("deno", "/usr/local/bin/deno"),
+/// Resolve the JS runtime path that yt-dlp will use for YouTube's n-challenge
+/// signature decoding. Without one, downloads fail with `Requested format is
+/// not available` (only image-only formats remain).
+///
+/// Resolution order:
+///  1. **Bundled node sidecar** — present in production installs; this is the
+///     main path. Tauri renames the sidecar at build time to
+///     `node-<target_triple>{.exe}` and drops it next to the main binary.
+///  2. Common system paths (Homebrew on macOS, MSI install on Windows) —
+///     pure dev convenience so `pnpm tauri dev` works without manually
+///     copying the sidecar to `target/debug/`.
+fn js_runtime_arg() -> Option<String> {
+    if let Some(node) = sidecar_path("node") {
+        return Some(format!("node:{}", node.to_string_lossy()));
+    }
+    let candidates: &[&str] = &[
+        // macOS / Linux
+        "/opt/homebrew/bin/node",  // Apple Silicon Homebrew
+        "/usr/local/bin/node",      // Intel Homebrew / system
+        "/usr/bin/node",
+        "/opt/homebrew/bin/deno",
+        "/usr/local/bin/deno",
+        // Windows MSI install (typical npm install)
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files (x86)\\nodejs\\node.exe",
     ];
-    for (name, path) in candidates {
+    for path in candidates {
         if std::path::Path::new(path).exists() {
-            return Some((name.into(), path.into()));
+            // yt-dlp accepts "node:<path>" or "deno:<path>". Pick the right
+            // runtime name based on the executable basename.
+            let runtime = if path.contains("deno") { "deno" } else { "node" };
+            return Some(format!("{runtime}:{path}"));
         }
     }
     None
@@ -133,13 +150,13 @@ pub async fn download(
         args.push(ffmpeg.to_string_lossy().to_string());
     }
 
-    // JS runtime (best-effort). With one, YouTube extraction is fully reliable;
-    // without one, yt-dlp emits a "no JS runtime" warning but most videos still
-    // download. Skip the flag entirely if we can't find a runtime — passing
-    // `--js-runtimes node` when node isn't installed anywhere doesn't help.
-    if let Some((name, path)) = find_js_runtime() {
+    // JS runtime — REQUIRED for YouTube. Without one, yt-dlp's n-challenge
+    // solver fails and all real video formats become unavailable (only
+    // image-only "formats" remain). We bundle node as a sidecar so this is
+    // present in production; dev environment falls back to system paths.
+    if let Some(js) = js_runtime_arg() {
         args.push("--js-runtimes".into());
-        args.push(format!("{name}:{path}"));
+        args.push(js);
     }
 
     args.extend([

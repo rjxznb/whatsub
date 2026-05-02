@@ -60,3 +60,5 @@ client/latest.json
 
 # Stray screenshots / debug images at repo root
 /*.png
+client/.claude/
+

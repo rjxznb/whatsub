@@ -143,8 +143,10 @@ jobs:
           xcrun stapler staple "${{ steps.locate.outputs.dmg }}"
           xcrun stapler staple "${{ steps.extract.outputs.app }}"
 
+      # NOTE: no `working-directory: client` — locate/extract outputs are
+      # repo-root-relative paths under dist/; cwd must stay at repo root.
+      # pnpm runs in client/ via --dir.
       - name: Repackage .app.tar.gz with stapled .app + regenerate updater .sig
-        working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -161,7 +163,8 @@ jobs:
           ( cd "$APP_DIR" && tar -czf "$TARGZ_NAME" "$APP_NAME" )
           mv "$APP_DIR/$TARGZ_NAME" "$APP_TARGZ_OLD"
           rm -f "${APP_TARGZ_OLD}.sig"
-          pnpm tauri signer sign "$APP_TARGZ_OLD"
+          # pnpm --dir changes cwd, so pass absolute path to the file.
+          pnpm --dir client tauri signer sign "$GITHUB_WORKSPACE/$APP_TARGZ_OLD"
           ls -la "$APP_TARGZ_OLD" "${APP_TARGZ_OLD}.sig"
 
       - name: Verify signature + notarization

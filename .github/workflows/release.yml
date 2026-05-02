@@ -40,9 +40,9 @@ on:
         required: true
         default: 'https://www.osxexperts.net/ffmpeg711arm.zip'
       ffmpeg_url_windows:
-        description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe)'
+        description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe). gyan.dev is more stable than BtbN whose latest-tag asset names rotate.'
         required: true
-        default: 'https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip'
+        default: 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
       node_version:
         description: 'Node.js version bundled as sidecar (used by yt-dlp for YouTube n-challenge). Pick an LTS minor — see https://nodejs.org/en/about/previous-releases'
         required: true
@@ -531,8 +531,10 @@ jobs:
           xcrun stapler staple "${{ steps.locate.outputs.dmg }}"
           xcrun stapler staple "${{ steps.locate.outputs.app }}"
 
+      # NOTE: no `working-directory: client` here — the steps.locate.outputs.*
+      # paths are repo-root-relative, so cwd must stay at repo root. Invoke
+      # pnpm in the client/ package via `--dir client`.
       - name: Repackage .app.tar.gz with stapled .app + regenerate updater .sig
-        working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -547,7 +549,8 @@ jobs:
           # from the now-stapled .app so updater serves notarized version.
           ( cd "$APP_DIR" && rm -f "$TARGZ_NAME" && tar -czf "$TARGZ_NAME" "$APP_NAME" )
           rm -f "${APP_TARGZ}.sig"
-          pnpm tauri signer sign "$APP_TARGZ"
+          # pnpm --dir changes cwd, so pass absolute path to the file.
+          pnpm --dir client tauri signer sign "$GITHUB_WORKSPACE/$APP_TARGZ"
           ls -la "$APP_TARGZ" "${APP_TARGZ}.sig"
 
       - name: Verify signature + notarization

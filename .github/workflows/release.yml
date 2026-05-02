@@ -412,19 +412,36 @@ jobs:
           workspaces: client/src-tauri
           shared-key: tauri-build-macos
 
-      - name: Tauri build (.dmg + .app + updater .app.tar.gz)
+      - name: Tauri build (.dmg + .app + updater .app.tar.gz, Developer ID signed + notarized)
         working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Developer ID signing — Tauri imports .p12 to a temp keychain,
+          # signs .app + inner sidecars/dylibs with hardened runtime,
+          # then submits to Apple notary and staples the ticket.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm tauri build
 
-      - name: Ad-hoc codesign .app
+      - name: Verify signature + notarization
         run: |
+          set +e
           APP=$(find client/src-tauri/target/release/bundle/macos -name "*.app" -maxdepth 2 -type d | head -1)
-          if [ -n "$APP" ]; then
-            codesign --force --deep --sign - "$APP" || true
-            codesign -dv "$APP" 2>&1 | head -5
+          DMG=$(find client/src-tauri/target/release/bundle/dmg -name "*.dmg" -maxdepth 2 -type f | head -1)
+          echo "=== codesign -dvv (.app) ==="
+          codesign -dvv "$APP" 2>&1 | head -20
+          echo "=== spctl assess (.app) ==="
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1 | head -5
+          echo "=== stapler validate (.app) ==="
+          xcrun stapler validate "$APP" 2>&1
+          if [ -n "$DMG" ]; then
+            echo "=== stapler validate (.dmg) ==="
+            xcrun stapler validate "$DMG" 2>&1
           fi
 
       - name: Show bundle output

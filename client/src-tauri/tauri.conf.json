@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Eversay Studio",
+  "productName": "whatsub",
   "version": "0.1.6",
-  "identifier": "com.eversay.studio",
+  "identifier": "com.whatsub.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Eversay Studio",
+        "title": "whatsub",
         "width": 1280,
         "height": 800
       }
@@ -23,8 +23,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$DATA/Get_Video/**",
-          "$LOCALDATA/Get_Video/**",
+          "$DATA/whatsub/**",
+          "$LOCALDATA/whatsub/**",
           "**/*.mp4",
           "**/*.mkv",
           "**/*.mov",
@@ -40,7 +40,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json"
+        "https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2MUVCOUQ1NkE2MUMxRTMKUldUandXRnExYmtlaG9tUEg1TGk2RG9KejN4cHhqRG1va0hiNzZ0SjlHdWtpeXh6cHdUZXc5VnAK",
       "windows": {

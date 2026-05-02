@@ -29,7 +29,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "https://api.deepseek.com/v1",
     models: ["deepseek-chat", "deepseek-reasoner"],
     keyConsoleUrl: "https://platform.deepseek.com/api_keys",
-    note: "国内访问稳定，价格极低（约 $0.14 / 百万 token）",
+    note: "国内直连，速度快，一个视频差不多一两毛钱 💰",
   },
   {
     id: "openai",
@@ -38,7 +38,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "https://api.openai.com/v1",
     models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
     keyConsoleUrl: "https://platform.openai.com/api-keys",
-    note: "国内访问需代理",
+    note: "需要科学上网，效果稳定，一个视频几毛到一块多",
   },
   {
     id: "kimi",
@@ -47,7 +47,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "https://api.moonshot.cn/v1",
     models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
     keyConsoleUrl: "https://platform.moonshot.cn/console/api-keys",
-    note: "长上下文（128k）",
+    note: "国内直连，价格友好，长视频也能一口气读完",
   },
   {
     id: "zhipu",
@@ -56,6 +56,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     models: ["glm-4-plus", "glm-4", "glm-4-flash"],
     keyConsoleUrl: "https://open.bigmodel.cn/usercenter/apikeys",
+    note: "清华系出品，国内直连，flash 模型有免费额度可以白嫖 🎁",
   },
   {
     id: "qwen",
@@ -64,6 +65,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     models: ["qwen-plus", "qwen-max", "qwen-turbo", "qwen3-coder-plus"],
     keyConsoleUrl: "https://bailian.console.aliyun.com/",
+    note: "阿里出品，国内直连，turbo 版本几分钱一个视频",
   },
   {
     id: "siliconflow",
@@ -76,7 +78,7 @@ export const VENDORS: VendorPreset[] = [
       "01-ai/Yi-1.5-34B-Chat",
     ],
     keyConsoleUrl: "https://cloud.siliconflow.cn/account/ak",
-    note: "聚合多家开源模型，可访问 DeepSeek/Qwen/Yi 等",
+    note: "国内中转站，一把钥匙能用 DeepSeek / Qwen / Yi 等好几家",
   },
   {
     id: "ollama",
@@ -84,7 +86,7 @@ export const VENDORS: VendorPreset[] = [
     protocol: "openai-compatible",
     baseUrl: "http://localhost:11434/v1",
     models: ["llama3", "mistral", "qwen2", "gemma2"],
-    note: "本地服务无需 API key（留空或填任意字符）。在 ollama.ai 安装 Ollama 后用 `ollama pull <model>` 下载模型。",
+    note: "完全在你电脑上跑，不联网不花钱。需要先在 ollama.ai 装好 Ollama 并 pull 一个模型",
   },
   {
     id: "claude",
@@ -97,7 +99,7 @@ export const VENDORS: VendorPreset[] = [
       "claude-haiku-4-5-20251001",
     ],
     keyConsoleUrl: "https://console.anthropic.com/settings/keys",
-    note: "国内访问需代理",
+    note: "需要科学上网，翻译质量顶级，但价格偏高（一个视频几块到十几块）",
   },
   {
     id: "gemini",
@@ -106,7 +108,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "",
     models: ["gemini-2.5-pro", "gemini-2.5-flash"],
     keyConsoleUrl: "https://aistudio.google.com/apikey",
-    note: "国内访问需代理",
+    note: "需要科学上网，flash 版本有不少免费额度，pro 版本更聪明",
   },
   {
     id: "custom",

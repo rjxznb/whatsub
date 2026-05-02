@@ -27,7 +27,7 @@ client/
 | File | Role |
 |------|------|
 | `lib.rs` | Tauri Builder + 22 invoke handlers |
-| `core/paths.rs` | `%APPDATA%/Get_Video/` resolution. `video_dir(id)` consults library.json's per-entry `videoDir` first (frozen at import). Adds `vocabulary_path()` |
+| `core/paths.rs` | `%APPDATA%/whatsub/` resolution. `video_dir(id)` consults library.json's per-entry `videoDir` first (frozen at import). Adds `vocabulary_path()` |
 | `core/ids.rs` | sha256 / YouTube ID / URL hash for `video_id` |
 | `core/srt.rs` | SRT parser |
 | `core/progress.rs` | `PipelineEvent` enum + `emit()`. Variants: Started, Downloading, ExtractingAudio, Transcribing, Transcribed, Failed, ModelDownload, Log, BackendDetected, **Exporting** + **Exported** (burn-in flow) |
@@ -44,7 +44,7 @@ client/
 
 ### Tauri config
 
-- `tauri.conf.json` (base / Windows): `externalBin` lists 4 sidecar basenames (`yt-dlp`, `ffmpeg`, `whisper-cli`, `node`); `bundle.resources` ships the Vulkan whisper DLLs; assetProtocol scope = `$DATA/Get_Video/**`, `$LOCALDATA/Get_Video/**`, `**/*.{mp4,jpg,...}`.
+- `tauri.conf.json` (base / Windows): `externalBin` lists 4 sidecar basenames (`yt-dlp`, `ffmpeg`, `whisper-cli`, `node`); `bundle.resources` ships the Vulkan whisper DLLs; assetProtocol scope = `$DATA/whatsub/**`, `$LOCALDATA/whatsub/**`, `**/*.{mp4,jpg,...}`.
 - `tauri.macos.conf.json` (overlay): `bundle.macOS.frameworks` lists the 6 dylibs whisper-cli @rpaths against (`libwhisper.1.dylib`, `libggml.0.dylib`, `libggml-{base,blas,cpu,metal}.0.dylib`).
 - `capabilities/default.json`: scoped `shell:allow-execute` per sidecar.
 
@@ -111,7 +111,7 @@ Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.34
 | `utils/ass.ts` | `subtitlesToAss(subs, opts)` for video burn-in. Two ASS styles (EN: Arial 42, ZH: Microsoft YaHei 38), bottom-anchored. Highlights wrapped in `{\c&H00FFFF&}…{\r}` (BGR yellow). Centisecond time format rounded once to dodge fp loss. Vitest covers escapes + highlight splice |
 | `utils/time.ts` | `formatTime` (mm:ss / h:mm:ss for display) + `formatEditTime` / `parseEditTime` (m:ss.ms format used by SubtitleList edit mode) |
 
-## Storage layout (`%APPDATA%/Get_Video/` on Windows, `~/Library/Application Support/Get_Video/` on macOS)
+## Storage layout (`%APPDATA%/whatsub/` on Windows, `~/Library/Application Support/whatsub/` on macOS)
 
 ```
 settings.json              # always at default path
@@ -171,7 +171,7 @@ Stop button: `abortRef.current.abort()`; phase=paused; force-flush partial save.
 3. **JSON Lines streaming for LLM output.** Each cue arrives as one line → UI streams cue-by-cue. Robust to model variation. Two-phase: phase 1 = cues only; phase 2 = single global summary call (sees the WHOLE transcript, not just last batch).
 4. **Cancellation = AbortController.** `runAnalysis` accepts `signal`; threaded into provider fetch. Stop button aborts → phase=paused → partial save persists. Continue resumes from `subtitles.length` with `previouslyAnalyzed` so summary phase still sees full transcript.
 5. **All asset paths absolute in library.json.** `videoDir` frozen per entry; changing `settings.libraryDir` never orphans old entries.
-6. **Asset protocol scope:** `$DATA/Get_Video/**` covers Windows + macOS defaults; `$LOCALDATA/Get_Video/**` covers macOS variant; `**/*.mp4` etc. allow custom paths.
+6. **Asset protocol scope:** `$DATA/whatsub/**` covers Windows + macOS defaults; `$LOCALDATA/whatsub/**` covers macOS variant; `**/*.mp4` etc. allow custom paths.
 7. **Web Speech API for TTS.** Cross-platform, zero deps. Hint shown if no English voices installed (Windows users → 时间和语言 → 语音 → 添加).
 8. **Offline IPA dict (3 MB JSON, 125k entries).** Lazy-loaded on first KeyPhrase view; cached forever in renderer. Render-time only — never stored in `analysis.json`, so old analyses gain IPA without re-running LLM.
 9. **Vendor preset layer over protocol.** 3 internal protocols (`openai-compatible` / `claude` / `gemini`) cover wire format; 10 user-facing vendors (`llm/vendors.ts`) combine protocol + preset baseUrl + suggested models + console link. `inferVendorId()` reverse-maps legacy settings.json.
@@ -191,14 +191,14 @@ pnpm tauri build        # → src-tauri/target/release/bundle/
 # Rust unit tests (from src-tauri/)
 cargo test              # paths, ids, srt, ytdlp, whisper, library, settings,
                         # commands::analysis::extract_time_field (ffmpeg progress parser)
-                        # NB: library + settings tests pollute real %APPDATA%/Get_Video/
+                        # NB: library + settings tests pollute real %APPDATA%/whatsub/
 ```
 
 > Dev mode: Tauri puts sidecars at `target/debug/<basename>.exe` (no triple). If you delete those during cleanup, dev spawn fails with `os error 2 (file not found)` — copy them back from `binaries/` or rebuild.
 
 ## Release workflow
 
-Two repos: source `rjxznb/Get_Video` (private), release artifacts `rjxznb/Get_Video-releases` (public). Updater endpoint: `https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json`. Private signing key in repo secret `TAURI_SIGNING_PRIVATE_KEY` (also `secrets/eversay-studio.key` locally for backup). Public key embedded in `tauri.conf.json` `plugins.updater.pubkey`.
+Two repos: source `rjxznb/whatsub` (private), release artifacts `rjxznb/whatsub-releases` (public). Updater endpoint: `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json`. Private signing key in repo secret `TAURI_SIGNING_PRIVATE_KEY` (also `secrets/whatsub.key` locally for backup). Public key embedded in `tauri.conf.json` `plugins.updater.pubkey`.
 
 Releases are **automated via `.github/workflows/release.yml`** — `workflow_dispatch` only, no auto-trigger on push. The workflow has three jobs: `build-windows` (windows-latest), `build-macos` (macos-14, Apple Silicon), and `publish` (ubuntu-latest, downloads both artifacts and stitches `latest.json`).
 
@@ -214,7 +214,7 @@ Releases are **automated via `.github/workflows/release.yml`** — `workflow_dis
    - `node_version`: defaults `22.11.0` (bundled into the installer for yt-dlp's YouTube n-challenge solver)
    - `dry_run`: `true` to upload artifacts to the run page only, skip publishing
 4. Workflow runs ~5–25 min depending on cache hit (see "CI caching" below). On success, `v$VERSION` release on the public repo gets `.msi` + `.msi.sig` + `.dmg` + `.app.tar.gz` + `.app.tar.gz.sig` + `latest.json`.
-5. Verify: `curl https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json` returns the manifest with both platforms. (Note: fastly CDN can lag 5–30 min behind a fresh upload — re-upload `latest.json --clobber` if stale, or wait.)
+5. Verify: `curl https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json` returns the manifest with both platforms. (Note: fastly CDN can lag 5–30 min behind a fresh upload — re-upload `latest.json --clobber` if stale, or wait.)
 6. Test upgrade flow on a machine running the prior version.
 
 ### CI caching
@@ -253,7 +253,7 @@ The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf
 
 - All OpenAI-compatible vendors share one API-key slot (`settings.openaiCompatible`) — switching DeepSeek ↔ Kimi loses prior key.
 - `settings.modelsDir` change does NOT migrate existing `.bin` files in old dir.
-- Rust tests pollute real `%APPDATA%/Get_Video/` (library / settings tests). Should use temp dir.
+- Rust tests pollute real `%APPDATA%/whatsub/` (library / settings tests). Should use temp dir.
 - ARM64 Windows / Intel Mac not built.
 - ffprobe not bundled — yt-dlp's standard download path doesn't need it, but if a video happens to require fragment probing the export will fail with `ffprobe not found`. Bundle alongside ffmpeg if it ever shows up.
 - Burn-in export uses libx264 only (no NVENC). ~1–2x realtime CPU; would need a NVENC-enabled ffmpeg build to accelerate.

@@ -63,8 +63,8 @@ export function FirstRunGate({ children }: Props) {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-8">
       <div className="w-full max-w-4xl">
         <div className="text-center mb-10">
-          <h1 className="text-3xl font-semibold mb-2">欢迎使用 Eversay Studio</h1>
-          <p className="text-zinc-400 text-sm">
+          <h1 className="text-4xl font-semibold mb-3">欢迎使用 whatsub</h1>
+          <p className="text-zinc-400 text-base leading-relaxed">
             完成下面两小步，就可以开始用啦。两步可以同时进行 ——
             模型在下载的时候你可以先去填密钥。
           </p>
@@ -82,7 +82,7 @@ export function FirstRunGate({ children }: Props) {
           />
         </div>
 
-        <p className="text-center text-xs text-zinc-600 mt-8">
+        <p className="text-center text-sm text-zinc-600 mt-8">
           两步都完成后会自动进入主界面。设置里之后还能改。
         </p>
       </div>
@@ -183,15 +183,15 @@ function TranslationServiceCard({
 
   return (
     <Card stepNum={1} icon={<Sparkles className="h-5 w-5" />} title="选择翻译服务" done={done}>
-      <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
-        把英文字幕翻译成中文，并标出重点短语。需要在下面服务商中挑一个，并把它给你的「密钥」粘贴进来。
+      <p className="text-sm text-zinc-400 mb-4 leading-relaxed">
+        请选择一个为你工作的人工智能吧 ✨
       </p>
 
-      <label className="text-xs text-zinc-400 block mb-1">服务商</label>
+      <label className="text-sm text-zinc-400 block mb-1.5">服务商</label>
       <select
         value={vendor.id}
         onChange={(e) => pickVendor(e.target.value)}
-        className="w-full mb-1 px-3 py-2 bg-zinc-950 border border-zinc-800 rounded text-sm"
+        className="w-full mb-1.5 px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded text-base"
       >
         {VENDORS.filter((v) => v.id !== "custom").map((v) => (
           <option key={v.id} value={v.id}>
@@ -200,21 +200,23 @@ function TranslationServiceCard({
         ))}
       </select>
       {vendor.note && (
-        <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">{vendor.note}</p>
+        <p className="text-xs text-zinc-500 mb-3 leading-relaxed">{vendor.note}</p>
       )}
 
       {vendor.id !== "ollama" && (
         <>
-          <div className="flex items-center justify-between mb-1 mt-2">
-            <label className="text-xs text-zinc-400">密钥（API Key）</label>
+          <div className="flex items-center justify-between mb-1.5 mt-2">
+            <label className="text-sm text-zinc-400">密钥（API Key）</label>
             {vendor.keyConsoleUrl && (
               <a
                 href={vendor.keyConsoleUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300"
+                title={`点击前往 ${vendor.name} 控制台创建密钥`}
+                className="group inline-flex items-center gap-1 text-sm text-blue-300 hover:text-blue-200 underline-offset-2 hover:underline transition-colors"
               >
-                去哪里拿？ <ExternalLink className="h-3 w-3" />
+                快速获取密钥 🔑
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
               </a>
             )}
           </div>
@@ -224,7 +226,7 @@ function TranslationServiceCard({
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="粘贴密钥"
-              className="w-full px-3 py-2 pr-10 bg-zinc-950 border border-zinc-800 rounded text-sm font-mono"
+              className="w-full px-3 py-2.5 pr-10 bg-zinc-950 border border-zinc-800 rounded text-base font-mono"
             />
             <button
               type="button"
@@ -241,7 +243,7 @@ function TranslationServiceCard({
       <button
         onClick={saveAndTest}
         disabled={busy}
-        className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-medium rounded text-sm flex items-center justify-center gap-2"
+        className="w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-medium rounded text-base flex items-center justify-center gap-2"
       >
         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
         {busy ? "正在验证..." : "保存并验证"}
@@ -249,7 +251,7 @@ function TranslationServiceCard({
       {result && (
         <p
           className={
-            "text-xs mt-2 leading-relaxed " +
+            "text-sm mt-2 leading-relaxed " +
             (result.ok ? "text-green-400" : "text-rose-400")
           }
         >
@@ -376,12 +378,12 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
 
   return (
     <Card stepNum={2} icon={<Download className="h-5 w-5" />} title="下载字幕识别引擎" done={done}>
-      <p className="text-xs text-zinc-500 mb-4 leading-relaxed">
+      <p className="text-sm text-zinc-400 mb-4 leading-relaxed">
         从视频里识别出英文字幕。下面挑一个版本下载 ——{" "}
         <strong className="text-zinc-300">质量越高、文件越大</strong>。只需下载一次，以后所有视频都用它。
       </p>
 
-      <div className="space-y-1.5 mb-4">
+      <div className="space-y-2 mb-4">
         {MODEL_TIERS.map((t) => {
           const isSelected = t.size === selectedSize;
           const isDownloaded = downloaded[t.size];
@@ -408,24 +410,24 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-sm">{t.name}</span>
-                  <span className="text-[11px] text-zinc-500">{formatModelSize(t.sizeMB)}</span>
+                  <span className="font-medium text-base">{t.name}</span>
+                  <span className="text-xs text-zinc-500">{formatModelSize(t.sizeMB)}</span>
                   {t.recommended && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">
                       推荐
                     </span>
                   )}
                   {isDownloaded ? (
-                    <span className="ml-auto text-[11px] text-green-400 inline-flex items-center gap-1">
+                    <span className="ml-auto text-xs text-green-400 inline-flex items-center gap-1">
                       <Check className="h-3.5 w-3.5" /> 已下载
                     </span>
                   ) : partial > 0 ? (
-                    <span className="ml-auto text-[11px] text-amber-400">
+                    <span className="ml-auto text-xs text-amber-400">
                       已下载 {partial}%
                     </span>
                   ) : null}
                 </div>
-                <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
+                <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
                   {t.description}
                 </p>
               </div>
@@ -436,7 +438,7 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
 
       {/* Action area */}
       {downloaded[selectedSize] ? (
-        <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-xs text-green-300 flex items-center gap-2">
+        <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
           <Check className="h-4 w-4" /> 已下载完成，可以开始用了
         </div>
       ) : phase === "downloading" ? (
@@ -448,10 +450,10 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
             />
           </div>
           <div className="flex items-center justify-between mt-2 gap-3">
-            <p className="text-[11px] text-zinc-400 truncate">下载中 {pct}%</p>
+            <p className="text-xs text-zinc-400 truncate">下载中 {pct}%</p>
             <button
               onClick={pauseDownload}
-              className="shrink-0 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded inline-flex items-center gap-1"
+              className="shrink-0 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm rounded inline-flex items-center gap-1"
             >
               <Pause className="h-3.5 w-3.5" /> 暂停
             </button>
@@ -463,10 +465,10 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
             <div className="h-full bg-amber-500" style={{ width: `${pct}%` }} />
           </div>
           <div className="flex items-center justify-between mt-2 gap-3">
-            <p className="text-[11px] text-amber-400 truncate">已暂停（{pct}%）</p>
+            <p className="text-xs text-amber-400 truncate">已暂停（{pct}%）</p>
             <button
               onClick={startDownload}
-              className="shrink-0 px-3 py-1 bg-blue-500 hover:bg-blue-400 text-black text-xs font-medium rounded inline-flex items-center gap-1"
+              className="shrink-0 px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm font-medium rounded inline-flex items-center gap-1"
             >
               <Play className="h-3.5 w-3.5" /> 继续
             </button>
@@ -475,13 +477,13 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
       ) : (
         <button
           onClick={startDownload}
-          className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-400 text-black font-medium rounded text-sm flex items-center justify-center gap-2"
+          className="w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-400 text-black font-medium rounded text-base flex items-center justify-center gap-2"
         >
           <Download className="h-4 w-4" /> 开始下载
         </button>
       )}
       {error && (
-        <p className="text-xs text-rose-400 mt-2 leading-relaxed">下载失败：{error}</p>
+        <p className="text-sm text-rose-400 mt-2 leading-relaxed">下载失败：{error}</p>
       )}
     </Card>
   );
@@ -514,7 +516,7 @@ function Card({
       <div className="flex items-start gap-3 mb-4">
         <div
           className={
-            "w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-sm font-semibold " +
+            "w-10 h-10 rounded-full shrink-0 flex items-center justify-center text-base font-semibold " +
             (done
               ? "bg-green-500/20 text-green-400"
               : "bg-blue-500/20 text-blue-300")
@@ -525,7 +527,7 @@ function Card({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-zinc-500">{icon}</span>
-            <h2 className="font-medium">{title}</h2>
+            <h2 className="text-lg font-medium">{title}</h2>
           </div>
         </div>
       </div>

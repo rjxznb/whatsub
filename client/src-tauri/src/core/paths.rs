@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 pub fn app_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
-        .map(|d| d.join("Get_Video"))
+        .map(|d| d.join("whatsub"))
         .ok_or_else(|| "could not determine data dir".to_string())
 }
 
@@ -90,9 +90,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn app_data_dir_contains_get_video() {
+    fn app_data_dir_contains_whatsub() {
         let p = app_data_dir().unwrap();
-        assert!(p.to_string_lossy().contains("Get_Video"));
+        assert!(p.to_string_lossy().contains("whatsub"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-# Releasing Eversay Studio
+# Releasing whatsub
 
 How to ship a new version that existing users will pick up via auto-update.
 
@@ -12,10 +12,10 @@ public repo for distribution only.
 
 **Create it once on GitHub** (UI):
 
-1. New → Repository → Name: `Get_Video-releases` → **Public** → Create
+1. New → Repository → Name: `whatsub-releases` → **Public** → Create
 2. The endpoint baked into the app is:
    ```
-   https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json
+   https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json
    ```
    (configured in `src-tauri/tauri.conf.json` `plugins.updater.endpoints`)
 3. If you want a different repo name, update that endpoint AND the URL paths
@@ -23,8 +23,8 @@ public repo for distribution only.
 
 ### Signing keys (already done)
 
-Located at `secrets/eversay-studio.key` (private repo backup) and
-`%USERPROFILE%\.tauri\eversay-studio.key` (active local copy).
+Located at `secrets/whatsub.key` (private repo backup) and
+`%USERPROFILE%\.tauri\whatsub.key` (active local copy).
 
 The public key is embedded in `tauri.conf.json` `plugins.updater.pubkey`.
 
@@ -55,7 +55,7 @@ dispatch  ──────┤     → pnpm tauri build --bundles msi
                                        ▼
                           publish (ubuntu-latest, ~30 s)
                           download both artifacts
-                          → create release on rjxznb/Get_Video-releases
+                          → create release on rjxznb/whatsub-releases
                           → upload all 5 files
                           → assemble + upload latest.json
                             (windows-x86_64 + darwin-aarch64)
@@ -111,7 +111,7 @@ Runs only when `dry_run=false` and both build jobs succeeded. On
 `ubuntu-latest`:
 
 1. Reads version from `client/src-tauri/tauri.conf.json`
-2. Creates `vX.Y.Z` release on `rjxznb/Get_Video-releases` if missing
+2. Creates `vX.Y.Z` release on `rjxznb/whatsub-releases` if missing
    (using `RELEASES_REPO_TOKEN` PAT)
 3. Uploads `.msi`, `.msi.sig`, `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`
    with `gh release upload --clobber`
@@ -121,7 +121,7 @@ Runs only when `dry_run=false` and both build jobs succeeded. On
 ### 5. Verify
 
 ```bash
-curl -s https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json | jq .
+curl -s https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json | jq .
 ```
 
 Should show `version`, `pub_date`, and a `platforms` object with both
@@ -147,9 +147,9 @@ Set these once on the **private** repo (Settings → Secrets and variables
 
 | Secret | Purpose | Format |
 |---|---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | Sign installers → produce `.sig` (Win + Mac share the same key) | Full PEM contents of `~/.tauri/eversay-studio.key` |
+| `TAURI_SIGNING_PRIVATE_KEY` | Sign installers → produce `.sig` (Win + Mac share the same key) | Full PEM contents of `~/.tauri/whatsub.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Decrypt the key | Empty string for our key |
-| `RELEASES_REPO_TOKEN` | Publish job uses `gh` to upload assets to the public release repo | Fine-grained PAT, expiry ≥ next release, **resource owner = your account, repository access = `rjxznb/Get_Video-releases` only**, permissions: `Contents: Read and write` |
+| `RELEASES_REPO_TOKEN` | Publish job uses `gh` to upload assets to the public release repo | Fine-grained PAT, expiry ≥ next release, **resource owner = your account, repository access = `rjxznb/whatsub-releases` only**, permissions: `Contents: Read and write` |
 
 The Tauri signing key in CI must match the public key embedded at
 `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey`. They were
@@ -212,9 +212,9 @@ build (the `.msi` from the workflow artifact) instead.
 
 | File | Purpose | Where |
 |---|---|---|
-| Private signing key | Sign installers → produce `.sig` (shared by Win + Mac) | `secrets/eversay-studio.key` (repo backup) + `%USERPROFILE%\.tauri\eversay-studio.key` (active local copy) + `TAURI_SIGNING_PRIVATE_KEY` GitHub secret |
+| Private signing key | Sign installers → produce `.sig` (shared by Win + Mac) | `secrets/whatsub.key` (repo backup) + `%USERPROFILE%\.tauri\whatsub.key` (active local copy) + `TAURI_SIGNING_PRIVATE_KEY` GitHub secret |
 | Public verification key | Verify `.sig` in user's app | `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey` (committed) |
-| `RELEASES_REPO_TOKEN` | Publish job → upload assets to public release repo | GitHub secret (fine-grained PAT, scoped only to `rjxznb/Get_Video-releases`, contents: read+write) |
+| `RELEASES_REPO_TOKEN` | Publish job → upload assets to public release repo | GitHub secret (fine-grained PAT, scoped only to `rjxznb/whatsub-releases`, contents: read+write) |
 | `release.yml` | Unified Win+Mac release workflow | `.github/workflows/release.yml` |
 | `build-mac-binaries.yml` | (separate concern) Refresh Mac sidecar binaries committed to repo for local dev | `.github/workflows/build-mac-binaries.yml` |
 | Built `.msi` + `.msi.sig` | Windows installer + signature | Built in CI runner, uploaded to release |

@@ -1,7 +1,7 @@
 # Unified release workflow.
 #
 # Builds Windows (.msi + .sig) and macOS (.dmg + .app.tar.gz + .sig) in
-# parallel, then publishes both to rjxznb/Get_Video-releases as a single
+# parallel, then publishes both to rjxznb/whatsub-releases as a single
 # GitHub Release with one assembled latest.json.
 #
 # Triggered manually from Actions UI. Use dry_run=true to produce
@@ -414,37 +414,132 @@ jobs:
           workspaces: client/src-tauri
           shared-key: tauri-build-macos
 
-      - name: Tauri build (.dmg + .app + updater .app.tar.gz, Developer ID signed + notarized)
+      - name: Tauri build (Developer ID signed; notarization decoupled below)
         working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Developer ID signing — Tauri imports .p12 to a temp keychain,
-          # signs .app + inner sidecars/dylibs with hardened runtime,
-          # then submits to Apple notary and staples the ticket.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID deliberately omitted —
+          # Tauri's built-in notarytool wait gives no progress visibility,
+          # which made first-notarization queue waits indistinguishable
+          # from real failures. We notarize ourselves below with status
+          # polling + capturable submission ID.
+        run: pnpm tauri build
+
+      - name: Locate macOS bundle artifacts
+        id: locate
+        run: |
+          set -e
+          APP=$(find client/src-tauri/target/release/bundle/macos -maxdepth 2 -name "*.app" -type d | head -1)
+          DMG=$(find client/src-tauri/target/release/bundle/dmg -maxdepth 2 -name "*.dmg" -type f | head -1)
+          APP_TARGZ=$(find client/src-tauri/target/release/bundle/macos -maxdepth 2 -name "*.app.tar.gz" -type f | head -1)
+          [ -d "$APP" ] || { echo "::error::.app missing"; exit 1; }
+          [ -f "$DMG" ] || { echo "::error::.dmg missing"; exit 1; }
+          [ -f "$APP_TARGZ" ] || { echo "::error::.app.tar.gz missing"; exit 1; }
+          {
+            echo "app=$APP"
+            echo "dmg=$DMG"
+            echo "app_targz=$APP_TARGZ"
+          } >> "$GITHUB_OUTPUT"
+          echo "--- artifacts ---"
+          ls -la "$DMG" "$APP_TARGZ"
+
+      - name: Notarize .dmg (submit + poll status, 50 min cap)
+        env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build
+          DMG: ${{ steps.locate.outputs.dmg }}
+        run: |
+          set -e
+          echo "=== submitting $DMG ==="
+          SUBMIT=$(xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --output-format json)
+          echo "$SUBMIT" | jq .
+          SID=$(echo "$SUBMIT" | jq -r .id)
+          if [ -z "$SID" ] || [ "$SID" = "null" ]; then
+            echo "::error::notarytool submit failed"
+            exit 1
+          fi
+          echo "::notice::Apple notary submission id=$SID"
+
+          # Poll every 30s, cap total wait at 50 min (100 polls).
+          # Visible progress in CI log; on Invalid/Rejected dump Apple's log
+          # immediately. On timeout, exit non-zero with the submission id so
+          # the user can `notarytool log $SID` later.
+          STATUS="Pending"
+          for i in $(seq 1 100); do
+            sleep 30
+            INFO=$(xcrun notarytool info "$SID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --output-format json 2>/dev/null || echo '{}')
+            STATUS=$(echo "$INFO" | jq -r '.status // "Unknown"')
+            printf '[poll %3d / %5ds] status=%s\n' "$i" "$((i*30))" "$STATUS"
+            case "$STATUS" in
+              Accepted)
+                echo "::notice::✓ Apple accepted submission $SID"
+                exit 0
+                ;;
+              Invalid|Rejected)
+                echo "::error::Apple rejected submission $SID ($STATUS)"
+                xcrun notarytool log "$SID" \
+                  --apple-id "$APPLE_ID" \
+                  --password "$APPLE_PASSWORD" \
+                  --team-id "$APPLE_TEAM_ID" || true
+                exit 1
+                ;;
+            esac
+          done
+          echo "::error::Notarization still '$STATUS' after 50 min — submission=$SID"
+          echo "::error::Run \`xcrun notarytool info $SID\` later to check, or staple manually once Accepted"
+          exit 1
+
+      - name: Staple notarization ticket to .dmg + .app
+        run: |
+          set -e
+          xcrun stapler staple "${{ steps.locate.outputs.dmg }}"
+          xcrun stapler staple "${{ steps.locate.outputs.app }}"
+
+      - name: Repackage .app.tar.gz with stapled .app + regenerate updater .sig
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -e
+          APP="${{ steps.locate.outputs.app }}"
+          APP_TARGZ="${{ steps.locate.outputs.app_targz }}"
+          APP_DIR=$(dirname "$APP")
+          APP_NAME=$(basename "$APP")
+          TARGZ_NAME=$(basename "$APP_TARGZ")
+          # Tauri's tar happened pre-notarization; replace it with one made
+          # from the now-stapled .app so updater serves notarized version.
+          ( cd "$APP_DIR" && rm -f "$TARGZ_NAME" && tar -czf "$TARGZ_NAME" "$APP_NAME" )
+          rm -f "${APP_TARGZ}.sig"
+          pnpm tauri signer sign "$APP_TARGZ"
+          ls -la "$APP_TARGZ" "${APP_TARGZ}.sig"
 
       - name: Verify signature + notarization
         run: |
           set +e
-          APP=$(find client/src-tauri/target/release/bundle/macos -name "*.app" -maxdepth 2 -type d | head -1)
-          DMG=$(find client/src-tauri/target/release/bundle/dmg -name "*.dmg" -maxdepth 2 -type f | head -1)
+          APP="${{ steps.locate.outputs.app }}"
+          DMG="${{ steps.locate.outputs.dmg }}"
           echo "=== codesign -dvv (.app) ==="
           codesign -dvv "$APP" 2>&1 | head -20
           echo "=== spctl assess (.app) ==="
           spctl --assess --type execute --verbose=4 "$APP" 2>&1 | head -5
           echo "=== stapler validate (.app) ==="
           xcrun stapler validate "$APP" 2>&1
-          if [ -n "$DMG" ]; then
-            echo "=== stapler validate (.dmg) ==="
-            xcrun stapler validate "$DMG" 2>&1
-          fi
+          echo "=== stapler validate (.dmg) ==="
+          xcrun stapler validate "$DMG" 2>&1
 
       - name: Show bundle output
         run: |
@@ -508,7 +603,7 @@ jobs:
           set -e
           VERSION=$(jq -r .version client/src-tauri/tauri.conf.json)
           TAG="v$VERSION"
-          REPO=rjxznb/Get_Video-releases
+          REPO=rjxznb/whatsub-releases
           NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           # GitHub asset URLs replace spaces with dots.
           urlify() { basename "$1" | sed 's/ /./g'; }
@@ -546,7 +641,7 @@ jobs:
           # ── Create or reuse this release tag ───────────────────────
           if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             gh release create "$TAG" --repo "$REPO" \
-              --title "Eversay Studio $TAG" \
+              --title "whatsub $TAG" \
               --notes "$NOTES"
           fi
 

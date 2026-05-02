@@ -29,9 +29,9 @@ export interface Settings {
   claude: ClaudeConfig;
   gemini: GeminiConfig;
   whisperModel: WhisperModelSize;
-  /** Custom directory for video + analysis files. Empty string = use default (%APPDATA%/Get_Video/library). */
+  /** Custom directory for video + analysis files. Empty string = use default (%APPDATA%/whatsub/library). */
   libraryDir: string;
-  /** Custom directory for Whisper model files. Empty string = use default (%APPDATA%/Get_Video/models). */
+  /** Custom directory for Whisper model files. Empty string = use default (%APPDATA%/whatsub/models). */
   modelsDir: string;
   /** Path to a Netscape-format cookies.txt file. When set, yt-dlp uses --cookies <file>
    *  to bypass age/login walls and bot-detection prompts. Empty = no cookies. */

@@ -166,13 +166,13 @@ export function Settings() {
             <DirField
               label="视频/字幕/分析文件目录"
               value={draft.libraryDir}
-              defaultHint="默认：%APPDATA%/Get_Video/library"
+              defaultHint="默认：%APPDATA%/whatsub/library"
               onChange={(v) => setDraft({ ...draft, libraryDir: v })}
             />
             <DirField
               label="Whisper 模型目录"
               value={draft.modelsDir}
-              defaultHint="默认：%APPDATA%/Get_Video/models"
+              defaultHint="默认：%APPDATA%/whatsub/models"
               onChange={(v) => setDraft({ ...draft, modelsDir: v })}
             />
             <FileField

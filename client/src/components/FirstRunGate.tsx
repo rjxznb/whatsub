@@ -37,10 +37,36 @@ export function FirstRunGate({ children }: Props) {
     load();
   }, [load]);
 
+  // Auto-detect ANY downloaded whisper model, not just the one
+  // settings.whisperModel happens to point at — otherwise a fresh install
+  // (or a settings reset) defaults whisperModel to "small" and forces the
+  // user to re-download even when they already have ggml-tiny.bin or
+  // ggml-medium.bin sitting on disk from a previous session.
+  // If a non-selected tier is on disk, silently promote it to the active
+  // setting (prefer the LARGEST already-downloaded tier — user paid for it).
   useEffect(() => {
     if (!loaded) return;
-    invoke<boolean>("whisper_model_status", { size: settings.whisperModel }).then(setModelOk);
-  }, [loaded, settings.whisperModel]);
+    (async () => {
+      if (await invoke<boolean>("whisper_model_status", { size: settings.whisperModel })) {
+        setModelOk(true);
+        return;
+      }
+      for (const t of [...MODEL_TIERS].reverse()) {
+        if (t.size === settings.whisperModel) continue;
+        if (await invoke<boolean>("whisper_model_status", { size: t.size })) {
+          try {
+            await save({ ...settings, whisperModel: t.size });
+          } catch {
+            /* save errors are non-fatal — modelOk stays true and the user
+               can fix the persisted setting later in Settings */
+          }
+          setModelOk(true);
+          return;
+        }
+      }
+      setModelOk(false);
+    })();
+  }, [loaded, settings.whisperModel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!loaded || modelOk === null) {
     return (
@@ -420,6 +446,16 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
                   {isDownloaded ? (
                     <span className="ml-auto text-xs text-green-400 inline-flex items-center gap-1">
                       <Check className="h-3.5 w-3.5" /> 已下载
+                    </span>
+                  ) : isSelected && phase === "downloading" ? (
+                    // Live percent for the tier being actively downloaded.
+                    // Avoids showing the stale paused-snapshot from
+                    // partialPct (which only refreshes after the download
+                    // ends or pauses, so it would otherwise sit frozen at
+                    // e.g. "已下载 30%" while the bar at the bottom climbs
+                    // past 30% in real time).
+                    <span className="ml-auto text-xs text-blue-400">
+                      下载中 {pct}%
                     </span>
                   ) : partial > 0 ? (
                     <span className="ml-auto text-xs text-amber-400">

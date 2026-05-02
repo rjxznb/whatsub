@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
@@ -16,11 +16,29 @@ pub async fn run_sidecar<F>(
 where
     F: FnMut(&str),
 {
-    let cmd = app
+    let mut cmd = app
         .shell()
         .sidecar(bin_name)
         .map_err(|e| AppError::Subprocess(format!("sidecar {bin_name}: {e}")))?
         .args(args);
+
+    // Windows-only: bundle.resources puts our companion DLLs (whisper.dll,
+    // ggml*.dll) at <install>/resources/binaries/, NOT next to the sidecar
+    // exe at <install>/. Default Windows DLL search order would miss them
+    // and whisper-cli would exit with -1073741515 (STATUS_DLL_NOT_FOUND).
+    // Prepend the resource binaries dir to PATH for the child process so
+    // it falls through to it after the standard search locations.
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(res_dir) = app.path().resource_dir() {
+            let dll_dir = res_dir.join("binaries");
+            if dll_dir.exists() {
+                let cur = std::env::var("PATH").unwrap_or_default();
+                let new_path = format!("{};{}", dll_dir.display(), cur);
+                cmd = cmd.env("PATH", new_path);
+            }
+        }
+    }
 
     let (mut rx, _child) = cmd
         .spawn()

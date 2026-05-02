@@ -427,7 +427,20 @@ jobs:
           workspaces: client/src-tauri
           shared-key: tauri-build-macos
 
-      - name: Tauri build (Developer ID signed; notarization decoupled below)
+      # Split into two phases so a flaky `bundle_dmg.sh` (Tauri's create-dmg
+      # wrapper — relies on AppleScript + hdiutil which intermittently fail
+      # on macos-14 runners with a 4-second `failed to bundle project` error)
+      # only blocks the .dmg, not the .app.tar.gz that the auto-updater needs.
+      #
+      # Phase 1 (.app + .app.tar.gz updater bundle): MUST succeed. These are
+      # the auto-updater's required inputs — no .app.tar.gz means no auto-
+      # update for any user.
+      #
+      # Phase 2 (.dmg): retried up to 3 times with hdiutil cleanup between
+      # attempts. If all 3 fail, we soft-pass — users can still install via
+      # the .app.tar.gz (extract → drag .app to Applications), and the
+      # publish step downstream now treats .dmg as optional.
+      - name: Tauri build phase 1 (.app + updater) — must succeed
         working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -440,7 +453,46 @@ jobs:
           # which made first-notarization queue waits indistinguishable
           # from real failures. We notarize ourselves below with status
           # polling + capturable submission ID.
-        run: pnpm tauri build
+        run: pnpm tauri build --bundles app,updater
+
+      - name: Tauri build phase 2 (.dmg) — retry up to 3x for create-dmg flakes
+        working-directory: client
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        # Hard-fail after 3 retries: the .dmg is consumed by the downstream
+        # Apple notarization + stapler steps, so it's not actually optional
+        # for our pipeline. Retry covers the common transient AppleScript /
+        # diskimages-helper flake; persistent failure means something real
+        # is broken and the run should stop with a useful error.
+        run: |
+          set +e
+          for attempt in 1 2 3; do
+            echo "::group::dmg attempt $attempt/3"
+            pnpm tauri build --bundles dmg
+            rc=$?
+            echo "::endgroup::"
+            if [ $rc -eq 0 ]; then
+              echo "✓ dmg built on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::dmg attempt $attempt failed (rc=$rc)"
+            # bundle_dmg leaves orphaned mounted volumes that block the
+            # next attempt. Detach anything that looks like ours.
+            hdiutil info | awk '/\/Volumes\/whatsub/ {print $1}' | while read -r dev; do
+              echo "detaching $dev"
+              hdiutil detach -force "$dev" 2>/dev/null || true
+            done
+            # Also kill any orphaned diskimages-helper that might be holding
+            # the resource — seen in past failure logs.
+            pkill -9 diskimages-helper 2>/dev/null || true
+            sleep 8
+          done
+          echo "::error::bundle_dmg.sh failed all 3 attempts — re-run the workflow"
+          exit 1
 
       - name: Locate macOS bundle artifacts
         id: locate

@@ -38,13 +38,13 @@ client/
 | `commands/models.rs` | whisper_model_status / download |
 | `commands/import.rs` | `import_video` orchestrator |
 | `pipeline/spawn.rs` | `run_sidecar()` — spawn + stderr tail for error diagnostics. "terminated abnormally" branch includes captured stderr + Mac-specific dyld hint |
-| `pipeline/ytdlp.rs` | URL → source.mp4 + thumb.jpg + info.json (reads `cookiesFile` from settings). Resolves the bundled ffmpeg sidecar path at runtime and passes `--ffmpeg-location <path>` so yt-dlp can find it (otherwise YouTube downloads fail with `ffmpeg not found`). Best-effort `--js-runtimes node:<path>` lookup at common Mac/Linux Homebrew paths |
+| `pipeline/ytdlp.rs` | URL → source.mp4 + thumb.jpg + info.json (reads `cookiesFile` from settings). Resolves bundled `ffmpeg` and `node` sidecars at runtime and passes `--ffmpeg-location` + `--js-runtimes node:<path>` so yt-dlp finds both (without ffmpeg → "ffmpeg not found"; without node → YouTube n-challenge fails → "Requested format not available"). System-path scan kept as dev fallback |
 | `pipeline/ffmpeg.rs` | extract_audio_wav (16 kHz mono PCM), extract_thumbnail |
 | `pipeline/whisper.rs` | transcribe via whisper-cli; model download (`.partial` → atomic rename, hf-mirror.com URLs); parses `ggml_<backend>: 0 = <name>` to emit `BackendDetected` |
 
 ### Tauri config
 
-- `tauri.conf.json` (base / Windows): `externalBin` lists the 3 sidecar basenames; `bundle.resources` ships the Vulkan whisper DLLs; assetProtocol scope = `$DATA/Get_Video/**`, `$LOCALDATA/Get_Video/**`, `**/*.{mp4,jpg,...}`.
+- `tauri.conf.json` (base / Windows): `externalBin` lists 4 sidecar basenames (`yt-dlp`, `ffmpeg`, `whisper-cli`, `node`); `bundle.resources` ships the Vulkan whisper DLLs; assetProtocol scope = `$DATA/Get_Video/**`, `$LOCALDATA/Get_Video/**`, `**/*.{mp4,jpg,...}`.
 - `tauri.macos.conf.json` (overlay): `bundle.macOS.frameworks` lists the 6 dylibs whisper-cli @rpaths against (`libwhisper.1.dylib`, `libggml.0.dylib`, `libggml-{base,blas,cpu,metal}.0.dylib`).
 - `capabilities/default.json`: scoped `shell:allow-execute` per sidecar.
 
@@ -82,12 +82,12 @@ Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.34
 | `pages/Vocab.tsx` | Sort modes (按视频/最近/最早/字母); flat or grouped view; CSV export via `write_text_file` (RFC4180 escape + BOM); per-entry deep link to `/player/:id?t=<cueTime>` |
 | `components/VideoPlayer.tsx` | YouTube-like controls; hold ←/→ = 2x boost; speed 0.5–2x; panel toggle; bilingual caption overlay toggle (renders `CaptionOverlay`) |
 | `components/CaptionOverlay.tsx` | Cinema-style EN+ZH overlay anchored at `bottom-20` over the video. Same highlight splice as SubtitleList but plain `<span>` (no tooltip); the whole layer is `pointer-events-none` so it never intercepts player clicks |
-| `components/SubtitleList.tsx` | View mode: auto-scroll to current cue; **freeze on highlight hover** (event delegation on `[data-highlight="true"]`); freeze ~2s on user wheel/touch/keyboard via `userScrollingRef` (synchronous read) + `programmaticScrollRef` discriminator. Edit mode (`editing` prop): per-row `EditableRow` with text/timestamp `<input>` + Plus/Trash2 + GripVertical drag handle; **only the grip is `draggable=true`** (avoids HTML5 drag conflicts with input/textarea text-selection); on each mutation calls `onChanged` which schedules a partial save in Player |
+| `components/SubtitleList.tsx` | View mode: auto-scroll to current cue; **freeze on highlight hover** (event delegation on `[data-highlight="true"]`); freeze ~2s on user wheel/touch/keyboard via `userScrollingRef` (synchronous read) + `programmaticScrollRef` discriminator. Edit mode (`editing` prop): per-row `EditableRow` with text/timestamp `<input>` + Plus/Trash2 + GripVertical drag handle; **only the grip is `draggable=true`** (avoids HTML5 drag conflicts with input/textarea text-selection); on each mutation calls `onChanged` which schedules a partial save in Player. Drop target uses **capture-phase `onDragOverCapture` + unconditional `preventDefault`** so child textareas don't claim the dragover with native text-drop (otherwise cursor stuck on "forbidden") |
 | `components/ExportVideoModal.tsx` | 4-phase modal (config / running / done / failed). 3 checkboxes (en / zh / 高亮); on start, generates ASS via `subtitlesToAss`, calls `export_burned_video` invoke. Subscribes to `Exporting` + `Log` events for live percent + ffmpeg stderr tail (debug visibility). Cancel button calls `cancel_export` |
 | `components/KeyPhraseList.tsx` | Phrase cards (amber expr + IPA + 🔊 + ⭐ + meaning + usage); voice dropdown; install hint if no English voices; resolves first source cue per phrase to seed StarButton's deep-link |
 | `components/HighlightWord.tsx` | Inline yellow span with `data-highlight="true"`; hover/click → keyNote tooltip |
 | `components/StarButton.tsx` | Toggle (filled/outlined) — calls `useVocabulary.toggle(...)` |
-| `components/ImportModal.tsx` | URL/local tabs; live phase checklist via `pipeline-event` |
+| `components/ImportModal.tsx` | URL/local tabs; live phase checklist via `pipeline-event`. Cookies-tutorial help panel is internally scrollable (`max-h-[60vh] overflow-y-auto` + sticky close button); window-level Esc closes the help panel first, then the modal |
 | `components/ProgressBanner.tsx` | Phases: downloading/extracting/transcribing/analyzing/**paused**/error. **停止/继续** buttons (paused). Calls Player's onStop/onContinue |
 | `components/FirstRunGate.tsx` | Welcome if no LLM key OR Whisper model |
 | `hooks/useTauriEvent.ts` | `listen()` wrapper with cleanup |
@@ -211,6 +211,7 @@ Releases are **automated via `.github/workflows/release.yml`** — `workflow_dis
    - `release_notes`: shown in the in-app update toast
    - `whisper_tag`: defaults `v1.8.4`
    - `vulkan_sdk_version`: defaults `1.4.309.0` (LunarG removes older versions periodically — bump to a known-available version if download 404s)
+   - `node_version`: defaults `22.11.0` (bundled into the installer for yt-dlp's YouTube n-challenge solver)
    - `dry_run`: `true` to upload artifacts to the run page only, skip publishing
 4. Workflow runs ~5–25 min depending on cache hit (see "CI caching" below). On success, `v$VERSION` release on the public repo gets `.msi` + `.msi.sig` + `.dmg` + `.app.tar.gz` + `.app.tar.gz.sig` + `latest.json`.
 5. Verify: `curl https://github.com/rjxznb/Get_Video-releases/releases/latest/download/latest.json` returns the manifest with both platforms. (Note: fastly CDN can lag 5–30 min behind a fresh upload — re-upload `latest.json --clobber` if stale, or wait.)
@@ -218,16 +219,17 @@ Releases are **automated via `.github/workflows/release.yml`** — `workflow_dis
 
 ### CI caching
 
-The workflow caches three things to keep re-runs fast:
+The workflow caches several things to keep re-runs fast:
 
 | Cache | Key | Skips when hit |
 |------|-----|----------------|
 | Whisper Win sidecar + DLLs | `whisper-windows-{whisper_tag}-vk{vulkan_sdk_version}` | clone + cmake build + Vulkan SDK install (~5–8 min) |
 | Vulkan SDK install dir | `vulkan-sdk-{vulkan_sdk_version}` | LunarG download + silent install (~2–3 min). Only consulted on whisper miss |
 | Whisper Mac sidecar + dylibs | `whisper-macos-{whisper_tag}` | clone + cmake build + install_name_tool + ad-hoc codesign (~3 min) |
+| Node sidecar (Win + Mac) | `node-{platform}-{node_version}` | nodejs.org download + extract |
 | Cargo target + registry (per-platform) | via `Swatinem/rust-cache@v2` | ~half of cargo compile time |
 
-Cache invalidation on `whisper_tag` / `vulkan_sdk_version` change is automatic. Net: a no-op release re-build drops from ~25 min Win + 5 min Mac (cold) to ~5–8 min Win + 2–3 min Mac (warm).
+Caches invalidate automatically when their input version changes. Net: a no-op release re-build drops from ~25 min Win + 5 min Mac (cold) to ~5–8 min Win + 2–3 min Mac (warm).
 
 ### macOS bundle
 
@@ -238,6 +240,7 @@ The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf
 - Auto-check on launch (3s after window opens, silent on network fail).
 - Bottom-right toast if newer version found: 「立即更新」 (download + verify + install + restart) / 「稍后」 (session-only) / 「✓ 不再提醒此版本」 (persists in `localStorage["skippedUpdateVersions"]`; still notifies on next version).
 - Manual: Settings → 应用版本 → 「检查更新」 (ignores skip list).
+- Windows: `plugins.updater.windows.installMode = "basicUi"` so msiexec shows progress + UAC pops normally (default `passive` swallowed UAC silently). `useUpdater.ts` does NOT call `relaunch()` after `downloadAndInstall` — that would spawn a new instance pointing at the OLD exe, file-locking msiexec out of the install dir. msiexec handles its own restart.
 
 ### Safety
 

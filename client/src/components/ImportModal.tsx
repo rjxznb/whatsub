@@ -19,7 +19,7 @@ interface Props {
 
 type PipelineEventPayload =
   | { stage: "Started"; video_id: string }
-  | { stage: "Downloading"; video_id: string; percent: number }
+  | { stage: "Downloading"; video_id: string; percent: number; total?: string; speed?: string; eta?: string }
   | { stage: "ExtractingAudio"; video_id: string }
   | { stage: "Transcribing"; video_id: string; percent: number }
   | { stage: "Transcribed"; video_id: string; srt_path: string; duration_sec: number }
@@ -106,6 +106,11 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
+  // Download-only metrics from yt-dlp's progress template; null when unknown
+  // (e.g. before yt-dlp has resolved size, or during non-download phases).
+  const [dlSpeed, setDlSpeed] = useState<string | null>(null);
+  const [dlEta, setDlEta] = useState<string | null>(null);
+  const [dlTotal, setDlTotal] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
   const [showLog, setShowLog] = useState(false);
 
@@ -124,6 +129,9 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         case "Downloading":
           setPhase("downloading");
           setPercent(ev.percent);
+          setDlSpeed(ev.speed ?? null);
+          setDlEta(ev.eta ?? null);
+          setDlTotal(ev.total ?? null);
           break;
         case "ExtractingAudio":
           setPhase("extracting");
@@ -188,6 +196,9 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     setSubmitting(true);
     setPhase("started");
     setPercent(0);
+    setDlSpeed(null);
+    setDlEta(null);
+    setDlTotal(null);
     setLogLines([]);
 
     try {
@@ -218,6 +229,9 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     setSubmitting(false);
     setPhase("idle");
     setPercent(0);
+    setDlSpeed(null);
+    setDlEta(null);
+    setDlTotal(null);
     setError(null);
     setLogLines([]);
   }
@@ -265,7 +279,12 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                     {phaseDuration(p, settings.whisperModel)}
                   </span>
                   {isCurrent && showBar && (
-                    <span className="text-xs text-zinc-400 tabular-nums">{percent}%</span>
+                    <span className="text-xs text-zinc-400 tabular-nums">
+                      {percent}%
+                      {phase === "downloading" && dlTotal && ` · ${dlTotal}`}
+                      {phase === "downloading" && dlSpeed && ` · ${dlSpeed}`}
+                      {phase === "downloading" && dlEta && ` · 剩余 ${dlEta}`}
+                    </span>
                   )}
                 </div>
               );
@@ -428,7 +447,13 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                     <span className="text-amber-300">①  没有梯子（中国大陆）：</span>
                   </div>
                   <div className="mt-1">
-                    YouTube / Bilibili 国际站等都需要梯子。yt-dlp 走系统代理，请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN，浏览器能正常访问对应站点。
+                    YouTube / Bilibili 国际站等都需要梯子。yt-dlp 走系统代理（不是浏览器代理），请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN。
+                  </div>
+                  <div className="mt-1.5 px-2 py-1.5 rounded border border-rose-500/30 bg-rose-500/5 text-rose-200 text-[11px] leading-relaxed">
+                    ⚠️ <span className="font-semibold">不要只开浏览器梯子</span>（比如 SwitchyOmega、Chrome / Edge 自带的代理扩展）——这种只在浏览器内生效，本软件读不到。必须用系统级代理 / 全局模式 / TUN 模式（Clash、v2rayN、Surge 等都有这个开关），让 <span className="font-semibold">本软件和浏览器走的是同一个梯子</span>。
+                    <div className="mt-1 text-rose-300/80">
+                      验证方法：浏览器关掉所有代理扩展后还能打开 youtube.com，就说明系统代理已生效，本软件也能用。
+                    </div>
                   </div>
                   <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug">
                     📋 报错示例：

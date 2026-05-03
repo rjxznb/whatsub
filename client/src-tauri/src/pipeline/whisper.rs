@@ -228,6 +228,13 @@ pub async fn transcribe(
             }
         }
     };
+    // whisper-cli's `whisper_print_progress_callback` can fire non-monotonic
+    // values during temperature fallbacks and segment retries (observed
+    // 40 → 5 → 45 in the wild). Clamp to monotonic-non-decreasing so the
+    // user never sees a backwards-jumping bar; the underlying retry is fine,
+    // we just don't surface it.
+    let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+    let last_progress_clone = last_progress.clone();
     run_sidecar(
         app,
         "whisper-cli",
@@ -243,13 +250,17 @@ pub async fn transcribe(
             emit_log(line);
             detect_backend(line);
             if let Some(p) = parse_progress(line) {
-                emit(
-                    &app_clone,
-                    PipelineEvent::Transcribing {
-                        video_id: id.clone(),
-                        percent: p,
-                    },
-                );
+                let prev = last_progress_clone.load(std::sync::atomic::Ordering::Relaxed);
+                if p > prev {
+                    last_progress_clone.store(p, std::sync::atomic::Ordering::Relaxed);
+                    emit(
+                        &app_clone,
+                        PipelineEvent::Transcribing {
+                            video_id: id.clone(),
+                            percent: p,
+                        },
+                    );
+                }
             }
         },
     )

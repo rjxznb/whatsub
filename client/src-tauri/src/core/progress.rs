@@ -10,6 +10,17 @@ pub enum PipelineEvent {
     Downloading {
         video_id: String,
         percent: u8,
+        /// Pretty-printed download speed from yt-dlp (e.g. "1.2MiB/s"). May be
+        /// missing during the very first packets before yt-dlp has a sample.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        speed: Option<String>,
+        /// Pretty-printed ETA (e.g. "00:42"). Missing while size is unknown.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        eta: Option<String>,
+        /// Pretty-printed total size (e.g. "458.3MiB"). Missing for live
+        /// streams or before the manifest is fully resolved.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total: Option<String>,
     },
     ExtractingAudio {
         video_id: String,

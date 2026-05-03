@@ -175,8 +175,10 @@ pub async fn download(
         // next to the video file (out_dir/source.info.json).
         "--write-info-json".into(),
         "--newline".into(),
+        // Pipe-separated so we can parse percent + total + speed + ETA in one
+        // pass. Fields may be "NA" before yt-dlp has resolved sizes/speed.
         "--progress-template".into(),
-        "[download] %(progress._percent_str)s".into(),
+        "[progress] %(progress._percent_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s".into(),
         url.into(),
     ]);
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -187,12 +189,15 @@ pub async fn download(
         &arg_refs,
         move |line| {
             emit_log(line);
-            if let Some(p) = parse_percent(line) {
+            if let Some(p) = parse_progress(line) {
                 emit(
                     &app_clone,
                     PipelineEvent::Downloading {
                         video_id: id.clone(),
-                        percent: p,
+                        percent: p.percent,
+                        total: p.total,
+                        speed: p.speed,
+                        eta: p.eta,
                     },
                 );
             }
@@ -224,11 +229,42 @@ pub async fn download(
     })
 }
 
-fn parse_percent(line: &str) -> Option<u8> {
-    let stripped = line.trim();
-    let pct_str = stripped.split('%').next()?.split_whitespace().last()?;
+pub(crate) struct DownloadProgress {
+    pub percent: u8,
+    pub total: Option<String>,
+    pub speed: Option<String>,
+    pub eta: Option<String>,
+}
+
+fn parse_progress(line: &str) -> Option<DownloadProgress> {
+    // Expected format from --progress-template:
+    //   [progress] 42.3%|458.3MiB|1.2MiB/s|00:42
+    // yt-dlp emits "NA" (or " NA " padded) for fields it can't compute yet.
+    let trimmed = line.trim();
+    let after = trimmed.strip_prefix("[progress] ")?;
+    let mut parts = after.split('|');
+    let pct_field = parts.next()?.trim();
+    let total = parts.next().map(str::trim).map(str::to_string);
+    let speed = parts.next().map(str::trim).map(str::to_string);
+    let eta = parts.next().map(str::trim).map(str::to_string);
+
+    let pct_str = pct_field.trim_end_matches('%').trim();
     let pct: f32 = pct_str.parse().ok()?;
-    Some(pct.clamp(0.0, 100.0) as u8)
+    let percent = pct.clamp(0.0, 100.0) as u8;
+
+    fn nullable(s: Option<String>) -> Option<String> {
+        match s {
+            Some(v) if !v.is_empty() && v != "NA" => Some(v),
+            _ => None,
+        }
+    }
+
+    Some(DownloadProgress {
+        percent,
+        total: nullable(total),
+        speed: nullable(speed),
+        eta: nullable(eta),
+    })
 }
 
 #[cfg(test)]
@@ -236,9 +272,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_percent_from_progress_line() {
-        assert_eq!(parse_percent("[download]   42.3% of 10.5MiB"), Some(42));
-        assert_eq!(parse_percent("[download] 100.0%"), Some(100));
-        assert_eq!(parse_percent("not a progress line"), None);
+    fn parses_full_progress_line() {
+        let p = parse_progress("[progress] 42.3%|458.3MiB|1.2MiB/s|00:42").unwrap();
+        assert_eq!(p.percent, 42);
+        assert_eq!(p.total.as_deref(), Some("458.3MiB"));
+        assert_eq!(p.speed.as_deref(), Some("1.2MiB/s"));
+        assert_eq!(p.eta.as_deref(), Some("00:42"));
+    }
+
+    #[test]
+    fn na_fields_become_none() {
+        let p = parse_progress("[progress] 0.5%|NA|NA|NA").unwrap();
+        assert_eq!(p.percent, 0);
+        assert!(p.total.is_none());
+        assert!(p.speed.is_none());
+        assert!(p.eta.is_none());
+    }
+
+    #[test]
+    fn rejects_non_progress_lines() {
+        assert!(parse_progress("not a progress line").is_none());
+        assert!(parse_progress("[download] 42.3% of 10.5MiB").is_none());
+    }
+
+    #[test]
+    fn clamps_percent() {
+        let p = parse_progress("[progress] 100.0%|x|x|x").unwrap();
+        assert_eq!(p.percent, 100);
     }
 }

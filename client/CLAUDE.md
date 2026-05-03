@@ -30,14 +30,14 @@ client/
 | `core/paths.rs` | `%APPDATA%/whatsub/` resolution. `video_dir(id)` consults library.json's per-entry `videoDir` first (frozen at import). Adds `vocabulary_path()` |
 | `core/ids.rs` | sha256 / YouTube ID / URL hash for `video_id` |
 | `core/srt.rs` | SRT parser |
-| `core/progress.rs` | `PipelineEvent` enum + `emit()`. Variants: Started, Downloading, ExtractingAudio, Transcribing, Transcribed, Failed, ModelDownload, Log, BackendDetected, **Exporting** + **Exported** (burn-in flow) |
+| `core/progress.rs` | `PipelineEvent` enum + `emit()`. Variants: Started, Downloading (+ optional `speed`/`eta`/`total` fields, populated from yt-dlp's pipe-separated `--progress-template`), ExtractingAudio, Transcribing, Transcribed, Failed, ModelDownload, Log, BackendDetected, **Exporting** + **Exported** (burn-in flow) |
 | `commands/settings.rs` | `get/save_settings` (Value-based; schema-agnostic) |
 | `commands/library.rs` | list/get/upsert/delete/set_status/rename/reorder/freeze_paths/reveal_in_explorer |
 | `commands/analysis.rs` | save/load_analysis, load_transcript, video_source_path, **write_text_file** (SRT/CSV export), **export_burned_video** + **cancel_export** (ffmpeg burn-in pipeline; `ExportState` held in Tauri `.manage()`) |
 | `commands/vocabulary.rs` | `vocab_list/add/remove`. Storage: `vocabulary.json` at app data root. Dedupe by id = `expression.toLowerCase().trim()` |
 | `commands/models.rs` | whisper_model_status / download |
 | `commands/import.rs` | `import_video` orchestrator |
-| `pipeline/spawn.rs` | `run_sidecar()` — spawn + stderr tail for error diagnostics. "terminated abnormally" branch includes captured stderr + Mac-specific dyld hint |
+| `pipeline/spawn.rs` | `run_sidecar()` — spawn + stderr tail for error diagnostics. "terminated abnormally" branch includes captured stderr + Mac-specific dyld hint. **Windows-only**: prepends `<resource_dir>/binaries/` to the child process's PATH so whisper-cli resolves its companion DLLs (whisper.dll, ggml*.dll). bundle.resources puts those DLLs at `<install>/resources/binaries/` which isn't in Windows' default DLL search order — without this fix whisper-cli exits with `STATUS_DLL_NOT_FOUND` (-1073741515) on every fresh MSI install |
 | `pipeline/ytdlp.rs` | URL → source.mp4 + thumb.jpg + info.json (reads `cookiesFile` from settings). Resolves bundled `ffmpeg` and `node` sidecars at runtime and passes `--ffmpeg-location` + `--js-runtimes node:<path>` so yt-dlp finds both (without ffmpeg → "ffmpeg not found"; without node → YouTube n-challenge fails → "Requested format not available"). System-path scan kept as dev fallback |
 | `pipeline/ffmpeg.rs` | extract_audio_wav (16 kHz mono PCM), extract_thumbnail |
 | `pipeline/whisper.rs` | transcribe via whisper-cli; model download (`.partial` → atomic rename, hf-mirror.com URLs); parses `ggml_<backend>: 0 = <name>` to emit `BackendDetected` |
@@ -67,7 +67,7 @@ Exporting{video_id, percent}* → Exported{video_id, output_path}    (subtitle b
 | Windows x64 | **Vulkan** + CPU fallback | `whisper-cli.exe`, `whisper.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`, `ggml-vulkan.dll` |
 | macOS arm64 | **Metal** + CPU fallback | `whisper-cli`, `libwhisper.1.dylib`, `libggml.0.dylib`, `libggml-{base,blas,cpu,metal}.0.dylib` (Metal shaders embedded into libggml-metal — no separate `.metallib` since whisper.cpp v1.7+) |
 
-Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.341 + cmake `-DGGML_VULKAN=ON`. macOS: GitHub Actions `macos-14` runner, see `.github/workflows/build-mac-binaries.yml` (manually triggered when bumping whisper.cpp). Mac dylibs are install_name_tool'd to `@loader_path/...` and ad-hoc codesigned.
+Built from whisper.cpp v1.8.4 in CI (`.github/workflows/release.yml`). Windows uses VS 2022 + Vulkan SDK + cmake with **conservative SIMD baseline** (`-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_AVX512=OFF -DGGML_FMA=OFF -DGGML_F16C=ON`) — without these the CI runner's AVX-512 Xeon would bake incompatible SIMD into ggml-cpu.dll and end-user CPUs hit `STATUS_ILLEGAL_INSTRUCTION` (-1073741795) even when Vulkan is the active backend (mel-spectrogram preprocessing still runs on CPU SIMD). macOS arm64 uses Metal (`-DGGML_METAL=ON`) and is naturally portable across all M-series chips.
 
 `pipeline/whisper.rs` parses the first `ggml_<backend>: 0 = <gpu name>` stderr line to recognize the active accelerator (`Vulkan / NVIDIA RTX 4090`, `Metal / Apple M2 Pro`, etc.) and emits `BackendDetected` once per run. CPU-only fallback case explicitly emits `BackendDetected{ name: "CPU" }`.
 
@@ -82,14 +82,14 @@ Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.34
 | `pages/Vocab.tsx` | Sort modes (按视频/最近/最早/字母); flat or grouped view; CSV export via `write_text_file` (RFC4180 escape + BOM); per-entry deep link to `/player/:id?t=<cueTime>` |
 | `components/VideoPlayer.tsx` | YouTube-like controls; hold ←/→ = 2x boost; speed 0.5–2x; panel toggle; bilingual caption overlay toggle (renders `CaptionOverlay`) |
 | `components/CaptionOverlay.tsx` | Cinema-style EN+ZH overlay anchored at `bottom-20` over the video. Same highlight splice as SubtitleList but plain `<span>` (no tooltip); the whole layer is `pointer-events-none` so it never intercepts player clicks |
-| `components/SubtitleList.tsx` | View mode: auto-scroll to current cue; **freeze on highlight hover** (event delegation on `[data-highlight="true"]`); freeze ~2s on user wheel/touch/keyboard via `userScrollingRef` (synchronous read) + `programmaticScrollRef` discriminator. Edit mode (`editing` prop): per-row `EditableRow` with text/timestamp `<input>` + Plus/Trash2 + GripVertical drag handle; **only the grip is `draggable=true`** (avoids HTML5 drag conflicts with input/textarea text-selection); on each mutation calls `onChanged` which schedules a partial save in Player. Drop target uses **capture-phase `onDragOverCapture` + unconditional `preventDefault`** so child textareas don't claim the dragover with native text-drop (otherwise cursor stuck on "forbidden") |
+| `components/SubtitleList.tsx` | View mode: auto-scroll to current cue with **two unified freeze sources OR'd together** — (1) `hoveringHighlight` boolean held while cursor is on a `[data-highlight="true"]` span (English HighlightWord OR Chinese translation span — both tagged), no expiry while hovering; (2) `interacting` 2s timer bumped by wheel/scroll/touchmove **and by mouseout from a highlight** (so leaving doesn't immediately snap back — gives 2s grace, any further scroll resets). `interacting` state is in the effect's deps so timer expiry reliably re-triggers the snap on a paused video. The ref'd container always renders even when subtitles is empty so the listener-attaching effect (`[]` deps) doesn't fire with `listRef.current === null` during fresh streaming. `programmaticScrollRef` discriminates our own `scrollIntoView` from user scrolls. Edit mode (`editing` prop): per-row `EditableRow` with text/timestamp `<input>` + Plus/Trash2 + GripVertical drag handle; **only the grip is `draggable=true`** (avoids HTML5 drag conflicts with input/textarea text-selection); on each mutation calls `onChanged` which schedules a partial save in Player. Drop target uses **capture-phase `onDragOverCapture` + unconditional `preventDefault`** so child textareas don't claim the dragover with native text-drop (otherwise cursor stuck on "forbidden") |
 | `components/ExportVideoModal.tsx` | 4-phase modal (config / running / done / failed). 3 checkboxes (en / zh / 高亮); on start, generates ASS via `subtitlesToAss`, calls `export_burned_video` invoke. Subscribes to `Exporting` + `Log` events for live percent + ffmpeg stderr tail (debug visibility). Cancel button calls `cancel_export` |
 | `components/KeyPhraseList.tsx` | Phrase cards (amber expr + IPA + 🔊 + ⭐ + meaning + usage); voice dropdown; install hint if no English voices; resolves first source cue per phrase to seed StarButton's deep-link |
 | `components/HighlightWord.tsx` | Inline yellow span with `data-highlight="true"`; hover/click → keyNote tooltip |
 | `components/StarButton.tsx` | Toggle (filled/outlined) — calls `useVocabulary.toggle(...)` |
-| `components/ImportModal.tsx` | URL/local tabs; live phase checklist via `pipeline-event`. Cookies-tutorial help panel is internally scrollable (`max-h-[60vh] overflow-y-auto` + sticky close button); window-level Esc closes the help panel first, then the modal |
+| `components/ImportModal.tsx` | URL/local tabs; live phase checklist via `pipeline-event` with **per-tier ETA** (lookups `MODEL_TIERS` for friendly tier name + estimated seconds-per-10min). Cookies-tutorial help panel is internally scrollable (`max-h-[60vh] overflow-y-auto` + sticky close button); window-level Esc closes the help panel first, then the modal. Each fail-mode in help lists the exact yt-dlp error keyword (cookies "Sign in to confirm you're not a bot" flagged 🌟 最常见). Errors rendered via `friendlyError(raw, phase)` — pattern-matched headline + actionable suggestion + raw stderr in a collapsible expander |
 | `components/ProgressBanner.tsx` | Phases: downloading/extracting/transcribing/analyzing/**paused**/error. **停止/继续** buttons (paused). Calls Player's onStop/onContinue |
-| `components/FirstRunGate.tsx` | Welcome if no LLM key OR Whisper model |
+| `components/FirstRunGate.tsx` | Welcome if no LLM key OR no Whisper model. Two-card layout: ① 翻译服务 (vendor dropdown defaults to deepseek for fresh installs but respects `settings.vendorId` if user previously picked a different vendor), ② 字幕识别引擎. Card ② **auto-promotes any already-downloaded tier** to `settings.whisperModel` on mount (prefer largest) so a reinstall with leftover `ggml-*.bin` doesn't force re-download. Per-tier badge shows live `下载中 X%` for the active download (uses `pct` state) instead of the stale paused-snapshot from `partialPct` |
 | `hooks/useTauriEvent.ts` | `listen()` wrapper with cleanup |
 | `hooks/useVideoSync.ts` | rAF binding video.currentTime → cue index |
 | `hooks/useSpeech.ts` | Web Speech API; voice persistence; auto-cancel on new utterance |
@@ -110,6 +110,7 @@ Built from whisper.cpp v1.8.4. Windows: locally with VS 2022 + Vulkan SDK 1.4.34
 | `utils/srt.ts` | `subtitlesToSrt(en|zh)` + `sanitizeFilename` (used by export) |
 | `utils/ass.ts` | `subtitlesToAss(subs, opts)` for video burn-in. Two ASS styles (EN: Arial 42, ZH: Microsoft YaHei 38), bottom-anchored. Highlights wrapped in `{\c&H00FFFF&}…{\r}` (BGR yellow). Centisecond time format rounded once to dodge fp loss. Vitest covers escapes + highlight splice |
 | `utils/time.ts` | `formatTime` (mm:ss / h:mm:ss for display) + `formatEditTime` / `parseEditTime` (m:ss.ms format used by SubtitleList edit mode) |
+| `utils/friendlyError.ts` | `friendlyError(raw, phase)` — translates yt-dlp / ffmpeg / whisper-cli stderr fragments (`Sign in to confirm you're not a bot`, `STATUS_DLL_NOT_FOUND`, `illegal instruction`, `Members-only video`, `getaddrinfo failed`, etc.) into `{ title, suggestion, details }` for non-technical users. Phase context disambiguates network-vs-transcribe failures. New patterns slot in by precedence (specific → generic) |
 
 ## Storage layout (`%APPDATA%/whatsub/` on Windows, `~/Library/Application Support/whatsub/` on macOS)
 
@@ -223,7 +224,7 @@ The workflow caches several things to keep re-runs fast:
 
 | Cache | Key | Skips when hit |
 |------|-----|----------------|
-| Whisper Win sidecar + DLLs | `whisper-windows-{whisper_tag}-vk{vulkan_sdk_version}` | clone + cmake build + Vulkan SDK install (~5–8 min) |
+| Whisper Win sidecar + DLLs | `whisper-windows-{whisper_tag}-vk{vulkan_sdk_version}-cpu-avx-only-v1` | clone + cmake build + Vulkan SDK install (~5–8 min). Suffix bumped when build flags change (e.g. SIMD baseline) |
 | Vulkan SDK install dir | `vulkan-sdk-{vulkan_sdk_version}` | LunarG download + silent install (~2–3 min). Only consulted on whisper miss |
 | Whisper Mac sidecar + dylibs | `whisper-macos-{whisper_tag}` | clone + cmake build + install_name_tool + ad-hoc codesign (~3 min) |
 | Node sidecar (Win + Mac) | `node-{platform}-{node_version}` | nodejs.org download + extract |
@@ -233,7 +234,9 @@ Caches invalidate automatically when their input version changes. Net: a no-op r
 
 ### macOS bundle
 
-The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf.json` overlay supplying `bundle.macOS.frameworks` for the 6 `.dylib`s. dylibs are `install_name_tool`'d to `@loader_path/...` and ad-hoc codesigned post-build; the resulting `.app` is then re-signed `--deep --sign -`. **No Apple Developer account / no notarization** — first-launch users hit Gatekeeper "已损坏" and must do System Settings → 隐私与安全性 → 仍要打开 (or `xattr -cr <app>` then `codesign --force --deep --sign -`). README documents the bypass.
+The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf.json` overlay supplying `bundle.macOS.frameworks` for the 6 `.dylib`s. dylibs are `install_name_tool`'d to use `@rpath/...` (with `LC_RPATH` covering both `@executable_path/` and `@executable_path/../Frameworks/` so dev + prod layouts both resolve), then `codesign --force --sign -` re-signs everything. The `.app` is then re-signed `--deep --sign -` post-build. **Apple Developer ID signed + notarized** in CI (env vars `APPLE_CERTIFICATE`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` provided as repo secrets) — `.dmg` is submitted to `notarytool`, polled until accepted (50 min cap), then `stapler staple`'d. The `.app.tar.gz` is repackaged from the stapled `.app` so the auto-updater serves the notarized version.
+
+**bundle_dmg.sh retry**: Tauri's create-dmg wrapper relies on AppleScript + hdiutil + diskimages-helper, all of which intermittently fail on macos-14 runners with a generic 4-second `failed to bundle project` error. The Tauri build step is wrapped in a 3x retry loop (`for attempt in 1 2 3; do pnpm tauri build; ...`) with `hdiutil detach -force /Volumes/whatsub*` + `pkill -9 diskimages-helper` + 8s sleep between attempts to clear the residue. Hard-fails after 3 attempts since the downstream notarization stapler step requires the `.dmg`. Cargo + vite caches make retries cheap (~2 min each).
 
 ### User-facing update behavior
 
@@ -279,4 +282,8 @@ The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf
 | Caption overlay rendering / styling | `src/components/CaptionOverlay.tsx` |
 | Subtitle edit mode UI / drag-reorder | `src/components/SubtitleList.tsx` (`EditableRow`) + edit mutators in `src/store/analysis.ts` |
 | Video burn-in export (ASS / ffmpeg) | `src/utils/ass.ts` + `src/components/ExportVideoModal.tsx` + `src-tauri/src/commands/analysis.rs` (`export_burned_video`, `cancel_export`, `extract_time_field`) |
-| Cross-platform release pipeline | `.github/workflows/release.yml` (single-platform via `targets` input; cache-aware) |
+| Cross-platform release pipeline | `.github/workflows/release.yml` (single-platform via `targets` input; cache-aware; Mac dmg has 3x retry) |
+| User-facing error message wording | `src/utils/friendlyError.ts` (yt-dlp / whisper-cli stderr → friendly title + suggestion) |
+| Auto-scroll freeze logic | `src/components/SubtitleList.tsx` (`hoveringHighlight` boolean ‖ `interacting` 2s timer; `bumpInteraction()`) |
+| Onboarding tier auto-detect / vendor default | `src/components/FirstRunGate.tsx` |
+| Whisper SIMD baseline / dmg retry | `.github/workflows/release.yml` (cmake flags + Mac retry loop) |

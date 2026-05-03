@@ -54,12 +54,38 @@ ICNS_ENTRIES = [
 
 
 def with_mac_padding(src: Image.Image, canvas_size: int = 1024) -> Image.Image:
-    """Scale src into the center of a transparent canvas of the given size."""
+    """Scale src into the center of a transparent canvas of the given size.
+
+    Crops the source to its tight opaque bounding box first — the supplied
+    icon-1024.png has the squircle hugging the top of the canvas with a
+    ~90px transparent strip at the bottom, which (without cropping)
+    propagates into a visibly off-center icon in the dock with the bottom
+    edge appearing to be clipped. Cropping to the bbox then re-centering
+    guarantees the visible content sits at canvas center regardless of any
+    asymmetric padding baked into the source PNG.
+    """
+    bbox = src.getbbox()
+    cropped = src.crop(bbox) if bbox else src
     body = int(canvas_size * MAC_BODY_PCT)
-    scaled = src.resize((body, body), Image.LANCZOS)
+
+    # Fit the cropped content into a body×body slot while preserving aspect
+    # ratio. If the source content isn't square (it isn't — it's 1024×937),
+    # we'd rather show it at its native proportions than stretch it into a
+    # square; the mild non-squareness is invisible in the dock, but a
+    # vertical stretch would warp the wordmark inside the squircle.
+    bw, bh = cropped.size
+    if bw >= bh:
+        new_w = body
+        new_h = max(1, round(body * bh / bw))
+    else:
+        new_h = body
+        new_w = max(1, round(body * bw / bh))
+    scaled = cropped.resize((new_w, new_h), Image.LANCZOS)
+
     canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
-    offset = (canvas_size - body) // 2
-    canvas.paste(scaled, (offset, offset), scaled)
+    ox = (canvas_size - new_w) // 2
+    oy = (canvas_size - new_h) // 2
+    canvas.paste(scaled, (ox, oy), scaled)
     return canvas
 
 

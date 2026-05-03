@@ -93,7 +93,7 @@ function computeCardsMaxW(vw: number): number {
 const HEY_TEXT = "hey, ";
 const WHAT_TEXT = "what";
 const SUB_TEXT = "Sub";
-const WELCOME_TEXT = "Welcome ";
+const WELCOME_TEXT = "Welcome to ";
 
 // Apple's easeOutExpo (same curve the Remotion reference uses).
 function easeOutExpo(t: number): number {

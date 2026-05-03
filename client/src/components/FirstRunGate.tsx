@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Sparkles,
   Download,
   ExternalLink,
   Check,
@@ -13,13 +12,96 @@ import {
   Play,
 } from "lucide-react";
 import { useSettings } from "../store/settings";
-import { VENDORS, getVendor } from "../llm/vendors";
+import { VENDORS, getVendor, type VendorPreset } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import type { Settings, WhisperModelSize } from "../types/settings";
+import { WelcomeIntro } from "./WelcomeIntro";
 
 interface Props {
   children: ReactNode;
 }
+
+// Per-vendor "how to get an API key" steps. Shown in an inline help panel
+// when the user clicks "密钥传送门🔑" — same UX pattern as the cookies
+// tutorial in ImportModal so users don't get yanked to the vendor's site
+// without knowing what to do once they're there.
+//
+// Each step's `screenshot` (optional) refers to a PNG under public/help/
+// (e.g. "/help/api-key-deepseek-1.png"). When the file isn't present the
+// img tag is skipped so the steps still render as plain text. Drop new
+// screenshots in client/public/help/ to enrich any vendor's flow.
+type KeyHelpStep = { text: string; screenshot?: string };
+type KeyHelp = { prereq?: string; steps: KeyHelpStep[] };
+
+const KEY_HELP: Record<string, KeyHelp> = {
+  deepseek: {
+    steps: [
+      { text: "用手机号注册并登录 DeepSeek 开放平台（国内直连，无需梯子）" },
+      { text: "左侧菜单点「API keys」→ 右上角「创建 API key」" },
+      { text: "名字填「whatsub」→「创建」，复制弹窗里出现的密钥（仅显示一次！）" },
+      { text: "粘贴回这里。如果余额为 0，需要先在「充值」页充至少 5 元才能调用" },
+    ],
+  },
+  openai: {
+    prereq: "🪜 需要梯子（系统级 / TUN 模式，不是浏览器扩展）",
+    steps: [
+      { text: "登录 platform.openai.com/api-keys（推荐 Google 账号登录）" },
+      { text: "点「+ Create new secret key」" },
+      { text: "名字填「whatsub」→「Create secret key」→ 复制 sk- 开头的密钥（仅显示一次）" },
+      { text: "粘贴回这里。新账号需先在 Billing 绑定信用卡 + 充值至少 $5" },
+    ],
+  },
+  kimi: {
+    steps: [
+      { text: "注册并登录 Moonshot 开放平台（国内直连）" },
+      { text: "左侧「API Key 管理」→「新建」" },
+      { text: "名字填「whatsub」→ 复制弹窗里出现的密钥（仅显示一次）" },
+      { text: "粘贴回这里。新账号有免费体验额度" },
+    ],
+  },
+  zhipu: {
+    steps: [
+      { text: "注册并登录智谱 AI 开放平台（国内直连）" },
+      { text: "右上角头像 →「API keys」管理页" },
+      { text: "点「添加新的 API Key」→ 名称填「whatsub」→ 复制密钥" },
+      { text: "粘贴回这里。glm-4-flash 模型有大量免费额度可白嫖" },
+    ],
+  },
+  qwen: {
+    steps: [
+      { text: "登录阿里云百炼控制台（需要阿里云账号）" },
+      { text: "左侧「API-KEY」→「我的 API-KEY」→ 创建" },
+      { text: "名称填「whatsub」→ 复制密钥（仅显示一次）" },
+      { text: "粘贴回这里。turbo 模型几分钱就能跑完一个视频" },
+    ],
+  },
+  siliconflow: {
+    steps: [
+      { text: "注册并登录 SiliconFlow 控制台（国内直连）" },
+      { text: "左侧「API 密钥」→「新建 API 密钥」" },
+      { text: "描述填「whatsub」→ 复制密钥" },
+      { text: "粘贴回这里。注册即送 14 元体验额度" },
+    ],
+  },
+  claude: {
+    prereq: "🪜 需要梯子（系统级 / TUN 模式）",
+    steps: [
+      { text: "登录 console.anthropic.com，没账号先注册" },
+      { text: "Settings → API Keys →「Create Key」" },
+      { text: "名字填「whatsub」→ Create → 复制 sk-ant- 开头的密钥（仅显示一次）" },
+      { text: "粘贴回这里。新账号需先在 Plans & Billing 充值至少 $5" },
+    ],
+  },
+  gemini: {
+    prereq: "🪜 需要梯子（且在某些受限地区如香港无法使用）",
+    steps: [
+      { text: "登录 aistudio.google.com/apikey（需 Google 账号）" },
+      { text: "点「Create API key」→ 选一个 Google Cloud 项目（或新建一个）" },
+      { text: "复制 AIza- 开头的密钥" },
+      { text: "粘贴回这里。flash 模型有大量免费额度，pro 更聪明但收费" },
+    ],
+  },
+};
 
 // First-run welcome with two side-by-side onboarding cards. Replaces the
 // previous "click into Settings" flow — non-technical users were getting
@@ -29,6 +111,11 @@ interface Props {
 //   ② download the subtitle-recognition model (~466 MB)
 // Auto-passes through to children as soon as both are complete (the same
 // hasLlmKey + modelOk gate logic as before, just with friendlier UI).
+//
+// The animated headline + cards live in WelcomeIntro as a single composition
+// so the transition from intro → onboarding has no DOM swap (and therefore
+// no background/title snap). FirstRunGate just decides whether to render
+// that composition or pass straight through to the app.
 export function FirstRunGate({ children }: Props) {
   const { settings, load, loaded, save } = useSettings();
   const [modelOk, setModelOk] = useState<boolean | null>(null);
@@ -68,6 +155,9 @@ export function FirstRunGate({ children }: Props) {
     })();
   }, [loaded, settings.whisperModel]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Brief loading state while settings + model probe resolve. invoke() is
+  // sub-100ms in real Tauri, so users barely register this; the long wait
+  // (~7s) is the intro animation that follows when onboarding isn't done.
   if (!loaded || modelOk === null) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-500 flex items-center justify-center text-sm">
@@ -83,32 +173,23 @@ export function FirstRunGate({ children }: Props) {
     return Boolean(settings.gemini.apiKey);
   })();
 
+  // Onboarding complete → straight to app. The animated welcome screen is
+  // the entirety of the "you still have setup left" UI — finishing it just
+  // means we stop rendering it.
   if (hasLlmKey && modelOk) return <>{children}</>;
 
+  // Onboarding incomplete → animated headline + the two cards in one
+  // composition. Cards are pre-mounted from frame 0 (opacity 0) so their
+  // own state initializes during the intro, not the moment they appear.
+  // items-start so the model card collapses to its own content during
+  // download instead of stretching to the translation card's height.
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-8">
-      <div className="w-full max-w-4xl">
-        <div className="text-center mb-10">
-          <h1 className="text-4xl font-semibold mb-3">欢迎使用 whatsub</h1>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <ModelDownloadCard
-            done={modelOk}
-            onModelReady={() => setModelOk(true)}
-          />
-          <TranslationServiceCard
-            settings={settings}
-            save={save}
-            done={hasLlmKey}
-          />
-        </div>
-
-        <p className="text-center text-sm text-zinc-600 mt-8">
-          两步都完成后会自动进入主界面。设置里之后还能改。
-        </p>
+    <WelcomeIntro>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+        <ModelDownloadCard done={modelOk} onModelReady={() => setModelOk(true)} />
+        <TranslationServiceCard settings={settings} save={save} done={hasLlmKey} />
       </div>
-    </div>
+    </WelcomeIntro>
   );
 }
 
@@ -140,6 +221,7 @@ function TranslationServiceCard({
   })();
   const [apiKey, setApiKey] = useState(initialKey);
   const [showKey, setShowKey] = useState(false);
+  const [showKeyHelp, setShowKeyHelp] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -209,9 +291,9 @@ function TranslationServiceCard({
   }
 
   return (
-    <Card stepNum={2} icon={<Sparkles className="h-5 w-5" />} title="选择翻译服务" done={done}>
+    <Card stepNum={2} title="选择翻译服务" done={done}>
       <p className="text-sm text-zinc-400 mb-4 leading-relaxed">
-        请选择一个为你工作的人工智能吧 ✨
+        请选择一个为你工作的人工智能吧 🪄
       </p>
 
       <label className="text-sm text-zinc-400 block mb-1.5">服务商</label>
@@ -234,20 +316,23 @@ function TranslationServiceCard({
         <>
           <div className="flex items-center justify-between mb-1.5 mt-2">
             <label className="text-sm text-zinc-400">密钥</label>
-            {vendor.keyConsoleUrl && (
-              <a
-                href={vendor.keyConsoleUrl}
-                target="_blank"
-                rel="noreferrer"
-                title={`点击前往 ${vendor.name} 控制台创建密钥`}
-                className="group inline-flex items-center gap-1 text-sm text-blue-300 hover:text-blue-200 underline-offset-2 hover:underline transition-colors"
+            {KEY_HELP[vendor.id] && (
+              <button
+                type="button"
+                onClick={() => setShowKeyHelp((v) => !v)}
+                title={`查看 ${vendor.name} 密钥获取步骤`}
+                className={
+                  "inline-flex items-center gap-1 text-sm transition-colors " +
+                  (showKeyHelp
+                    ? "text-blue-200"
+                    : "text-blue-300 hover:text-blue-200 underline-offset-2 hover:underline")
+                }
               >
-                快速获取密钥 🔑
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
-              </a>
+                密钥传送门🔑
+              </button>
             )}
           </div>
-          <div className="relative mb-3">
+          <div className="relative mb-1">
             <input
               type={showKey ? "text" : "password"}
               value={apiKey}
@@ -264,6 +349,14 @@ function TranslationServiceCard({
               {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
           </div>
+          {showKeyHelp && KEY_HELP[vendor.id] && (
+            <KeyHelpPanel
+              vendor={vendor}
+              help={KEY_HELP[vendor.id]}
+              onClose={() => setShowKeyHelp(false)}
+            />
+          )}
+          <div className="mb-3" />
         </>
       )}
 
@@ -403,22 +496,59 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
     await invoke("whisper_model_download_cancel");
   }
 
+  // While the model is actively downloading we collapse the card down to
+  // just the progress bar — the tier list and the card header both fold up
+  // (animated via a grid-template-rows 0fr ↔ 1fr transition). User pauses
+  // → expands back to full so they can pick a different tier or just see
+  // what's going on.
+  const collapsed = phase === "downloading";
+
   return (
-    <Card stepNum={1} icon={<Download className="h-5 w-5" />} title="下载字幕识别引擎" done={done}>
-      <div className="space-y-2 mb-4">
-        {MODEL_TIERS.map((t) => {
+    <Card
+      stepNum={1}
+      title="下载字幕识别引擎"
+      done={done}
+      compact={collapsed}
+    >
+      <div
+        className={
+          "grid transition-all duration-500 ease-in-out " +
+          (collapsed ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")
+        }
+      >
+        <div className="overflow-hidden min-h-0">
+          <div className="flex gap-3 pb-4">
+            <div className="space-y-2 flex-1">
+        {MODEL_TIERS.map((t, idx) => {
           const isSelected = t.size === selectedSize;
           const isDownloaded = downloaded[t.size];
           const partial = partialPct[t.size] ?? 0;
           const lockedDuringDownload = phase === "downloading" && t.size !== selectedSize;
+          // Visual ladder for the 5 tiers — single-hue violet wash with
+          // growing opacity, plus growing padding height. Violet is distinct
+          // from blue (selection accent), green (done), and amber (paused),
+          // so the gradient never clashes with status indicators:
+          //   极速 (idx 0) → barely-tinted, tightest padding
+          //   顶级 (idx 4) → strongest tint, roomiest padding
+          // Selected state overrides bg with blue accent so the current
+          // pick is unambiguous regardless of where it sits on the ladder.
+          const tierBg = [
+            "bg-violet-500/5",
+            "bg-violet-500/10",
+            "bg-violet-500/15",
+            "bg-violet-500/20",
+            "bg-violet-500/30",
+          ][idx];
+          const tierPad = ["py-2", "py-2.5", "py-3", "py-4", "py-5"][idx];
           return (
             <label
               key={t.size}
               className={
-                "flex items-start gap-3 p-3 rounded border text-left transition " +
+                "flex items-start gap-3 px-3 rounded border text-left transition-all duration-300 " +
+                tierPad + " " +
                 (isSelected
                   ? "border-blue-500 bg-blue-500/10"
-                  : "border-zinc-800 hover:border-zinc-700") +
+                  : `border-zinc-800 hover:border-zinc-700 ${tierBg}`) +
                 (lockedDuringDownload ? " opacity-40 cursor-not-allowed" : " cursor-pointer")
               }
             >
@@ -459,19 +589,31 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
                     </span>
                   ) : null}
                 </div>
-                <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
-                  {t.description}
-                </p>
               </div>
             </label>
           );
         })}
+            </div>
+
+            {/* Trade-off axes — three vertical "number-line" arrows showing
+                how each metric changes as you go down the tier list.
+                Memory + accuracy GROW (more demanding model = more RAM,
+                more accurate); speed SHRINKS. Replaces the per-tier
+                paragraph descriptions which were redundant once the
+                violet bg-darkness gradient already conveyed model weight. */}
+            <div className="shrink-0 flex gap-2 text-[10px] text-zinc-400 self-stretch">
+              <TradeoffAxis label="占用" topText="少" bottomText="多" />
+              <TradeoffAxis label="精度" topText="低" bottomText="高" />
+              <TradeoffAxis label="速度" topText="快" bottomText="慢" />
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Action area */}
       {downloaded[selectedSize] ? (
         <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
-          <Check className="h-4 w-4" /> 已下载完成，可以开始用了
+          <Check className="h-4 w-4" /> 下载完成，请尽情享用吧~
         </div>
       ) : phase === "downloading" ? (
         <div>
@@ -527,43 +669,172 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
 
 function Card({
   stepNum,
-  icon,
   title,
   done,
   children,
+  compact = false,
 }: {
   stepNum: number;
-  icon: ReactNode;
   title: string;
   done: boolean;
   children: ReactNode;
+  /** Animated minimal mode — hides the step number / title to focus
+   *  attention on the body (used by the model card while downloading so the
+   *  progress bar is the only thing visible). */
+  compact?: boolean;
 }) {
   return (
     <div
       className={
-        "rounded-lg p-6 border bg-zinc-900 transition-colors " +
-        (done ? "border-green-500/40" : "border-zinc-800")
+        "rounded-lg transition-all duration-500 " +
+        // When compact (downloading), drop the surrounding chrome — no
+        // background, no border, no padding — so the progress bar floats
+        // alone in the column instead of sitting in a giant empty box.
+        (compact
+          ? "bg-transparent border-0 p-0"
+          : "border bg-zinc-900 p-6 " +
+            (done ? "border-green-500/40" : "border-zinc-800"))
       }
     >
-      <div className="flex items-start gap-3 mb-4">
-        <div
-          className={
-            "w-10 h-10 rounded-full shrink-0 flex items-center justify-center text-base font-semibold " +
-            (done
-              ? "bg-green-500/20 text-green-400"
-              : "bg-blue-500/20 text-blue-300")
-          }
-        >
-          {done ? <Check className="h-5 w-5" /> : stepNum}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-zinc-500">{icon}</span>
-            <h2 className="text-lg font-medium">{title}</h2>
+      <div
+        className={
+          "grid transition-all duration-500 ease-in-out " +
+          (compact ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100")
+        }
+      >
+        <div className="overflow-hidden min-h-0">
+          <div className="flex items-start gap-3 pb-4">
+            <div
+              className={
+                "w-10 h-10 shrink-0 flex items-center justify-center " +
+                (done ? "text-green-400" : "text-blue-300")
+              }
+            >
+              {done ? (
+                <Check className="h-6 w-6" />
+              ) : (
+                <span
+                  style={{
+                    fontFamily: "Caveat, cursive",
+                    fontSize: 32,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                  }}
+                >
+                  {stepNum}
+                </span>
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-lg font-medium">{title}</h2>
+            </div>
           </div>
         </div>
       </div>
       {children}
+    </div>
+  );
+}
+
+// Single vertical "number-line" with an arrowhead at the bottom and short
+// labels at the top + bottom of the axis. Used by ModelDownloadCard's tier
+// picker to communicate a metric's directional trade-off across the 5 tiers
+// (memory grows top→bottom, accuracy grows top→bottom, speed shrinks).
+function TradeoffAxis({
+  label,
+  topText,
+  bottomText,
+}: {
+  label: string;
+  topText: string;
+  bottomText: string;
+}) {
+  return (
+    <div className="flex flex-col items-center text-center min-w-[28px]">
+      <span className="text-zinc-300 font-medium mb-1">{label}</span>
+      <span className="text-zinc-500">{topText}</span>
+      <div className="relative flex-1 my-1 w-px bg-gradient-to-b from-zinc-600 to-violet-400/60 min-h-[64px]">
+        {/* Arrowhead at the bottom of the axis line, drawn as two CSS
+            borders on a rotated square — no extra SVG dependency. */}
+        <span
+          className="absolute -bottom-px left-1/2 w-0 h-0"
+          style={{
+            transform: "translateX(-50%)",
+            borderLeft: "3px solid transparent",
+            borderRight: "3px solid transparent",
+            borderTop: "5px solid rgb(167 139 250 / 0.6)",
+          }}
+        />
+      </div>
+      <span className="text-violet-300 mt-1">{bottomText}</span>
+    </div>
+  );
+}
+
+// Inline help panel that walks the user through getting an API key for the
+// currently-selected vendor. Same expand-in-place pattern as ImportModal's
+// "?" button (no modal overlay), so the input + verify button stay
+// reachable while the help is open.
+function KeyHelpPanel({
+  vendor,
+  help,
+  onClose,
+}: {
+  vendor: VendorPreset;
+  help: KeyHelp;
+  onClose: () => void;
+}) {
+  return (
+    <div className="mt-2 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto">
+      <div className="flex items-start justify-between gap-2 sticky top-0 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-zinc-800 border-b border-zinc-700">
+        <div className="text-zinc-100 font-medium">{vendor.name} 密钥获取步骤</div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-zinc-500 hover:text-zinc-200 text-base leading-none px-1"
+          title="关闭"
+        >
+          ×
+        </button>
+      </div>
+
+      {help.prereq && (
+        <div className="px-2 py-1.5 rounded border border-amber-500/30 bg-amber-500/5 text-amber-200 text-[11px]">
+          {help.prereq}
+        </div>
+      )}
+
+      <ol className="list-decimal list-outside ml-4 space-y-2 text-zinc-300">
+        {help.steps.map((s, i) => (
+          <li key={i}>
+            {s.text}
+            {s.screenshot && (
+              <img
+                src={s.screenshot}
+                alt={`步骤 ${i + 1}`}
+                className="mt-1.5 rounded border border-zinc-700 w-full"
+                onError={(e) => {
+                  // Hide gracefully if the screenshot file isn't dropped
+                  // in public/help/ yet — text steps still readable.
+                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                }}
+              />
+            )}
+          </li>
+        ))}
+      </ol>
+
+      {vendor.keyConsoleUrl && (
+        <a
+          href={vendor.keyConsoleUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 mt-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm font-medium rounded"
+        >
+          前往 {vendor.name} 控制台
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
     </div>
   );
 }

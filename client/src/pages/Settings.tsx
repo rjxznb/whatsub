@@ -194,131 +194,118 @@ export function Settings() {
           <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">
             从视频里识别出英文字幕。质量越高、文件越大、占的硬盘越多。可以下载多个版本随时切换。
           </p>
-          <div className="space-y-1.5">
-            {MODEL_TIERS.map((t) => {
-              const isActive = t.size === draft.whisperModel;
-              const isDownloaded = modelDownloaded[t.size];
-              const partial = modelPartialPct[t.size] ?? 0;
-              const isCurrentDownload = downloading === t.size;
-              const isPausedHere = downloadPaused === t.size;
-              const lockedDuringDownload = downloading !== null && downloading !== t.size;
-              return (
-                <label
-                  key={t.size}
-                  className={
-                    "flex items-start gap-3 p-3 rounded border text-left transition " +
-                    (isActive
-                      ? "border-blue-500 bg-blue-500/10"
-                      : "border-zinc-800 hover:border-zinc-700") +
-                    (lockedDuringDownload ? " opacity-40 cursor-not-allowed" : " cursor-pointer")
-                  }
-                >
-                  <input
-                    type="radio"
-                    name="whisper-tier"
-                    checked={isActive}
-                    disabled={lockedDuringDownload}
-                    onChange={() =>
-                      setDraft({ ...draft, whisperModel: t.size })
-                    }
-                    className="mt-1 accent-blue-500"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm">{t.name}</span>
-                      <span className="text-[11px] text-zinc-500">
-                        {formatModelSize(t.sizeMB)}
-                      </span>
-                      {t.recommended && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">
-                          推荐
-                        </span>
-                      )}
-                      {isDownloaded ? (
-                        <span className="ml-auto text-[11px] text-green-400 inline-flex items-center gap-1">
-                          <Check className="h-3.5 w-3.5" /> 已下载
-                        </span>
-                      ) : isPausedHere || (partial > 0 && !isCurrentDownload) ? (
-                        <span className="ml-auto text-[11px] text-amber-400">
-                          已下载 {isPausedHere ? downloadPct : partial}%
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
-                      {t.description}
-                    </p>
+          {(() => {
+            // Single-row dropdown + action, then description + (optional)
+            // progress bar underneath. Replaces the previous stacked tier
+            // cards which ate ~200 lines of vertical space when the user
+            // mostly just wants to swap which model's active.
+            //
+            // Lock the dropdown while a download is in flight — switching
+            // the draft mid-download would hide the in-progress tier from
+            // its own progress bar (we render the bar based on the active
+            // draft tier matching `downloading`).
+            const current = MODEL_TIERS.find((t) => t.size === draft.whisperModel);
+            if (!current) return null;
+            const isCurrentDownloaded = modelDownloaded[current.size];
+            const isCurrentDownload = downloading === current.size;
+            const isPausedHere = downloadPaused === current.size;
+            const currentPartial = modelPartialPct[current.size] ?? 0;
+            const downloadInFlight = downloading !== null;
 
-                    {/* Action row for THIS tier when it's selected as the
-                        active draft and either not yet downloaded, or being
-                        actively downloaded / paused. */}
-                    {isActive && !isDownloaded && (
-                      <div className="mt-2.5">
-                        {isCurrentDownload ? (
-                          <div>
-                            <div className="h-1.5 bg-zinc-800 rounded overflow-hidden">
-                              <div
-                                className="h-full bg-blue-500 transition-all duration-200"
-                                style={{ width: `${downloadPct}%` }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between mt-1.5 gap-2">
-                              <span className="text-[11px] text-zinc-400">
-                                下载中 {downloadPct}%
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  pauseDownload();
-                                }}
-                                className="text-[11px] px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 rounded inline-flex items-center gap-1"
-                              >
-                                <Pause className="h-3 w-3" /> 暂停
-                              </button>
-                            </div>
-                          </div>
-                        ) : isPausedHere ? (
-                          <div>
-                            <div className="h-1.5 bg-zinc-800 rounded overflow-hidden">
-                              <div
-                                className="h-full bg-amber-500"
-                                style={{ width: `${downloadPct}%` }}
-                              />
-                            </div>
-                            <div className="flex items-center justify-between mt-1.5 gap-2">
-                              <span className="text-[11px] text-amber-400">
-                                已暂停（{downloadPct}%）
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  downloadModel(t.size);
-                                }}
-                                className="text-[11px] px-2.5 py-1 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1"
-                              >
-                                <Play className="h-3 w-3" /> 继续
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.preventDefault();
-                              downloadModel(t.size);
-                            }}
-                            disabled={downloading !== null}
-                            className="text-[11px] px-2.5 py-1 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1 disabled:opacity-50"
-                          >
-                            <Download className="h-3 w-3" />
-                            {partial > 0 ? `继续下载（已 ${partial}%）` : "下载"}
-                          </button>
-                        )}
-                      </div>
-                    )}
+            // Compact suffix shown next to each option in the dropdown so
+            // the user can see download status without first selecting.
+            function statusSuffix(t: (typeof MODEL_TIERS)[number]): string {
+              if (modelDownloaded[t.size]) return "✓ 已下载";
+              const p = modelPartialPct[t.size] ?? 0;
+              if (p > 0) return `已下载 ${p}%`;
+              return formatModelSize(t.sizeMB);
+            }
+
+            return (
+              <>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={draft.whisperModel}
+                    disabled={downloadInFlight}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        whisperModel: e.target.value as WhisperModelSize,
+                      })
+                    }
+                    className="flex-1 px-3 py-2 bg-zinc-950 border border-zinc-800 rounded text-sm disabled:opacity-50"
+                  >
+                    {MODEL_TIERS.map((t) => (
+                      <option key={t.size} value={t.size}>
+                        {t.name}
+                        {t.recommended ? "（推荐）" : ""} · {statusSuffix(t)}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Right-side action: the dropdown handles selection, this
+                      slot just shows the verb for the active tier (download /
+                      pause / resume / done). */}
+                  {isCurrentDownloaded ? (
+                    <span className="text-[11px] text-green-400 inline-flex items-center gap-1 px-2 shrink-0">
+                      <Check className="h-3.5 w-3.5" /> 已下载
+                    </span>
+                  ) : isCurrentDownload ? (
+                    <button
+                      onClick={pauseDownload}
+                      className="text-[11px] px-3 py-2 bg-zinc-800 hover:bg-zinc-700 rounded inline-flex items-center gap-1 shrink-0"
+                    >
+                      <Pause className="h-3 w-3" /> 暂停
+                    </button>
+                  ) : isPausedHere ? (
+                    <button
+                      onClick={() => downloadModel(current.size)}
+                      className="text-[11px] px-3 py-2 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1 shrink-0"
+                    >
+                      <Play className="h-3 w-3" /> 继续
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => downloadModel(current.size)}
+                      disabled={downloadInFlight}
+                      className="text-[11px] px-3 py-2 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1 shrink-0 disabled:opacity-50"
+                    >
+                      <Download className="h-3 w-3" />
+                      {currentPartial > 0 ? `继续 (${currentPartial}%)` : "下载"}
+                    </button>
+                  )}
+                </div>
+
+                {/* Progress bar — only when the active tier is the one
+                    actually being transferred or paused. */}
+                {(isCurrentDownload || isPausedHere) && (
+                  <div className="mt-2">
+                    <div className="h-1.5 bg-zinc-800 rounded overflow-hidden">
+                      <div
+                        className={
+                          "h-full transition-all duration-200 " +
+                          (isPausedHere ? "bg-amber-500" : "bg-blue-500")
+                        }
+                        style={{ width: `${downloadPct}%` }}
+                      />
+                    </div>
+                    <p
+                      className={
+                        "text-[11px] mt-1 " +
+                        (isPausedHere ? "text-amber-400" : "text-zinc-400")
+                      }
+                    >
+                      {isPausedHere ? `已暂停（${downloadPct}%）` : `下载中 ${downloadPct}%`}
+                    </p>
                   </div>
-                </label>
-              );
-            })}
-          </div>
+                )}
+
+                <p className="text-[11px] text-zinc-500 mt-2 leading-relaxed">
+                  {current.description}
+                </p>
+              </>
+            );
+          })()}
           <div className="mt-3 text-xs">
             <span className="text-zinc-500">GPU 加速：</span>
             {draft.whisperBackend ? (

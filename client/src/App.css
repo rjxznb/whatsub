@@ -12,6 +12,26 @@
   font-feature-settings: "kern" 1;
 }
 
+/* Caveat — handwriting font used by the welcome intro animation and the
+   first-run gate title. Self-hosted under /public/fonts/ so it works fully
+   offline (the app starts with no network on first launch). */
+@font-face {
+  font-family: "Caveat";
+  src: url("/fonts/Caveat-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: block;
+}
+@font-face {
+  font-family: "Caveat";
+  src: url("/fonts/Caveat-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: block;
+}
+
+.font-handwrite {
+  font-family: "Caveat", cursive;
+}
+
 /* Dark, thin scrollbars — replaces WebView2's bright default that clashes with
    the zinc-950 surfaces. Standard `scrollbar-*` for Firefox/modern Chromium,
    `::-webkit-scrollbar*` for finer control on Edge/Chrome. */

@@ -246,7 +246,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         : ["started", "downloading", "extracting", "transcribing", "done"];
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-        <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[520px] max-w-full">
+        <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[520px] max-w-full max-h-[90vh] overflow-y-auto">
           <h2 className="text-lg font-semibold text-zinc-100 mb-4">解析进行中</h2>
 
           <div className="space-y-3">
@@ -316,7 +316,10 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                       <span className="inline-block w-3 group-open:rotate-90 transition-transform">▸</span>
                       {" "}技术详情（提报 bug 时贴这段）
                     </summary>
-                    <pre className="mt-1.5 p-2 bg-red-950/40 rounded text-[10px] text-red-300/70 whitespace-pre-wrap break-all font-mono">
+                    {/* max-h + overflow so a 50-line stderr (e.g. PyInstaller
+                        dyld error from yt-dlp) doesn't blow out the modal —
+                        bounded box with internal scroll instead. */}
+                    <pre className="mt-1.5 p-2 bg-red-950/40 rounded text-[10px] text-red-300/70 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto">
                       {fe.details}
                     </pre>
                   </details>

@@ -39,6 +39,10 @@ on:
         description: 'Static ffmpeg arm64 zip URL'
         required: true
         default: 'https://www.osxexperts.net/ffmpeg711arm.zip'
+      ffprobe_url_macos:
+        description: 'Static ffprobe arm64 zip URL (osxexperts publishes ffmpeg/ffprobe separately on macOS — Win gyan.dev bundles both in one zip)'
+        required: true
+        default: 'https://www.osxexperts.net/ffprobe711arm.zip'
       ffmpeg_url_windows:
         description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe). gyan.dev is more stable than BtbN whose latest-tag asset names rotate.'
         required: true
@@ -184,15 +188,23 @@ jobs:
             -OutFile "client/src-tauri/binaries/yt-dlp-x86_64-pc-windows-msvc.exe" `
             -UseBasicParsing
 
-      - name: Download static ffmpeg
+      - name: Download static ffmpeg + ffprobe
         run: |
           $url = "${{ inputs.ffmpeg_url_windows }}"
           Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract -Force
+          # gyan.dev's "essentials" zip ships ffmpeg.exe AND ffprobe.exe in bin/.
+          # ffprobe is needed by yt-dlp for fragmented DASH/HLS streams (rare
+          # but cause confusing "ffprobe not found" failures when missing).
           $ffmpeg = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter "ffmpeg.exe" `
             | Select-Object -First 1
           if (-not $ffmpeg) { Write-Error "ffmpeg.exe not found in archive"; exit 1 }
           Copy-Item $ffmpeg.FullName "client/src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+
+          $ffprobe = Get-ChildItem -Path ffmpeg-extract -Recurse -Filter "ffprobe.exe" `
+            | Select-Object -First 1
+          if (-not $ffprobe) { Write-Error "ffprobe.exe not found in archive"; exit 1 }
+          Copy-Item $ffprobe.FullName "client/src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe"
 
       # Bundled node.exe for yt-dlp's YouTube n-challenge JS solver.
       # Without this, downloads fail with "Requested format is not available".
@@ -374,6 +386,16 @@ jobs:
           BIN=$(find ffmpeg-extract -name ffmpeg -type f | head -1)
           cp "$BIN" client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
           chmod +x client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
+
+      - name: Download static ffprobe (arm64)
+        run: |
+          # osxexperts ships ffprobe in a separate zip on macOS; needed by
+          # yt-dlp for fragmented DASH/HLS streams.
+          curl -L -o ffprobe.zip "${{ inputs.ffprobe_url_macos }}"
+          unzip -o ffprobe.zip -d ffprobe-extract
+          BIN=$(find ffprobe-extract -name ffprobe -type f | head -1)
+          cp "$BIN" client/src-tauri/binaries/ffprobe-aarch64-apple-darwin
+          chmod +x client/src-tauri/binaries/ffprobe-aarch64-apple-darwin
 
       - name: Download yt-dlp
         run: |

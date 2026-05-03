@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Required for sidecar yt-dlp (PyInstaller bundle): yt-dlp extracts its
+        embedded Python framework to /tmp/_MEI*/ at runtime and dlopen()s it.
+        That framework was code-signed by yt-dlp's publisher (Team ID different
+        from ours), so under hardened runtime the loader rejects it with
+        "mapping process and mapped file have different Team IDs". This
+        entitlement relaxes that specific rule for our app.
+
+        Notarization: still required, Apple allows this entitlement for
+        Developer ID distribution. Library Validation off ≠ unsigned code OK;
+        the libraries themselves still need valid signatures.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

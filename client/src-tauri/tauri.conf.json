@@ -63,6 +63,7 @@
     "externalBin": [
       "binaries/yt-dlp",
       "binaries/ffmpeg",
+      "binaries/ffprobe",
       "binaries/whisper-cli",
       "binaries/node"
     ]

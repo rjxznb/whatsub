@@ -149,7 +149,7 @@ export function friendlyError(
     return {
       title: "字幕识别引擎无法启动",
       suggestion:
-        "macOS 用户：可能是 Gatekeeper 隔离了文件。在终端执行 sudo xattr -cr \"/Applications/whatsub.app\" 然后重新打开应用。",
+        "可能原因：(1) 模型文件不完整或损坏 → 设置页里删除当前档位重新下载；(2) 内存不够 → 换更小的档位（极速 / 轻量）；(3) 安装包不完整 → 重新下载最新版安装。极少数情况下 macOS 用户可能需要把 app 拖进 /Applications/ 再打开。",
       details: raw,
     };
   }

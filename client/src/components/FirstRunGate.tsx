@@ -129,6 +129,11 @@ function TranslationServiceCard({
   save: (s: Settings) => Promise<void>;
   done: boolean;
 }) {
+  // Default to deepseek for users who haven't picked a vendor yet (new install
+  // or settings.json missing vendorId), but respect any explicit choice carried
+  // over from a previous session — if the user has been using e.g. Claude
+  // before and just blanked out their key, snapping the dropdown back to
+  // deepseek would override their preference unexpectedly.
   const [vendorId, setVendorId] = useState(settings.vendorId ?? "deepseek");
   const vendor = getVendor(vendorId) ?? VENDORS[0];
 
@@ -232,7 +237,7 @@ function TranslationServiceCard({
       {vendor.id !== "ollama" && (
         <>
           <div className="flex items-center justify-between mb-1.5 mt-2">
-            <label className="text-sm text-zinc-400">密钥（API Key）</label>
+            <label className="text-sm text-zinc-400">密钥</label>
             {vendor.keyConsoleUrl && (
               <a
                 href={vendor.keyConsoleUrl}

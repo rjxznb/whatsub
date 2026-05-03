@@ -102,9 +102,20 @@ function parseCue(obj: unknown): Subtitle | null {
     translation: String(o.translation),
     isKeyPoint: Boolean(o.isKeyPoint),
     highlightWords: Array.isArray(o.highlightWords) ? (o.highlightWords as string[]) : [],
-    keyNotes: (o.keyNotes as Record<string, string>) ?? {},
-    highlightTranslations: (o.highlightTranslations as Record<string, string>) ?? {},
+    // Reject anything that isn't a plain {phrase: note} object — some models
+    // occasionally collapse the per-phrase dict into one big summary string,
+    // which then makes `keyNotes[word]` undefined and the tooltip silently
+    // disappear. Falling back to {} keeps highlights interactive even when
+    // the model fumbles the schema (the tooltip just won't render).
+    keyNotes: isPlainObject(o.keyNotes) ? (o.keyNotes as Record<string, string>) : {},
+    highlightTranslations: isPlainObject(o.highlightTranslations)
+      ? (o.highlightTranslations as Record<string, string>)
+      : {},
   };
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
 function parseSummary(obj: unknown): Omit<AnalysisResult, "subtitles"> | null {

@@ -6,6 +6,9 @@ import { useNavigate } from "react-router-dom";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
+import { getTier } from "../llm/modelTiers";
+import type { WhisperModelSize } from "../types/settings";
+import { friendlyError } from "../utils/friendlyError";
 
 interface Props {
   onClose: () => void;
@@ -44,15 +47,33 @@ const PHASE_LABEL: Record<Phase, string> = {
   error: "失败",
 };
 
-const PHASE_DURATION: Record<Phase, string> = {
-  idle: "",
-  started: "约 5-30 秒",
-  downloading: "随网速：几秒到几分钟",
-  extracting: "约 1-5 秒",
-  transcribing: "约 1-3 分钟 / 10 分钟视频 (small)",
-  done: "立即",
-  error: "",
+// Per-whisper-tier rough estimates for transcribing 10 min of video on a
+// machine with GPU acceleration (Vulkan / Metal). CPU-only is ~3-5x slower.
+const TRANSCRIBE_ETA_PER_TIER: Record<WhisperModelSize, string> = {
+  tiny: "约 10-30 秒",
+  base: "约 30 秒-1 分钟",
+  small: "约 1-3 分钟",
+  medium: "约 3-8 分钟",
+  "large-v3": "约 8-15 分钟",
 };
+
+function transcribeDuration(size: WhisperModelSize): string {
+  const tier = getTier(size);
+  const eta = TRANSCRIBE_ETA_PER_TIER[size] ?? "约 1-3 分钟";
+  const tierName = tier?.name ?? size;
+  return `${eta} / 10 分钟视频（${tierName}）`;
+}
+
+function phaseDuration(phase: Phase, whisperModel: WhisperModelSize): string {
+  switch (phase) {
+    case "started":      return "约 5-30 秒";
+    case "downloading":  return "随网速：几秒到几分钟";
+    case "extracting":   return "约 1-5 秒";
+    case "transcribing": return transcribeDuration(whisperModel);
+    case "done":         return "立即";
+    default:             return "";
+  }
+}
 
 export function ImportModal({ onClose, initialFilePath }: Props) {
   const navigate = useNavigate();
@@ -241,7 +262,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                   </span>
                   <span className="font-medium">{PHASE_LABEL[p]}</span>
                   <span className="flex-1 text-[10px] text-zinc-600 italic">
-                    {PHASE_DURATION[p]}
+                    {phaseDuration(p, settings.whisperModel)}
                   </span>
                   {isCurrent && showBar && (
                     <span className="text-xs text-zinc-400 tabular-nums">{percent}%</span>
@@ -260,12 +281,30 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             </div>
           )}
 
-          {error && (
-            <div className="mt-4 p-3 bg-red-900/30 border border-red-800 rounded text-sm text-red-200">
-              <div className="font-medium mb-1">解析失败</div>
-              <div className="text-xs whitespace-pre-wrap break-all">{error}</div>
-            </div>
-          )}
+          {error && (() => {
+            const fe = friendlyError(error, phase);
+            return (
+              <div className="mt-4 p-3 bg-red-900/30 border border-red-800 rounded text-sm text-red-200">
+                <div className="font-medium mb-1">{fe.title}</div>
+                {fe.suggestion && (
+                  <div className="text-xs leading-relaxed text-red-100/90">
+                    {fe.suggestion}
+                  </div>
+                )}
+                {fe.details && fe.details !== fe.title && (
+                  <details className="mt-2 group">
+                    <summary className="text-[10px] text-red-300/70 cursor-pointer hover:text-red-200 select-none list-none">
+                      <span className="inline-block w-3 group-open:rotate-90 transition-transform">▸</span>
+                      {" "}技术详情（提报 bug 时贴这段）
+                    </summary>
+                    <pre className="mt-1.5 p-2 bg-red-950/40 rounded text-[10px] text-red-300/70 whitespace-pre-wrap break-all font-mono">
+                      {fe.details}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Live sub-process log — collapsible. Lets the user see exactly
               what step yt-dlp / ffmpeg / whisper-cli is on during the
@@ -353,7 +392,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 type="text"
                 value={urlValue}
                 onChange={(e) => setUrlValue(e.target.value)}
-                placeholder="https://www.youtube.com/watch?v=..."
+                placeholder="https://www.youtube.com/watch?v="
                 className="flex-1 px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border border-zinc-700"
               />
               <button

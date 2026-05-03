@@ -23,6 +23,14 @@ PER-CUE OBJECT SCHEMA
   "highlightTranslations": { [phrase: string]: string }
 }
 
+CONCRETE EXAMPLE (correct shape — keyNotes and highlightTranslations are JSON OBJECTS keyed by each highlightWord, NEVER a single string):
+{"type":"cue","index":12,"time":45.2,"endTime":47.8,"text":"I need to catch up on emails","translation":"我得把邮件处理一下","isKeyPoint":true,"highlightWords":["catch up"],"keyNotes":{"catch up":"动词短语，表示「赶上、补做」，用于落下进度后追回的语境，常搭配 on/with"},"highlightTranslations":{"catch up":"处理一下"}}
+
+WRONG (these have caused real bugs — DO NOT do this):
+- keyNotes as one big string: "keyNotes": "catch up 表示赶上..."   ← MUST be a {phrase: note} object
+- keyNotes empty when highlightWords non-empty: "highlightWords":["catch up"], "keyNotes":{}
+- mismatched keys: "highlightWords":["catch up"], "keyNotes":{"to catch up":"..."}   ← key must match the highlightWord string EXACTLY
+
 SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
 {
   "type": "summary",
@@ -52,6 +60,8 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 8. Each highlightWord must be a substring of THE SAME CUE'S text. Don't span across cues.
 
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
+
+10. keyNotes and highlightTranslations MUST be JSON OBJECTS (dictionaries) — never strings, never arrays. Every entry in highlightWords MUST appear as a key (exact string, character-for-character) in BOTH keyNotes AND highlightTranslations. If you can't write a 40-120 character keyNote AND find a translation substring for a phrase, omit that phrase from highlightWords entirely.
 `;
 
 export function buildUserPrompt(cues: SrtCue[]): string {

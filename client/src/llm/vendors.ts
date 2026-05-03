@@ -29,7 +29,7 @@ export const VENDORS: VendorPreset[] = [
     baseUrl: "https://api.deepseek.com/v1",
     models: ["deepseek-chat", "deepseek-reasoner"],
     keyConsoleUrl: "https://platform.deepseek.com/api_keys",
-    note: "国内直连，速度快，一个视频差不多一两毛钱 💰",
+    note: "国内直连，速度快，一个月差不多两块钱 💰",
   },
   {
     id: "openai",
@@ -86,7 +86,7 @@ export const VENDORS: VendorPreset[] = [
     protocol: "openai-compatible",
     baseUrl: "http://localhost:11434/v1",
     models: ["llama3", "mistral", "qwen2", "gemma2"],
-    note: "完全在你电脑上跑，不联网不花钱。需要先在 ollama.ai 装好 Ollama 并 pull 一个模型",
+    note: "完全在你电脑上跑，不联网不花钱，需要先在 ollama.ai 装好 Ollama 并 pull 一个模型",
   },
   {
     id: "claude",

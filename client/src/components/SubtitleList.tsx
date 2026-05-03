@@ -50,28 +50,51 @@ export function SubtitleList({
   const notify = () => {
     onChanged?.();
   };
-  // Freeze auto-scroll while the user is reading a HighlightWord tooltip.
-  // When they leave the highlight, the effect re-runs and snaps back to the
-  // current cue so playback stays in sync.
-  const [scrollFrozen, setScrollFrozen] = useState(false);
-  // Frozen while the user is actively scrolling the list. The ref is read
-  // synchronously in the auto-scroll effect to dodge React's state-update
-  // batching (otherwise a wheel event happening in the same tick as a
-  // currentIdx update could race and lose). The state mirror is just to
-  // re-trigger the effect when the freeze releases.
-  const userScrollingRef = useRef(false);
-  const [, setUserScrolling] = useState(false);
+
+  // Auto-scroll freeze model — two independent signals OR'd together:
+  //
+  //   1. hoveringHighlight: user's cursor is currently over a highlight span.
+  //      Holds freeze for the full duration of the hover, no timer.
+  //   2. interacting: user did SOMETHING in the last 2s — scrolled, touched,
+  //      OR just-left-a-highlight (we treat the post-hover moment as still-
+  //      reading and grant 2s grace before snapping back). Any new
+  //      scroll/wheel/touch within the 2s extends it.
+  //
+  // ref is for synchronous read inside the effect (avoids the wheel-vs-
+  // currentIdx batching race); state mirror is in the deps array so the
+  // effect re-runs when the timer flips false (otherwise the snap-back
+  // wouldn't happen until the next currentIdx tick — broken on a paused
+  // video).
+  const [hoveringHighlight, setHoveringHighlight] = useState(false);
+  const interactingRef = useRef(false);
+  const [interacting, setInteracting] = useState(false);
+  const interactingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True while one of OUR scrollIntoView animations is in progress. The
   // 'scroll' listener consults this to avoid mistaking our own scroll for
   // user input.
   const programmaticScrollRef = useRef(false);
   const programmaticTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const userScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Bump = "user just did something, freeze for 2s, reset on every new
+  // event". Called from scroll/wheel/touchmove AND from highlight mouseout
+  // (so leaving a highlight starts the same 2s grace before snap-back).
+  const bumpInteraction = () => {
+    interactingRef.current = true;
+    setInteracting(true);
+    // User trumps any in-flight programmatic scroll animation.
+    programmaticScrollRef.current = false;
+    if (interactingTimerRef.current) clearTimeout(interactingTimerRef.current);
+    interactingTimerRef.current = setTimeout(() => {
+      interactingRef.current = false;
+      setInteracting(false);
+    }, USER_SCROLL_RESUME_MS);
+  };
 
   useEffect(() => {
     if (!autoScroll) return;
     if (editing) return;
-    if (scrollFrozen || userScrollingRef.current) return;
+    if (hoveringHighlight) return;       // still reading a tooltip
+    if (interactingRef.current) return;  // within 2s grace from last interaction
     if (currentIdx < 0) return;
     const el = listRef.current?.querySelector(`[data-idx="${currentIdx}"]`);
     if (!el) return;
@@ -84,24 +107,30 @@ export function SubtitleList({
     programmaticTimerRef.current = setTimeout(() => {
       programmaticScrollRef.current = false;
     }, 800);
-  }, [currentIdx, scrollFrozen, autoScroll, editing]);
+    // `interacting` state is in the dep list (not just the ref) so when its
+    // timer flips false, the effect re-runs and snaps to current cue —
+    // important on a paused video where currentIdx isn't advancing.
+  }, [currentIdx, hoveringHighlight, interacting, autoScroll, editing]);
 
-  // Event-delegated hover detection: any [data-highlight="true"] descendant
-  // (set by HighlightWord) freezes the scroll. Avoids drilling props through.
+  // Highlight hover: enter freezes; exit DOES NOT immediately release —
+  // instead it bumps the 2s interaction timer so the user can move away
+  // (e.g. to compare with the next phrase) without the cue snapping back
+  // mid-thought. Subsequent scroll/wheel/hover within 2s resets the timer.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
     const onOver = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t?.closest?.('[data-highlight="true"]')) setScrollFrozen(true);
+      if (t?.closest?.('[data-highlight="true"]')) setHoveringHighlight(true);
     };
     const onOut = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
       if (!t?.closest?.('[data-highlight="true"]')) return;
-      // Moving directly to another highlight: stay frozen.
+      // Moving directly to another highlight: stay hovering, no grace timer.
       const related = e.relatedTarget as HTMLElement | null;
       if (related?.closest?.('[data-highlight="true"]')) return;
-      setScrollFrozen(false);
+      setHoveringHighlight(false);
+      bumpInteraction();
     };
     list.addEventListener("mouseover", onOver);
     list.addEventListener("mouseout", onOut);
@@ -109,6 +138,7 @@ export function SubtitleList({
       list.removeEventListener("mouseover", onOver);
       list.removeEventListener("mouseout", onOut);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Detect user-initiated scroll. We listen on:
@@ -121,64 +151,51 @@ export function SubtitleList({
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const bump = () => {
-      userScrollingRef.current = true;
-      setUserScrolling(true);
-      // User overrides any in-flight programmatic scroll.
-      programmaticScrollRef.current = false;
-      if (userScrollTimerRef.current) clearTimeout(userScrollTimerRef.current);
-      userScrollTimerRef.current = setTimeout(() => {
-        userScrollingRef.current = false;
-        setUserScrolling(false);
-      }, USER_SCROLL_RESUME_MS);
-    };
     const onScroll = () => {
       if (programmaticScrollRef.current) return;
-      bump();
+      bumpInteraction();
     };
     list.addEventListener("scroll", onScroll, { passive: true });
-    list.addEventListener("wheel", bump, { passive: true });
-    list.addEventListener("touchmove", bump, { passive: true });
+    list.addEventListener("wheel", bumpInteraction, { passive: true });
+    list.addEventListener("touchmove", bumpInteraction, { passive: true });
     return () => {
       list.removeEventListener("scroll", onScroll);
-      list.removeEventListener("wheel", bump);
-      list.removeEventListener("touchmove", bump);
-      if (userScrollTimerRef.current) clearTimeout(userScrollTimerRef.current);
+      list.removeEventListener("wheel", bumpInteraction);
+      list.removeEventListener("touchmove", bumpInteraction);
+      if (interactingTimerRef.current) clearTimeout(interactingTimerRef.current);
       if (programmaticTimerRef.current) clearTimeout(programmaticTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Empty state explaining what's happening — most important when LLM is still
-  // streaming the first cue. Once subtitles arrive this branch goes away.
-  if (subtitles.length === 0) {
-    if (phase === "analyzing") {
-      return (
-        <div className="flex flex-col items-center justify-center h-full p-8 text-center">
-          <div className="w-10 h-10 border-3 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
-          <div className="text-sm text-zinc-200 font-medium mb-2">AI 正在解析字幕...</div>
-          <div className="text-xs text-zinc-500 max-w-xs leading-relaxed">
-            LLM 正在为这个视频生成中文翻译和重点短语标注。<br />
-            字幕会一行一行出现，无需等待全部完成——视频可以立即播放。<br />
-            首批字幕通常 5-15 秒内开始出现。
-          </div>
-        </div>
-      );
-    }
-    if (phase === "complete") {
-      return (
-        <div className="p-4 text-zinc-500 text-sm">
-          没有字幕（LLM 输出可能格式有误，可以尝试重新解析）
-        </div>
-      );
-    }
-    return (
-      <div className="p-4 text-zinc-500 text-sm">等待字幕...</div>
-    );
-  }
-
+  // Container always renders (even with 0 subtitles) so that listRef.current
+  // is set on the very first mount. Otherwise, when SubtitleList mounts while
+  // an LLM analysis is still streaming the first cue, the hover/scroll
+  // listener effect runs once with listRef.current === null and silently
+  // never re-attaches when cues finally arrive — leading to "auto-scroll
+  // doesn't freeze on hover" for first-time analysis.
   return (
     <div ref={listRef} className="overflow-y-auto h-full">
-      {subtitles.map((s, i) => {
+      {subtitles.length === 0 ? (
+        phase === "analyzing" ? (
+          <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+            <div className="w-10 h-10 border-3 border-blue-400 border-t-transparent rounded-full animate-spin mb-4" />
+            <div className="text-sm text-zinc-200 font-medium mb-2">AI 正在解析字幕...</div>
+            <div className="text-xs text-zinc-500 max-w-xs leading-relaxed">
+              LLM 正在为这个视频生成中文翻译和重点短语标注。<br />
+              字幕会一行一行出现，无需等待全部完成——视频可以立即播放。<br />
+              首批字幕通常 5-15 秒内开始出现。
+            </div>
+          </div>
+        ) : phase === "complete" ? (
+          <div className="p-4 text-zinc-500 text-sm">
+            没有字幕（LLM 输出可能格式有误，可以尝试重新解析）
+          </div>
+        ) : (
+          <div className="p-4 text-zinc-500 text-sm">等待字幕...</div>
+        )
+      ) : (
+        subtitles.map((s, i) => {
         if (!editing) {
           return (
             <div
@@ -275,7 +292,8 @@ export function SubtitleList({
             }}
           />
         );
-      })}
+        })
+      )}
     </div>
   );
 }
@@ -455,7 +473,16 @@ function renderTranslationWithHighlights(s: Subtitle): ReactNode {
     (a, b) => s.translation.indexOf(a) - s.translation.indexOf(b)
   );
   return renderWithSpans(s.translation, sorted, (zh, key) => (
-    <span key={key} className="bg-amber-300/30 text-amber-100 px-0.5 rounded">
+    // data-highlight="true" lets the SubtitleList's hover delegation freeze
+    // auto-scroll on the Chinese highlight too — same as the English ones
+    // (HighlightWord component sets the same attribute). Without it, hovering
+    // on a Chinese highlight wouldn't pause auto-scroll and the cue would
+    // jump out from under the cursor.
+    <span
+      key={key}
+      data-highlight="true"
+      className="bg-amber-300/30 text-amber-100 px-0.5 rounded"
+    >
       {zh}
     </span>
   ));

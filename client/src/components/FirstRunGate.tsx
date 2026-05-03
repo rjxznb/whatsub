@@ -90,21 +90,17 @@ export function FirstRunGate({ children }: Props) {
       <div className="w-full max-w-4xl">
         <div className="text-center mb-10">
           <h1 className="text-4xl font-semibold mb-3">欢迎使用 whatsub</h1>
-          <p className="text-zinc-400 text-base leading-relaxed">
-            完成下面两小步，就可以开始用啦。两步可以同时进行 ——
-            模型在下载的时候你可以先去填密钥。
-          </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <ModelDownloadCard
+            done={modelOk}
+            onModelReady={() => setModelOk(true)}
+          />
           <TranslationServiceCard
             settings={settings}
             save={save}
             done={hasLlmKey}
-          />
-          <ModelDownloadCard
-            done={modelOk}
-            onModelReady={() => setModelOk(true)}
           />
         </div>
 
@@ -213,7 +209,7 @@ function TranslationServiceCard({
   }
 
   return (
-    <Card stepNum={1} icon={<Sparkles className="h-5 w-5" />} title="选择翻译服务" done={done}>
+    <Card stepNum={2} icon={<Sparkles className="h-5 w-5" />} title="选择翻译服务" done={done}>
       <p className="text-sm text-zinc-400 mb-4 leading-relaxed">
         请选择一个为你工作的人工智能吧 ✨
       </p>
@@ -408,12 +404,7 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
   }
 
   return (
-    <Card stepNum={2} icon={<Download className="h-5 w-5" />} title="下载字幕识别引擎" done={done}>
-      <p className="text-sm text-zinc-400 mb-4 leading-relaxed">
-        从视频里识别出英文字幕。下面挑一个版本下载 ——{" "}
-        <strong className="text-zinc-300">质量越高、文件越大</strong>。只需下载一次，以后所有视频都用它。
-      </p>
-
+    <Card stepNum={1} icon={<Download className="h-5 w-5" />} title="下载字幕识别引擎" done={done}>
       <div className="space-y-2 mb-4">
         {MODEL_TIERS.map((t) => {
           const isSelected = t.size === selectedSize;

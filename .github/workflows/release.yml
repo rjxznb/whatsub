@@ -381,7 +381,7 @@ jobs:
 
       - name: Download static ffmpeg (arm64)
         run: |
-          curl -L -o ffmpeg.zip "${{ inputs.ffmpeg_url_macos }}"
+          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o ffmpeg.zip "${{ inputs.ffmpeg_url_macos }}"
           unzip -o ffmpeg.zip -d ffmpeg-extract
           BIN=$(find ffmpeg-extract -name ffmpeg -type f | head -1)
           cp "$BIN" client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
@@ -391,7 +391,7 @@ jobs:
         run: |
           # osxexperts ships ffprobe in a separate zip on macOS; needed by
           # yt-dlp for fragmented DASH/HLS streams.
-          curl -L -o ffprobe.zip "${{ inputs.ffprobe_url_macos }}"
+          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o ffprobe.zip "${{ inputs.ffprobe_url_macos }}"
           unzip -o ffprobe.zip -d ffprobe-extract
           BIN=$(find ffprobe-extract -name ffprobe -type f | head -1)
           cp "$BIN" client/src-tauri/binaries/ffprobe-aarch64-apple-darwin
@@ -399,7 +399,7 @@ jobs:
 
       - name: Download yt-dlp
         run: |
-          curl -L -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin \
+          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin \
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
           chmod +x client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin
 
@@ -416,7 +416,7 @@ jobs:
         if: steps.node-cache-mac.outputs.cache-hit != 'true'
         run: |
           v="${{ inputs.node_version }}"
-          curl -L -o node.tar.gz "https://nodejs.org/dist/v$v/node-v$v-darwin-arm64.tar.gz"
+          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o node.tar.gz "https://nodejs.org/dist/v$v/node-v$v-darwin-arm64.tar.gz"
           tar -xzf node.tar.gz
           BIN=$(find . -path "*/bin/node" -type f | head -1)
           if [ -z "$BIN" ]; then

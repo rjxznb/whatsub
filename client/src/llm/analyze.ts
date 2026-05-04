@@ -43,9 +43,20 @@ export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
     const batch = batches[i];
     const userPrompt = i === 0 ? buildUserPrompt(batch) : buildContinuationPrompt(batch);
 
+    // Index → original cue lookup so parseCue can fill text/time/endTime
+    // from the input cue when the LLM omits or mangles those fields in
+    // its echo. We treat the cues we sent to the LLM as the authoritative
+    // source for those — there's no point trusting a re-typing of input.
+    const byIndex = new Map<number, SrtCue>(batch.map((c) => [c.index, c]));
+    // Fallback positional iterator for models that don't echo `index` either
+    // (rare, but seen). LLM is supposed to emit cues in batch order.
+    let positionalIter = 0;
+
     const parser = new JsonLineParser();
     const handle = (obj: unknown) => {
-      const cue = parseCue(obj);
+      const original = resolveOriginal(obj, byIndex, batch, positionalIter);
+      if (original) positionalIter = batch.indexOf(original) + 1;
+      const cue = parseCue(obj, original);
       if (!cue) return;
       analyzedCues.push(cue);
       opts.onCue(cue);
@@ -91,15 +102,48 @@ export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
   }
 }
 
-function parseCue(obj: unknown): Subtitle | null {
+/**
+ * Match the LLM's emitted cue object back to the original SrtCue we sent
+ * in this batch. Tries `index` echo first, falls back to positional
+ * (LLM is asked for one line per cue in order). Used so parseCue can pull
+ * authoritative text/time/endTime from the input rather than trusting
+ * the LLM to echo them — some models silently drop those fields, which
+ * earlier caused `text` to render as the literal string "undefined".
+ */
+function resolveOriginal(
+  obj: unknown,
+  byIndex: Map<number, SrtCue>,
+  batch: SrtCue[],
+  positional: number,
+): SrtCue | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const o = obj as Record<string, unknown>;
+  const idx = Number(o.index);
+  if (Number.isFinite(idx) && byIndex.has(idx)) return byIndex.get(idx);
+  // No usable index → use positional fallback (cues stream in order).
+  if (positional < batch.length) return batch[positional];
+  return undefined;
+}
+
+function parseCue(obj: unknown, original: SrtCue | undefined): Subtitle | null {
   if (!obj || typeof obj !== "object") return null;
   const o = obj as Record<string, unknown>;
   if (o.type !== "cue") return null;
+
+  // text/time/endTime come from the input (we already know them); the LLM's
+  // echo is only used as a last-resort fallback if for some reason we
+  // can't resolve the original cue. Without this fallback, models that
+  // skip the echo to save tokens caused every cue to render text =
+  // "undefined" (String(undefined)).
+  const text = original?.text ?? String(o.text ?? "");
+  const time = original?.time ?? Number(o.time);
+  const endTime = original?.endTime ?? Number(o.endTime);
+
   return {
-    time: Number(o.time),
-    endTime: Number(o.endTime),
-    text: String(o.text),
-    translation: String(o.translation),
+    time,
+    endTime,
+    text,
+    translation: String(o.translation ?? ""),
     isKeyPoint: Boolean(o.isKeyPoint),
     highlightWords: Array.isArray(o.highlightWords) ? (o.highlightWords as string[]) : [],
     // Reject anything that isn't a plain {phrase: note} object — some models

@@ -150,15 +150,15 @@ pub async fn download(
         args.push(ffmpeg.to_string_lossy().to_string());
     }
 
-    // ffprobe is only needed for fragmented (DASH/HLS) downloads — most
-    // YouTube videos don't hit it — but when they do, yt-dlp tries to find
-    // ffprobe next to ffmpeg and fails because Tauri renames the sidecar
-    // with the target-triple suffix. Pass `--ffprobe-location` explicitly
-    // so the bundled binary is found regardless of naming.
-    if let Some(ffprobe) = sidecar_path("ffprobe") {
-        args.push("--ffprobe-location".into());
-        args.push(ffprobe.to_string_lossy().to_string());
-    }
+    // NOTE: yt-dlp doesn't have a `--ffprobe-location` flag; it expects
+    // ffprobe to live next to the ffmpeg pointed at by --ffmpeg-location
+    // and to be named bare `ffprobe`/`ffprobe.exe`. Our bundled ffprobe is
+    // renamed to `ffprobe-<triple>` by Tauri's externalBin pipeline, so
+    // yt-dlp can't auto-find it. Result: most YouTube downloads still
+    // work (single-file streams don't need ffprobe); fragmented DASH
+    // downloads will fail with "ffprobe not found". TODO: copy
+    // ffprobe-<triple> → bare ffprobe name into a user-writable dir at
+    // first run so yt-dlp can find it.
 
     // JS runtime — REQUIRED for YouTube. Without one, yt-dlp's n-challenge
     // solver fails and all real video formats become unavailable (only

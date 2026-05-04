@@ -703,28 +703,22 @@ function Card({
         }
       >
         <div className="overflow-hidden min-h-0">
-          <div className="flex items-start gap-3 pb-4">
-            <div
-              className={
-                "w-10 h-10 shrink-0 flex items-center justify-center " +
-                (done ? "text-green-400" : "text-blue-300")
-              }
+          {/* items-baseline aligns the Caveat digit's text baseline with
+              the title's baseline — using items-start with a tall (h-10)
+              wrapper around the digit visually pushed the number lower
+              than the title. The number's natural box now drives the
+              header height. */}
+          <div className="flex items-baseline gap-3 pb-4">
+            <span
+              className={"shrink-0 leading-none " + (done ? "text-green-400" : "text-blue-300")}
+              style={{
+                fontFamily: "Caveat, cursive",
+                fontSize: 32,
+                fontWeight: 700,
+              }}
             >
-              {done ? (
-                <Check className="h-6 w-6" />
-              ) : (
-                <span
-                  style={{
-                    fontFamily: "Caveat, cursive",
-                    fontSize: 32,
-                    fontWeight: 700,
-                    lineHeight: 1,
-                  }}
-                >
-                  {stepNum}
-                </span>
-              )}
-            </div>
+              {done ? "✓" : stepNum}
+            </span>
             <div className="flex-1 min-w-0">
               <h2 className="text-lg font-medium">{title}</h2>
             </div>

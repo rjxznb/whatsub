@@ -252,15 +252,20 @@ The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf
 - **Never commit .msi / .sig** — release assets only.
 - **Never delete a release users have installed from** — breaks their signature chain for subsequent updates.
 
+## 踩过的坑 (avoid repeating)
+
+- **yt-dlp 没有 `--ffprobe-location` flag**. The flag does NOT exist — passing it makes yt-dlp exit 2 with `no such option: --ffprobe-location`. yt-dlp only has `--ffmpeg-location` and auto-discovers ffprobe by literal name (`ffprobe` / `ffprobe.exe`) in the same directory as the resolved ffmpeg. Our sidecars are renamed to `ffprobe-<triple>{.exe}` by Tauri's externalBin pipeline, so yt-dlp can't find them — bundled ffprobe is currently unreachable. To make it usable: at first run, copy `ffprobe-<triple>` to `<user_data>/sidecar/ffprobe<.exe>` (bare name) and pass `--ffmpeg-location <user_data>/sidecar/`. Note: writing to `Program Files/whatsub/binaries/` requires admin on Windows, hence the user-data detour.
+
 ## Known limitations / TODO
 
 - All OpenAI-compatible vendors share one API-key slot (`settings.openaiCompatible`) — switching DeepSeek ↔ Kimi loses prior key.
 - `settings.modelsDir` change does NOT migrate existing `.bin` files in old dir.
 - Rust tests pollute real `%APPDATA%/whatsub/` (library / settings tests). Should use temp dir.
 - ARM64 Windows / Intel Mac not built.
-- ffprobe not bundled — yt-dlp's standard download path doesn't need it, but if a video happens to require fragment probing the export will fail with `ffprobe not found`. Bundle alongside ffmpeg if it ever shows up.
+- ffprobe bundled but yt-dlp can't reach it (triple-suffixed naming) — see 踩过的坑 above. Most YouTube downloads work without ffprobe; fragmented DASH/HLS streams will fail with "ffprobe not found".
 - Burn-in export uses libx264 only (no NVENC). ~1–2x realtime CPU; would need a NVENC-enabled ffmpeg build to accelerate.
 - Updater endpoint via fastly CDN can lag 5–30 min behind a fresh upload — known GitHub release behavior, no fix on our side.
+- Tauri updater plugin doesn't disk-cache downloaded installers across app restarts — `update.downloadAndInstall()` keeps bytes in memory, so cancelling the OS installer + relaunching the app forces a re-download. Splitting into `download()` + `install()` with our own cache layer would fix it but adds ~80 lines of validation logic; not worth the engineering until users complain.
 
 ## Quick map
 

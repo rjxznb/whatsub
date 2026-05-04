@@ -1,11 +1,14 @@
 """
-Rebuild app icon resources from the latest 1024x1024 source PNG.
+Rebuild app icon resources from the latest icon source.
 
 Reads:
-    NEW_ICON_DIR / icon-1024.png
+    SRC — either an .svg (rasterized to 1024x1024 via cairosvg) or a
+          1024x1024 .png. SVG is preferred because the source repo lives
+          there and PNG can be re-derived; PNG fallback exists so this
+          script still runs in environments without cairo / cairosvg.
 
 Writes (all under client/src-tauri/icons/):
-    source.png            archival copy of the unmodified 1024 input
+    source.png            archival copy of the rasterized 1024 input
     32x32.png             ┐
     64x64.png             │ Windows / Linux raster sizes — no padding,
     128x128.png           │ same as the source so the icon fills its
@@ -17,7 +20,7 @@ Writes (all under client/src-tauri/icons/):
                           apps in the dock (HIG icon body ≈ 824/1024)
 
 Run with:  python _apply_new_icon.py
-(uses the ASR conda env's Pillow — no extra deps)
+(uses the ASR conda env's Pillow + cairosvg — no extra deps to install)
 """
 import io
 import struct
@@ -26,8 +29,8 @@ from pathlib import Path
 from PIL import Image
 
 THIS = Path(__file__).resolve().parent
-NEW_ICON_DIR = Path(r"C:\Users\renjx\Desktop\whatsub-icon")
-SRC = NEW_ICON_DIR / "icon-1024.png"
+NEW_ICON_DIR = Path(r"C:\Users\renjx\Desktop\whatsub-icon-src")
+SRC = NEW_ICON_DIR / "whatsub-icon.svg"
 
 # How much of the macOS canvas the icon body should fill. 0.82 leaves ~9%
 # transparent padding on each side, matching the Apple HIG "icon grid"
@@ -111,17 +114,49 @@ def write_icns(path: Path, mac_src: Image.Image) -> None:
     path.write_bytes(b"icns" + struct.pack(">I", 8 + len(body)) + body)
 
 
+def load_source_as_png_bytes() -> bytes:
+    """Load SRC and return 1024x1024 RGBA PNG bytes.
+
+    SVG path: cairosvg rasterizes the vector into a clean 1024x1024 PNG.
+    We rewrite the embedded `whatsub-logo.png` href to an absolute file://
+    URL because cairosvg on Windows resolves bare relative paths against
+    drive root (so 'whatsub-logo.png' becomes 'C:\\whatsub-logo.png' and
+    fails); pinning the absolute path side-steps that.
+
+    PNG path: read as-is.
+    """
+    if SRC.suffix.lower() == ".svg":
+        import cairosvg  # imported lazily so PNG-only setups don't need it
+        svg_text = SRC.read_text(encoding="utf-8")
+        # Rewrite any bare-relative image hrefs to absolute file:// URLs
+        # rooted next to the SVG. Covers both single- and double-quoted hrefs.
+        for sibling in SRC.parent.iterdir():
+            if sibling.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+                abs_url = sibling.as_uri()
+                svg_text = svg_text.replace(f'href="{sibling.name}"', f'href="{abs_url}"')
+                svg_text = svg_text.replace(f"href='{sibling.name}'", f"href='{abs_url}'")
+        png = cairosvg.svg2png(
+            bytestring=svg_text.encode("utf-8"),
+            output_width=1024,
+            output_height=1024,
+            unsafe=True,
+        )
+        return png
+    return SRC.read_bytes()
+
+
 def main() -> None:
     if not SRC.exists():
         raise SystemExit(f"source not found: {SRC}")
-    src = Image.open(SRC).convert("RGBA")
+    raw = load_source_as_png_bytes()
+    src = Image.open(io.BytesIO(raw)).convert("RGBA")
     if src.size != (1024, 1024):
         print(f"warning: source is {src.size}, resampling to 1024x1024")
         src = src.resize((1024, 1024), Image.LANCZOS)
 
-    # 1. Archive the raw input as source.png (used by `pnpm tauri icon`
-    #    if anyone wants to regen via the Tauri CLI in the future).
-    (THIS / "source.png").write_bytes(SRC.read_bytes())
+    # 1. Archive the rasterized source as source.png (lets `pnpm tauri icon`
+    #    re-run from the same input later, even if the SVG toolchain is gone).
+    (THIS / "source.png").write_bytes(raw)
 
     # 2. PNG resources (Win/Linux/iOS/Android use these; no padding).
     for filename, size in [

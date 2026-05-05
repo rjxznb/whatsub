@@ -2,12 +2,12 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, ExternalLink, Check, Pause, Play, Download } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
+import { useModelDownload } from "../store/modelDownload";
 import { useUpdater } from "../hooks/useUpdater";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -16,9 +16,19 @@ export function Settings() {
   const [draft, setDraft] = useState<Settings>(settings);
   const [modelDownloaded, setModelDownloaded] = useState<Record<string, boolean>>({});
   const [modelPartialPct, setModelPartialPct] = useState<Record<string, number>>({});
-  const [downloading, setDownloading] = useState<WhisperModelSize | null>(null);
-  const [downloadPct, setDownloadPct] = useState(0);
-  const [downloadPaused, setDownloadPaused] = useState<WhisperModelSize | null>(null);
+  // Whisper download state lives in a global Zustand store so navigating
+  // away from Settings (e.g. back to Library) doesn't drop the in-flight
+  // invoke / progress listener. Component unmount = no UI; download keeps
+  // running; come back, store still has the live phase + pct.
+  const {
+    phase: dlPhase,
+    activeSize: dlActive,
+    pct: downloadPct,
+    start: startDownload,
+    pause: pauseDownload,
+  } = useModelDownload();
+  const downloading = dlPhase === "downloading" ? dlActive : null;
+  const downloadPaused = dlPhase === "paused" ? dlActive : null;
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -50,44 +60,15 @@ export function Settings() {
     });
   }, [downloading, downloadPaused]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<{ stage: string; progress?: number }>("pipeline-event", (e) => {
-      if (e.payload.stage === "ModelDownload" && typeof e.payload.progress === "number") {
-        setDownloadPct(e.payload.progress);
-      }
-    }).then((u) => {
-      unlisten = u;
-    });
-    return () => unlisten?.();
-  }, []);
+  // The pipeline-event listener for ModelDownload progress is set up once
+  // inside the modelDownload store on first start() — no per-component
+  // listen needed here.
 
-  async function downloadModel(size: WhisperModelSize) {
-    setDownloading(size);
-    setDownloadPaused(null);
-    // If resuming a paused tier, the % already reflects the partial; otherwise
-    // reset to 0 and let the first event update it.
-    if (downloadPaused !== size) setDownloadPct(0);
-    try {
-      await invoke("whisper_model_download", { size });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // Rust returns AppError::Other("cancelled") on user pause — treat as
-      // a paused state instead of a hard error so 继续 can resume from .partial.
-      if (msg.toLowerCase().includes("cancelled")) {
-        setDownloadPaused(size);
-      } else {
-        console.error("model download failed", e);
-        alert(`下载失败：${msg}`);
-      }
-    } finally {
-      setDownloading(null);
-    }
-  }
-
-  async function pauseDownload() {
-    await invoke("whisper_model_download_cancel");
-    // The downloadModel() promise will reject shortly; its catch sets paused.
+  function downloadModel(size: WhisperModelSize) {
+    // Fire-and-forget: the store keeps the in-flight invoke alive across
+    // navigation. We don't await here so the click handler returns
+    // immediately; phase/pct updates flow through the store subscription.
+    void startDownload(size);
   }
 
   async function testConnection() {

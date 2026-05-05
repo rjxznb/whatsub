@@ -40,6 +40,7 @@ pub fn run() {
             commands::models::whisper_model_download,
             commands::models::whisper_model_download_cancel,
             commands::import::import_video,
+            commands::import::retranscribe_video,
             commands::vocabulary::vocab_list,
             commands::vocabulary::vocab_add,
             commands::vocabulary::vocab_remove,

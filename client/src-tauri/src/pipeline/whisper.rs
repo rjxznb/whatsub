@@ -40,6 +40,18 @@ pub fn model_exists(size: &str) -> AppResult<bool> {
 /// and appends to it. Falls back to a fresh download if the server doesn't
 /// honor the range request (200 instead of 206).
 ///
+/// Robustness: wraps the stream loop in an outer retry (up to MAX_RETRIES)
+/// so a single network hiccup doesn't burn a whole 3 GB download. Each
+/// chunk read is wrapped in a CHUNK_TIMEOUT — a stalled stream auto-aborts
+/// and re-issues a Range request from the current on-disk position.
+///
+/// Corruption guard: validates the server's `Content-Range` start matches
+/// our requested offset. Some CDN edges (notably hf-mirror) occasionally
+/// serve 206 starting from byte 0 instead of the byte we asked for —
+/// blindly appending those bytes to an existing partial would silently
+/// produce a "right size, wrong content" file (the bug that bricked the
+/// large-v3 model). On mismatch we wipe the .partial and start fresh.
+///
 /// Cancel: the loop checks `cancel` once per chunk. On cancel we sync the
 /// .partial file (so the bytes stay on disk for next resume) and return
 /// `AppError::Other("cancelled")`. The frontend matches on that string.
@@ -53,102 +65,212 @@ pub async fn download_model(app: &AppHandle, size: &str, cancel: &AtomicBool) ->
     // leaves a "complete-looking" file at `dest`. Rename to the final name
     // only after the stream finishes successfully.
     let partial = dest.with_extension("bin.partial");
-    let existing: u64 = std::fs::metadata(&partial)
-        .ok()
-        .map(|m| m.len())
-        .unwrap_or(0);
+
+    const MAX_RETRIES: u8 = 3;
+    const CHUNK_TIMEOUT_SECS: u64 = 30;
+    const RETRY_BACKOFF_SECS: u64 = 2;
 
     let client = reqwest::Client::new();
-    let mut req = client.get(url);
-    if existing > 0 {
-        req = req.header("Range", format!("bytes={}-", existing));
-    }
-    let resp = req.send().await?;
-    let status = resp.status();
-    let resume = status == reqwest::StatusCode::PARTIAL_CONTENT;
-
-    // Total expected bytes:
-    //   206 → parse "Content-Range: bytes start-end/total"; fall back to
-    //         existing + content_length if not parseable.
-    //   200 → server ignored Range (or first request); use Content-Length.
-    let total_bytes: u64 = if resume {
-        resp.headers()
-            .get("content-range")
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| s.split('/').nth(1))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(|| existing + resp.content_length().unwrap_or(0))
-    } else {
-        resp.content_length().unwrap_or(total_mb * 1024 * 1024)
-    };
-
-    let starting_offset = if resume { existing } else { 0 };
-    let mut downloaded = starting_offset;
-    let mut last_percent: u8 = ((starting_offset as f64 / total_bytes as f64) * 100.0) as u8;
+    let mut retry: u8 = 0;
+    let mut total_bytes: Option<u64> = None;
 
     use futures_util::StreamExt;
     use std::io::Write;
-    {
-        let mut file = if resume {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .append(true)
-                .open(&partial)?
-        } else {
-            // Fresh download — overwrite any stale .partial.
-            std::fs::File::create(&partial)?
-        };
-        let mut stream = resp.bytes_stream();
 
-        // Emit an initial progress event so resumed downloads show their
-        // starting % immediately rather than jumping from 0.
-        if resume && starting_offset > 0 {
-            emit(
-                app,
-                PipelineEvent::ModelDownload {
-                    progress: last_percent,
-                    total_mb: total_bytes / 1024 / 1024,
-                    downloaded_mb: downloaded / 1024 / 1024,
-                },
-            );
+    loop {
+        // Re-read .partial size each iteration: if a previous attempt's
+        // chunks landed on disk before failing, we resume from where they
+        // got to — not where we started this iteration.
+        let existing: u64 = std::fs::metadata(&partial).ok().map(|m| m.len()).unwrap_or(0);
+
+        let resp = {
+            let mut req = client.get(url);
+            if existing > 0 {
+                req = req.header("Range", format!("bytes={}-", existing));
+            }
+            match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if retry >= MAX_RETRIES {
+                        return Err(e.into());
+                    }
+                    retry += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECS)).await;
+                    continue;
+                }
+            }
+        };
+        let resume = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+
+        // ── Content-Range integrity check ────────────────────────────────
+        // If we asked for "bytes=N-" and the server returns 206, the
+        // Content-Range header MUST start at N. If it starts elsewhere,
+        // the new bytes don't continue our existing partial — appending
+        // them would silently corrupt the file. Drop the partial and
+        // retry from scratch.
+        if resume && existing > 0 {
+            let returned_start = resp
+                .headers()
+                .get("content-range")
+                .and_then(|h| h.to_str().ok())
+                .and_then(parse_content_range_start);
+            if returned_start != Some(existing) {
+                drop(resp);
+                let _ = std::fs::remove_file(&partial);
+                if retry >= MAX_RETRIES {
+                    return Err(AppError::Other(format!(
+                        "Content-Range mismatch: asked for byte {}, server returned {:?}; partial discarded",
+                        existing, returned_start
+                    )));
+                }
+                retry += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECS)).await;
+                continue;
+            }
         }
 
-        while let Some(chunk) = stream.next().await {
-            if cancel.load(Ordering::Relaxed) {
-                // Best-effort flush so what's on disk is durable for resume.
-                let _ = file.sync_all();
-                return Err(AppError::Other(DOWNLOAD_CANCELLED.into()));
-            }
-            let bytes = chunk?;
-            file.write_all(&bytes)?;
-            downloaded += bytes.len() as u64;
-            let pct = ((downloaded as f64 / total_bytes as f64) * 100.0) as u8;
-            if pct != last_percent {
-                last_percent = pct;
+        // Compute total bytes once on the first successful response.
+        // Subsequent retries reuse this so the truncation check at the
+        // bottom doesn't go off a stale Content-Length from a 206 request
+        // whose Content-Range parsing failed.
+        if total_bytes.is_none() {
+            total_bytes = Some(if resume {
+                resp.headers()
+                    .get("content-range")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.split('/').nth(1))
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(|| existing + resp.content_length().unwrap_or(0))
+            } else {
+                resp.content_length().unwrap_or(total_mb * 1024 * 1024)
+            });
+        }
+        let tb = total_bytes.unwrap();
+
+        let starting_offset = if resume { existing } else { 0 };
+        let mut downloaded = starting_offset;
+        let mut last_percent: u8 = ((starting_offset as f64 / tb as f64) * 100.0) as u8;
+
+        // ── Stream + write loop ──────────────────────────────────────────
+        // Returns Some(error) on any chunk-level failure (timeout, network,
+        // IO) so the outer loop can retry from the current on-disk offset.
+        // Returns None on clean EOF.
+        let stream_err: Option<AppError> = {
+            let mut file = if resume {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .append(true)
+                    .open(&partial)?
+            } else {
+                // Fresh download — overwrite any stale .partial.
+                std::fs::File::create(&partial)?
+            };
+            let mut stream = resp.bytes_stream();
+
+            if resume && starting_offset > 0 {
                 emit(
                     app,
                     PipelineEvent::ModelDownload {
-                        progress: pct,
-                        total_mb: total_bytes / 1024 / 1024,
+                        progress: last_percent,
+                        total_mb: tb / 1024 / 1024,
                         downloaded_mb: downloaded / 1024 / 1024,
                     },
                 );
             }
+
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = file.sync_all();
+                    return Err(AppError::Other(DOWNLOAD_CANCELLED.into()));
+                }
+                let next = tokio::time::timeout(
+                    std::time::Duration::from_secs(CHUNK_TIMEOUT_SECS),
+                    stream.next(),
+                )
+                .await;
+                let chunk_opt = match next {
+                    Err(_) => {
+                        let _ = file.sync_all();
+                        break Some(AppError::Other(format!(
+                            "no data for {}s — connection stalled",
+                            CHUNK_TIMEOUT_SECS
+                        )));
+                    }
+                    Ok(c) => c,
+                };
+                let bytes = match chunk_opt {
+                    None => {
+                        let _ = file.sync_all();
+                        break None;
+                    }
+                    Some(Err(e)) => {
+                        let _ = file.sync_all();
+                        break Some(e.into());
+                    }
+                    Some(Ok(b)) => b,
+                };
+                if let Err(e) = file.write_all(&bytes) {
+                    let _ = file.sync_all();
+                    break Some(e.into());
+                }
+                downloaded += bytes.len() as u64;
+                let pct = ((downloaded as f64 / tb as f64) * 100.0) as u8;
+                if pct != last_percent {
+                    last_percent = pct;
+                    emit(
+                        app,
+                        PipelineEvent::ModelDownload {
+                            progress: pct,
+                            total_mb: tb / 1024 / 1024,
+                            downloaded_mb: downloaded / 1024 / 1024,
+                        },
+                    );
+                }
+            }
+            // file dropped here, releasing the OS handle so the next
+            // iteration can open it cleanly in append mode.
+        };
+
+        if let Some(e) = stream_err {
+            if retry >= MAX_RETRIES {
+                return Err(e);
+            }
+            retry += 1;
+            tokio::time::sleep(std::time::Duration::from_secs(RETRY_BACKOFF_SECS)).await;
+            continue;
         }
-        file.sync_all()?;
+
+        break; // clean EOF → exit retry loop
     }
 
     // Sanity check: if Content-Length was known, refuse to rename a truncated file.
-    if resp_had_content_length(total_bytes, total_mb) && downloaded < total_bytes {
+    let tb = total_bytes.unwrap_or(0);
+    let final_size = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+    if resp_had_content_length(tb, total_mb) && final_size < tb {
         // Don't delete .partial — user can resume.
         return Err(AppError::Other(format!(
             "download truncated: got {} bytes, expected {}",
-            downloaded, total_bytes
+            final_size, tb
         )));
     }
 
     std::fs::rename(&partial, &dest)?;
     Ok(())
+}
+
+/// Parse the start byte of an HTTP `Content-Range` value.
+///
+/// Format: `bytes <start>-<end>/<total>`  →  `Some(start)`
+/// Returns `None` for malformed input.
+fn parse_content_range_start(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .strip_prefix("bytes ")?
+        .split('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn resp_had_content_length(total_bytes: u64, fallback_mb: u64) -> bool {

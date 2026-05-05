@@ -66,21 +66,34 @@ export function ExportVideoModal({
   }, [phase, videoId]);
 
   const baseName = sanitizeFilename(videoTitle || videoId);
-  const canRun = subtitles.length > 0 && (includeEnglish || includeChinese);
+  // Three states:
+  //   - hasSubtitleSelected = true  → burn-in flow (needs subtitles loaded)
+  //   - hasSubtitleSelected = false → export the original via stream copy
+  //                                   (no analysis required, very fast)
+  // canRun blocks only when the user wants to burn in but the analysis
+  // hasn't produced subtitles yet.
+  const hasSubtitleSelected = includeEnglish || includeChinese;
+  const canRun = !hasSubtitleSelected || subtitles.length > 0;
 
   async function start() {
     if (!canRun) return;
+    // Output filename varies with mode so the user can tell at a glance
+    // whether they got the burned version or the raw copy.
+    const suffix = hasSubtitleSelected ? "subtitled" : "copy";
     const target = await save({
-      defaultPath: `${baseName}.subtitled.mp4`,
+      defaultPath: `${baseName}.${suffix}.mp4`,
       filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
     });
     if (!target) return;
 
-    const ass = subtitlesToAss(subtitles, {
-      includeEnglish,
-      includeChinese,
-      highlightKeyPhrases: highlight,
-    });
+    // Empty ASS string → Rust skips -vf subtitles= and stream-copies.
+    const ass = hasSubtitleSelected
+      ? subtitlesToAss(subtitles, {
+          includeEnglish,
+          includeChinese,
+          highlightKeyPhrases: highlight,
+        })
+      : "";
 
     cancelRef.current = false;
     setOutputPath(target);
@@ -161,10 +174,18 @@ export function ExportVideoModal({
                 />
                 烧录中文字幕
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label
+                className={
+                  "flex items-center gap-2 " +
+                  (hasSubtitleSelected
+                    ? "cursor-pointer text-zinc-200"
+                    : "cursor-not-allowed text-zinc-600")
+                }
+              >
                 <input
                   type="checkbox"
-                  checked={highlight}
+                  checked={highlight && hasSubtitleSelected}
+                  disabled={!hasSubtitleSelected}
                   onChange={(e) => setHighlight(e.target.checked)}
                   className="accent-blue-500"
                 />
@@ -172,17 +193,13 @@ export function ExportVideoModal({
               </label>
             </div>
             <div className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-              视频会重新编码（H.264 + AAC，192 kbps 立体声），耗时大约为视频长度的 1-2 倍。
-              鼠标悬浮在重点上的解析框不会烧录到视频里。
+              {hasSubtitleSelected
+                ? "视频会重新编码（H.264 + AAC，192 kbps 立体声），耗时大约为视频长度的 1-2 倍。鼠标悬浮在重点上的解析框不会烧录到视频里。"
+                : "都不勾选 → 直接导出原视频（流复制，几秒搞定，无损）。"}
             </div>
-            {!canRun && subtitles.length === 0 && (
+            {!canRun && (
               <div className="mt-2 text-xs text-amber-300">
-                字幕未生成完毕，无法导出
-              </div>
-            )}
-            {!canRun && subtitles.length > 0 && (
-              <div className="mt-2 text-xs text-amber-300">
-                请至少选择一种字幕语言
+                字幕未生成完毕，无法烧录字幕；可改为不勾选任何项导出原视频
               </div>
             )}
             <div className="flex justify-end gap-2 mt-5">
@@ -197,7 +214,7 @@ export function ExportVideoModal({
                 disabled={!canRun}
                 className="px-4 py-1.5 bg-blue-500 text-black text-sm rounded font-medium disabled:opacity-50"
               >
-                开始导出
+                {hasSubtitleSelected ? "开始导出" : "导出原视频"}
               </button>
             </div>
           </>

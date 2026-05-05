@@ -13,9 +13,13 @@ const PHASE_LABELS: Record<string, string> = {
 interface Props {
   onStop?: () => void;
   onContinue?: () => void;
+  /** Re-run audio extraction + whisper for this video. Surfaces as a retry
+   *  button on the error banner so a user whose download succeeded but
+   *  whisper failed can recover without re-importing the URL. */
+  onRetranscribe?: () => void;
 }
 
-export function ProgressBanner({ onStop, onContinue }: Props) {
+export function ProgressBanner({ onStop, onContinue, onRetranscribe }: Props) {
   const { phase, progressPercent, errorMessage, subtitles } = useAnalysis();
   if (phase === "idle" || phase === "complete") return null;
 
@@ -54,6 +58,14 @@ export function ProgressBanner({ onStop, onContinue }: Props) {
           className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs transition-colors"
         >
           继续解析
+        </button>
+      )}
+      {isError && onRetranscribe && (
+        <button
+          onClick={onRetranscribe}
+          className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white text-xs transition-colors"
+        >
+          重新解析
         </button>
       )}
 

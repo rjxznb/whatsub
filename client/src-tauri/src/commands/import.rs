@@ -1,4 +1,4 @@
-use crate::commands::library::{library_upsert, LibraryEntry, LibrarySource, LibraryStatus};
+use crate::commands::library::{library_get, library_upsert, LibraryEntry, LibrarySource, LibraryStatus};
 use crate::core::ids;
 use crate::core::paths;
 use crate::core::progress::{emit, PipelineEvent};
@@ -104,6 +104,77 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
 
     let srt_path =
         whisper::transcribe(&app, &audio_path, &out_dir, &req.whisper_model, &video_id).await?;
+    let dur_sec = std::fs::metadata(&audio_path)
+        .map(|m| m.len() as f64 / (16000.0 * 2.0))
+        .unwrap_or(0.0);
+
+    emit(
+        &app,
+        PipelineEvent::Transcribed {
+            video_id: video_id.clone(),
+            srt_path: srt_path.to_string_lossy().to_string(),
+            duration_sec: dur_sec,
+        },
+    );
+
+    Ok(ImportResult {
+        video_id,
+        srt_path: srt_path.to_string_lossy().to_string(),
+        duration_sec: dur_sec,
+    })
+}
+
+/// Re-run audio extraction + whisper transcription for an already-downloaded
+/// video, without re-downloading. Used by the player page when whisper failed
+/// during the original import (the source.mp4 is on disk but transcript.srt
+/// isn't), so the user can retry without throwing away the download.
+///
+/// Emits the same Started → ExtractingAudio → Transcribing → Transcribed
+/// pipeline events as `import_video` so the existing progress listeners on
+/// the frontend (ProgressBanner / store) just work.
+#[tauri::command]
+pub async fn retranscribe_video(
+    app: AppHandle,
+    video_id: String,
+    whisper_model: String,
+) -> AppResult<ImportResult> {
+    let out_dir = paths::video_dir(&video_id)?;
+    let video_path = out_dir.join("source.mp4");
+    if !video_path.exists() {
+        return Err(AppError::NotFound(format!(
+            "source.mp4 not found in {}",
+            out_dir.display()
+        )));
+    }
+
+    emit(
+        &app,
+        PipelineEvent::Started {
+            video_id: video_id.clone(),
+        },
+    );
+
+    // Flip the library entry back to Analyzing + clear last_error so the
+    // Library page card stops showing "Failed" while the retry runs. If the
+    // entry got deleted somehow, just continue — transcript output still
+    // lands in the right directory and the user can re-import to re-list it.
+    if let Some(mut entry) = library_get(video_id.clone())? {
+        entry.status = LibraryStatus::Analyzing;
+        entry.last_error = None;
+        library_upsert(entry)?;
+    }
+
+    emit(
+        &app,
+        PipelineEvent::ExtractingAudio {
+            video_id: video_id.clone(),
+        },
+    );
+    let audio_path = out_dir.join("audio.wav");
+    ffmpeg::extract_audio_wav(&app, &video_path, &audio_path, &video_id).await?;
+
+    let srt_path =
+        whisper::transcribe(&app, &audio_path, &out_dir, &whisper_model, &video_id).await?;
     let dur_sec = std::fs::metadata(&audio_path)
         .map(|m| m.len() as f64 / (16000.0 * 2.0))
         .unwrap_or(0.0);

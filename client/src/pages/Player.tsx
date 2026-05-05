@@ -279,6 +279,32 @@ export function Player() {
     void startAnalysisFrom(startIdx);
   };
 
+  // Bumped after a successful retranscribe to make the load useEffect
+  // (keyed on [videoId, reloadKey]) re-run and pick up the freshly written
+  // transcript.srt + restart AI analysis. Pure session state — no need to
+  // persist or reset on unmount.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const onRetranscribe = async () => {
+    if (!videoId) return;
+    // Reset analysis store so phase/percent flow cleanly into the banner
+    // via the existing useTauriEvent("pipeline-event") above. startFor sets
+    // phase=downloading; we immediately move it to extracting since
+    // retranscribe skips the download.
+    analysis.startFor(videoId);
+    analysis.setPhase("extracting", 0);
+    try {
+      await invoke("retranscribe_video", {
+        videoId,
+        whisperModel: settings.whisperModel,
+      });
+      // SRT is now on disk. Re-run the loader to parse it + kick off LLM.
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      analysis.setError(String(e));
+    }
+  };
+
   useEffect(() => {
     if (!videoId) return;
     // StrictMode in dev double-mounts components. The pre-LLM phase still
@@ -358,7 +384,7 @@ export function Player() {
       flushPartialSave();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId]);
+  }, [videoId, reloadKey]);
 
   const currentIdx = useVideoSync(videoRef, analysis.subtitles);
 
@@ -432,7 +458,11 @@ export function Player() {
         </button>
       </header>
 
-      <ProgressBanner onStop={onStop} onContinue={onContinue} />
+      <ProgressBanner
+        onStop={onStop}
+        onContinue={onContinue}
+        onRetranscribe={onRetranscribe}
+      />
 
       <div ref={splitContainerRef} className="flex-1 flex min-h-0">
         <div

@@ -31,6 +31,9 @@ export function ExportVideoModal({
   const [includeEnglish, setIncludeEnglish] = useState(true);
   const [includeChinese, setIncludeChinese] = useState(true);
   const [highlight, setHighlight] = useState(true);
+  // libx264 quality preset for the burn-in re-encode. Ignored when no
+  // subtitle option is checked (stream copy is always lossless).
+  const [quality, setQuality] = useState<"high" | "standard" | "smooth">("standard");
   const [phase, setPhase] = useState<Phase>("config");
   const [percent, setPercent] = useState(0);
   const [outputPath, setOutputPath] = useState<string>("");
@@ -108,6 +111,7 @@ export function ExportVideoModal({
         assContent: ass,
         outputPath: target,
         durationSec,
+        quality,
       });
       if (!cancelRef.current) {
         setPercent(100);
@@ -192,6 +196,22 @@ export function ExportVideoModal({
                 高亮重点短语（黄色）
               </label>
             </div>
+
+            {hasSubtitleSelected && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+                <span className="shrink-0">画质</span>
+                <select
+                  value={quality}
+                  onChange={(e) => setQuality(e.target.value as typeof quality)}
+                  className="flex-1 px-2 py-1.5 bg-zinc-800 text-zinc-100 rounded border border-zinc-700"
+                >
+                  <option value="high">高（CRF 18，画质最好，文件最大、编码最慢）</option>
+                  <option value="standard">标准（CRF 22，推荐）</option>
+                  <option value="smooth">流畅（CRF 26，文件小、编码快）</option>
+                </select>
+              </div>
+            )}
+
             <div className="mt-3 text-[11px] leading-relaxed text-zinc-500">
               {hasSubtitleSelected
                 ? "视频会重新编码（H.264 + AAC，192 kbps 立体声），耗时大约为视频长度的 1-2 倍。鼠标悬浮在重点上的解析框不会烧录到视频里。"

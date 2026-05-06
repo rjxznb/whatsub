@@ -14,6 +14,15 @@ pub struct ImportRequest {
     pub source_kind: String, // "local" | "url"
     pub source_value: String,
     pub whisper_model: String,
+    /// One of "low" / "standard" / "high" / "best" — see
+    /// `pipeline::ytdlp::yt_dlp_format`. Ignored for local imports.
+    /// Defaults to "standard" (720p) when missing for backward compat.
+    #[serde(default = "default_quality")]
+    pub quality: String,
+}
+
+fn default_quality() -> String {
+    "standard".into()
 }
 
 #[derive(serde::Serialize, Debug)]
@@ -50,7 +59,7 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
 
     let (video_path, thumb_path, title, duration_sec) = match req.source_kind.as_str() {
         "url" => {
-            let r = ytdlp::download(&app, &req.source_value, &out_dir, &video_id).await?;
+            let r = ytdlp::download(&app, &req.source_value, &out_dir, &video_id, &req.quality).await?;
             (
                 PathBuf::from(r.video_path),
                 PathBuf::from(r.thumb_path),

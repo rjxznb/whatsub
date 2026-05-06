@@ -4,11 +4,22 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
+import { useAnalysis } from "../store/analysis";
 import { ImportModal } from "../components/ImportModal";
 import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { formatTime } from "../utils/time";
 import type { LibraryEntry } from "../types/library";
+
+// Phases where actual work (download / ffmpeg / whisper / LLM stream) is
+// happening right now. Library card uses this to distinguish "live run"
+// from "library entry stuck in analyzing because user left mid-stream".
+const ACTIVE_ANALYSIS_PHASES = new Set([
+  "downloading",
+  "extracting",
+  "transcribing",
+  "analyzing",
+]);
 
 const VIDEO_EXT_RE = /\.(mp4|mkv|mov|webm|avi|m4v)$/i;
 
@@ -52,6 +63,11 @@ interface MenuState {
 export function Library() {
   const navigate = useNavigate();
   const { library, reload, remove, rename, reorder, reveal } = useLibrary();
+  // Pull these as a tuple so the component re-renders when either changes —
+  // we just need to know "which video is the one currently being worked on,
+  // and is it active right now?" to pick the card label.
+  const activeAnalysisVideoId = useAnalysis((s) => s.videoId);
+  const activeAnalysisPhase = useAnalysis((s) => s.phase);
   const [importInitial, setImportInitial] = useState<{ filePath?: string } | null>(null);
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<MenuState | null>(null);
@@ -243,11 +259,30 @@ export function Library() {
                       draggable={false}
                     />
                   )}
-                  {v.status === "analyzing" && (
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs">
-                      解析中...
-                    </div>
-                  )}
+                  {v.status === "analyzing" && (() => {
+                    // Only show "解析中..." for the video that's CURRENTLY
+                    // being processed (active phase + matching id). Anything
+                    // else flagged "analyzing" is a stale entry whose run
+                    // got abandoned (user closed Player mid-stream, whisper
+                    // crashed during import, etc.) — call it out clearly so
+                    // the user doesn't think it's making progress in the
+                    // background. They can click the card to resume.
+                    const isLive =
+                      activeAnalysisVideoId === v.id &&
+                      ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
+                    return isLive ? (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs">
+                        解析中...
+                      </div>
+                    ) : (
+                      <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center text-amber-300 text-xs gap-0.5">
+                        <span>未完成解析</span>
+                        <span className="text-[10px] text-zinc-300/80">
+                          点击继续
+                        </span>
+                      </div>
+                    );
+                  })()}
                   {v.status === "failed" && (
                     <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center">
                       !

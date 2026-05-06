@@ -4,12 +4,12 @@
 
 ## 下载
 
-最新版本 **v0.1.11**（2026-05-03）：
+最新版本 **v0.1.17**（2026-05-06）：
 
 | 平台 | 下载 | 说明 |
 |------|------|------|
-| Windows 10/11 x64 | [whatsub_0.1.11_x64_en-US.msi](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.11/whatsub_0.1.11_x64_en-US.msi) | 双击安装，自动更新 |
-| macOS Apple Silicon | [whatsub_0.1.11_aarch64.dmg](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.11/whatsub_0.1.11_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
+| Windows 10/11 x64 | [whatsub_0.1.17_x64_en-US.msi](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.17/whatsub_0.1.17_x64_en-US.msi) | 双击安装，自动更新 |
+| macOS Apple Silicon | [whatsub_0.1.17_aarch64.dmg](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.17/whatsub_0.1.17_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
 | Intel Mac | — | 暂不支持 |
 
 ## 主要功能
@@ -19,8 +19,8 @@
   - Mac：Metal 后端，Apple Silicon 原生
   - 无 GPU 自动 fallback CPU
 - **任意 LLM**：DeepSeek / OpenAI / Kimi / Claude / Gemini / 智谱 / Qwen / SiliconFlow / Ollama，10 个预设 + 自定义
-- **YouTube 导入**：内置 yt-dlp，支持 cookies.txt 绕年龄/地区限制
-- **字幕导出**：英文 / 中文 / 双语 SRT，或将带高亮的字幕烧录进视频导出 MP4
+- **YouTube 导入**：内置 yt-dlp，支持 cookies.txt 绕年龄/地区限制；可选画质（480p / 720p / 1080p / 原画）
+- **字幕导出**：英文 / 中文 / 双语 SRT，或将带高亮的字幕烧录进视频导出 MP4（可选 高 / 标准 / 流畅 三档画质），也支持都不勾字幕直接流复制原视频
 - **词汇本**：⭐ 收藏重点短语，跨视频汇总，CSV 导出，深链跳回原片对应字幕段
 - **断点续传**：字幕识别引擎下载、长视频 AI 解析都可暂停/继续，状态自动落盘
 

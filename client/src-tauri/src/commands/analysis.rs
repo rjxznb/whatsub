@@ -75,6 +75,12 @@ fn escape_for_subtitles_filter(path: &str) -> String {
 /// MP4 is universally playable — Opus-in-MP4 from yt-dlp downloads silently
 /// fails on a lot of Windows/phone players.
 #[tauri::command]
+/// `quality`: one of `"high"` / `"standard"` / `"smooth"` (or omitted → default
+/// "standard"). Maps to libx264 CRF + preset:
+///   "high"     → CRF 18, preset slow    (visually lossless, ~2× file size)
+///   "standard" → CRF 22, preset medium  (default, decent balance)
+///   "smooth"   → CRF 26, preset fast    (smaller file, fastest encode)
+/// Ignored when ass_content is empty (stream copy is always lossless).
 pub async fn export_burned_video(
     app: AppHandle,
     state: State<'_, ExportState>,
@@ -82,6 +88,7 @@ pub async fn export_burned_video(
     ass_content: String,
     output_path: String,
     duration_sec: f64,
+    quality: Option<String>,
 ) -> AppResult<()> {
     // Reject overlapping exports — UI should prevent this but guard anyway.
     if state.child.lock().unwrap().is_some() {
@@ -119,14 +126,23 @@ pub async fn export_burned_video(
     // more reliable than `-progress pipe:1` (which gets block-buffered through
     // Tauri's shell pipe on Windows). `-stats_period 0.5` makes ffmpeg print
     // progress twice a second instead of the default 0.5s..2s heuristic.
+    // Map user-facing quality preset → libx264 CRF + preset.
+    // CRF: lower = higher quality, exponentially larger files
+    //   18 ≈ visually lossless; 23 = libx264 default; 28 = noticeably soft
+    let (crf, preset) = match quality.as_deref() {
+        Some("high") => ("18", "slow"),
+        Some("smooth") => ("26", "fast"),
+        _ => ("22", "medium"),
+    };
+
     let args: Vec<&str> = if burn_subtitles {
         vec![
             "-y",
             "-i", &source_str,
             "-vf", &vf,
             "-c:v", "libx264",
-            "-crf", "20",
-            "-preset", "fast",
+            "-crf", crf,
+            "-preset", preset,
             // Audio: always transcode to AAC so the output MP4 plays on every
             // platform regardless of source codec (yt-dlp often delivers Opus).
             "-c:a", "aac",

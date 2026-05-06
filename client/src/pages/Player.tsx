@@ -382,6 +382,16 @@ export function Player() {
       // whatever cues have accumulated so the next session can resume.
       abortRef.current?.abort();
       flushPartialSave();
+      // If we're leaving mid-run, transition the store to "paused" so the
+      // Library card stops claiming the video is actively analyzing —
+      // nothing's running anymore, the user just paused by navigating
+      // away. Skip when the phase is already terminal (complete / error)
+      // since those reflect a real outcome we shouldn't overwrite.
+      const cur = useAnalysis.getState();
+      const ACTIVE = new Set(["downloading", "extracting", "transcribing", "analyzing"]);
+      if (cur.videoId === videoId && ACTIVE.has(cur.phase)) {
+        useAnalysis.setState({ phase: "paused" });
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, reloadKey]);

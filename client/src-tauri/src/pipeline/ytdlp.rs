@@ -96,12 +96,32 @@ pub struct DownloadResult {
     pub duration_sec: f64,
 }
 
+/// Resolve the user-facing quality preset to a yt-dlp format selector.
+/// Format strings match yt-dlp's `-f` syntax:
+///   * `bv*[ext=mp4][height<=N]` — best video stream <= N px tall, mp4
+///   * `+ba` — merged with best audio
+///   * fall-throughs are progressively looser to handle videos that
+///     don't have an mp4 at the requested cap (e.g. only have webm or
+///     a single muxed stream).
+fn yt_dlp_format(quality: &str) -> &'static str {
+    match quality {
+        "low" => "bv*[ext=mp4][height<=480]+ba/bv*[height<=480]+ba/best[height<=480]/best",
+        "high" => "bv*[ext=mp4][height<=1080]+ba/bv*[height<=1080]+ba/best[height<=1080]/best",
+        "best" => "bv*[ext=mp4]+ba/bv*+ba/best",
+        // "standard" (720p) is the default — chosen because subtitle learning
+        // doesn't need 1080p+ and 720p downloads are 2-4× faster on most
+        // connections. Anything unrecognized also lands here.
+        _ => "bv*[ext=mp4][height<=720]+ba/bv*[height<=720]+ba/best[height<=720]/best",
+    }
+}
+
 /// Download a video to `out_dir/source.mp4` and `out_dir/thumb.jpg`, plus info.json.
 pub async fn download(
     app: &AppHandle,
     url: &str,
     out_dir: &Path,
     video_id: &str,
+    quality: &str,
 ) -> AppResult<DownloadResult> {
     std::fs::create_dir_all(out_dir)?;
     let video_path = out_dir.join("source.mp4").to_string_lossy().to_string();
@@ -170,8 +190,15 @@ pub async fn download(
     }
 
     args.extend([
+        // YouTube URLs frequently include &list=...&index=N when copied from a
+        // playlist context. Without this flag yt-dlp would walk the WHOLE
+        // playlist, repeatedly writing every video into the same source.mp4 +
+        // thumb.jpg (hence the "Replacing existing file" spam) and bailing if
+        // any single video in the list is unavailable. We only ever want the
+        // one video the URL points at.
+        "--no-playlist".into(),
         "-f".into(),
-        "bv*[ext=mp4][height<=720]+ba/best[ext=mp4]/best".into(),
+        yt_dlp_format(quality).into(),
         "--merge-output-format".into(),
         "mp4".into(),
         "-o".into(),

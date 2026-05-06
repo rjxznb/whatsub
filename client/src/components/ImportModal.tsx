@@ -84,17 +84,26 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   const [tab, setTab] = useState<"local" | "url">(initialFilePath ? "local" : "url");
   const [urlValue, setUrlValue] = useState("");
   const [filePath, setFilePath] = useState(initialFilePath ?? "");
+  // yt-dlp quality preset: "low" (480p) / "standard" (720p) / "high" (1080p)
+  // / "best" (no cap). 720p default — subtitle learning doesn't benefit from
+  // 1080p+ and 720p downloads in 1/3 the time on most connections.
+  const [quality, setQuality] = useState<"low" | "standard" | "high" | "best">("standard");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  // Error details open in a separate top-layer dialog so the long stderr
+  // doesn't push the parent modal's scroll past 90vh and dominate the screen.
+  const [showErrorDialog, setShowErrorDialog] = useState(false);
 
-  // Esc closes the help panel first if open; otherwise closes the modal.
-  // The help panel has internal scroll, so we don't want Esc to dismiss the
-  // whole modal while the user is still reading the cookies tutorial.
+  // Esc dismisses overlays in priority order: error dialog → help panel →
+  // close the whole modal. Each layer is internally scrollable, so we don't
+  // want Esc to skip past the one the user is currently reading.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (showHelp) {
+      if (showErrorDialog) {
+        setShowErrorDialog(false);
+      } else if (showHelp) {
         setShowHelp(false);
       } else {
         onClose();
@@ -102,7 +111,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showHelp, onClose]);
+  }, [showHelp, showErrorDialog, onClose]);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
@@ -211,6 +220,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           sourceKind,
           sourceValue,
           whisperModel: settings.whisperModel,
+          quality,
         },
       });
       startFor(result.videoId);
@@ -303,28 +313,16 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           {error && (() => {
             const fe = friendlyError(error, phase);
             return (
-              <div className="mt-4 p-3 bg-red-900/30 border border-red-800 rounded text-sm text-red-200">
-                <div className="font-medium mb-1">{fe.title}</div>
-                {fe.suggestion && (
-                  <div className="text-xs leading-relaxed text-red-100/90">
-                    {fe.suggestion}
-                  </div>
-                )}
-                {fe.details && fe.details !== fe.title && (
-                  <details className="mt-2 group">
-                    <summary className="text-[10px] text-red-300/70 cursor-pointer hover:text-red-200 select-none list-none">
-                      <span className="inline-block w-3 group-open:rotate-90 transition-transform">▸</span>
-                      {" "}技术详情（提报 bug 时贴这段）
-                    </summary>
-                    {/* max-h + overflow so a 50-line stderr (e.g. PyInstaller
-                        dyld error from yt-dlp) doesn't blow out the modal —
-                        bounded box with internal scroll instead. */}
-                    <pre className="mt-1.5 p-2 bg-red-950/40 rounded text-[10px] text-red-300/70 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto">
-                      {fe.details}
-                    </pre>
-                  </details>
-                )}
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowErrorDialog(true)}
+                title="点击查看详细错误"
+                className="mt-4 w-full flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 rounded text-sm text-red-200 hover:bg-red-900/50 transition-colors text-left"
+              >
+                <span className="shrink-0">⚠️</span>
+                <span className="font-medium truncate flex-1">{fe.title}</span>
+                <span className="shrink-0 text-[10px] text-red-300/70">点击查看详情 ▸</span>
+              </button>
             );
           })()}
 
@@ -382,6 +380,73 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             )}
           </div>
         </div>
+
+        {/* Error-detail dialog. Layered above the progress modal at z-60.
+            The inner <pre> handles its own scroll so a 50+ line stderr
+            stays bounded — the parent modal underneath never touches it. */}
+        {showErrorDialog && error && (() => {
+          const fe = friendlyError(error, phase);
+          return (
+            <div
+              className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]"
+              onClick={() => setShowErrorDialog(false)}
+            >
+              <div
+                className="bg-zinc-900 border border-red-800 rounded-lg w-[640px] max-w-[90vw] max-h-[80vh] flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-zinc-800">
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-red-300 mb-1">
+                      ⚠️ {fe.title}
+                    </div>
+                    {fe.suggestion && (
+                      <div className="text-xs leading-relaxed text-red-100/90">
+                        {fe.suggestion}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowErrorDialog(false)}
+                    className="shrink-0 text-zinc-500 hover:text-zinc-200 text-xl leading-none px-1"
+                    title="关闭"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {fe.details && (
+                  <div className="px-5 py-3 flex-1 min-h-0 flex flex-col">
+                    <div className="text-[11px] text-zinc-500 mb-1.5">
+                      技术详情（提报 bug 时贴这段）
+                    </div>
+                    <pre className="flex-1 min-h-0 p-3 bg-red-950/40 rounded text-[11px] text-red-300/80 whitespace-pre-wrap break-all font-mono overflow-y-auto">
+                      {fe.details}
+                    </pre>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 px-5 py-3 border-t border-zinc-800">
+                  <button
+                    onClick={() => {
+                      navigator.clipboard?.writeText(fe.details || error || "");
+                    }}
+                    className="px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 rounded"
+                  >
+                    复制详情
+                  </button>
+                  <button
+                    onClick={() => setShowErrorDialog(false)}
+                    className="px-4 py-1.5 bg-zinc-700 text-zinc-100 text-xs rounded font-medium"
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   }
@@ -430,6 +495,19 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
               >
                 ?
               </button>
+            </div>
+            <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+              <span className="shrink-0">画质</span>
+              <select
+                value={quality}
+                onChange={(e) => setQuality(e.target.value as typeof quality)}
+                className="flex-1 px-2 py-1.5 bg-zinc-800 text-zinc-100 rounded border border-zinc-700"
+              >
+                <option value="low">标清 480p（最小、最快）</option>
+                <option value="standard">高清 720p（推荐）</option>
+                <option value="high">超清 1080p</option>
+                <option value="best">原画（视频源最高画质）</option>
+              </select>
             </div>
             {showHelp && (
               <div className="mt-3 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto">

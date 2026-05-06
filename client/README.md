@@ -4,12 +4,12 @@
 
 ## 下载
 
-最新版本 **v0.1.17**（2026-05-06）：
+最新版本 **v0.1.18**（2026-05-06，Mac 播放兼容修复）：
 
 | 平台 | 下载 | 说明 |
 |------|------|------|
-| Windows 10/11 x64 | [whatsub_0.1.17_x64_en-US.msi](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.17/whatsub_0.1.17_x64_en-US.msi) | 双击安装，自动更新 |
-| macOS Apple Silicon | [whatsub_0.1.17_aarch64.dmg](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.17/whatsub_0.1.17_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
+| Windows 10/11 x64 | [whatsub_0.1.18_x64_en-US.msi](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.18/whatsub_0.1.18_x64_en-US.msi) | 双击安装，自动更新 |
+| macOS Apple Silicon | [whatsub_0.1.18_aarch64.dmg](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.18/whatsub_0.1.18_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
 | Intel Mac | — | 暂不支持 |
 
 ## 主要功能

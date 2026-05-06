@@ -97,21 +97,42 @@ pub struct DownloadResult {
 }
 
 /// Resolve the user-facing quality preset to a yt-dlp format selector.
-/// Format strings match yt-dlp's `-f` syntax:
-///   * `bv*[ext=mp4][height<=N]` — best video stream <= N px tall, mp4
-///   * `+ba` — merged with best audio
-///   * fall-throughs are progressively looser to handle videos that
-///     don't have an mp4 at the requested cap (e.g. only have webm or
-///     a single muxed stream).
+///
+/// Mac compatibility note: Tauri WebView on Mac uses WKWebView →
+/// AVFoundation, which **hard-rejects Opus-in-MP4 and VP9-in-MP4**
+/// (no "play anyway" prompt — the `<video>` tag just goes black).
+/// QuickTime is more forgiving but still warns. To make in-app
+/// playback Just Work on Mac, every tier preferentially picks
+/// `avc1` (H.264) video + `m4a` (AAC) audio, both of which AVFoundation
+/// hardware-decodes natively. The fallback chain progressively loosens
+/// constraints for the rare videos that don't ship avc1+m4a.
+///
+/// `best` is capped at 1080p on purpose: YouTube only ships VP9/AV1 above
+/// 1080p (no avc1), and even with audio remuxed to AAC the video stream
+/// would still fail to play in WKWebView. Capping at 1080p keeps "原画"
+/// meaningful while guaranteeing playback. Users who specifically want
+/// 4K can re-encode externally.
 fn yt_dlp_format(quality: &str) -> &'static str {
     match quality {
-        "low" => "bv*[ext=mp4][height<=480]+ba/bv*[height<=480]+ba/best[height<=480]/best",
-        "high" => "bv*[ext=mp4][height<=1080]+ba/bv*[height<=1080]+ba/best[height<=1080]/best",
-        "best" => "bv*[ext=mp4]+ba/bv*+ba/best",
+        "low" => "bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]\
+                  /bv*[ext=mp4][height<=480]+ba[ext=m4a]\
+                  /bv*[height<=480]+ba\
+                  /best[height<=480]/best",
+        "high" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
+                   /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
+                   /bv*[height<=1080]+ba\
+                   /best[height<=1080]/best",
+        "best" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
+                   /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
+                   /bv*[height<=1080]+ba\
+                   /best[height<=1080]/best",
         // "standard" (720p) is the default — chosen because subtitle learning
         // doesn't need 1080p+ and 720p downloads are 2-4× faster on most
         // connections. Anything unrecognized also lands here.
-        _ => "bv*[ext=mp4][height<=720]+ba/bv*[height<=720]+ba/best[height<=720]/best",
+        _ => "bv*[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]\
+              /bv*[ext=mp4][height<=720]+ba[ext=m4a]\
+              /bv*[height<=720]+ba\
+              /best[height<=720]/best",
     }
 }
 
@@ -201,6 +222,14 @@ pub async fn download(
         yt_dlp_format(quality).into(),
         "--merge-output-format".into(),
         "mp4".into(),
+        // Belt + suspenders for Mac WKWebView playback: even if the format
+        // selector falls through to a non-m4a audio stream (rare — old uploads
+        // missing AAC tracks), force-transcode the audio to AAC during the
+        // merge step so the resulting mp4 plays in AVFoundation. Video stream
+        // is still copied (`-c:v copy`) so no re-encoding cost there. Audio
+        // re-encode is tiny (a few seconds for a 10-minute video).
+        "--postprocessor-args".into(),
+        "Merger:-c:v copy -c:a aac -b:a 192k".into(),
         "-o".into(),
         video_path.clone(),
         "--write-thumbnail".into(),

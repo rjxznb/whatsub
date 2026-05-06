@@ -506,7 +506,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 <option value="low">标清 480p（最小、最快）</option>
                 <option value="standard">高清 720p（推荐）</option>
                 <option value="high">超清 1080p</option>
-                <option value="best">原画（视频源最高画质）</option>
+                <option value="best">原画 1080p（H.264 最高兼容）</option>
               </select>
             </div>
             {showHelp && (

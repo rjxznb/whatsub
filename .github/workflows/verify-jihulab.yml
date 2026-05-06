@@ -18,8 +18,10 @@ jobs:
           echo "=== PUT visibility=public ==="
           RES=$(curl -s -X PUT \
             --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data '{"visibility":"public"}' \
             --write-out "\nHTTP_CODE=%{http_code}\n" \
-            "$API?visibility=public")
+            "$API")
           echo "$RES"
           echo
           echo "=== Re-read visibility ==="

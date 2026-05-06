@@ -1,6 +1,4 @@
-# Temporary one-off workflow to verify the GITLAB_TOKEN secret + the
-# rjxznb-group/whatsub-release project visibility before wiring jihulab
-# publish into release.yml. Delete this file once verified.
+# Temporary one-off — set project to public via API. Delete after.
 name: Verify JiHu GitLab Setup
 
 on:
@@ -11,39 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Probe token + project
+      - name: Force visibility=public via API
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
         run: |
           set +e
-          API="https://jihulab.com/api/v4"
-          PROJECT="rjxznb-group%2Fwhatsub-release"
-
-          echo "=== 1. Token: GET /user (proves token is valid) ==="
-          USER_JSON=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                          --write-out "\nHTTP_CODE=%{http_code}" \
-                          "$API/user")
-          echo "$USER_JSON" | head -20
+          API="https://jihulab.com/api/v4/projects/335658"
+          echo "=== PUT visibility=public ==="
+          RES=$(curl -s -X PUT \
+            --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            --write-out "\nHTTP_CODE=%{http_code}\n" \
+            "$API?visibility=public")
+          echo "$RES"
           echo
-
-          echo "=== 2. Project: GET /projects/$PROJECT ==="
-          PROJ_JSON=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                          --write-out "\nHTTP_CODE=%{http_code}" \
-                          "$API/projects/$PROJECT")
-          # Trim potentially long fields, keep only what matters
-          echo "$PROJ_JSON" | head -3
-          echo "..."
-          echo "$PROJ_JSON" | jq -r '
-            "id=" + (.id|tostring),
-            "path_with_namespace=" + (.path_with_namespace // "N/A"),
-            "visibility=" + (.visibility // "N/A"),
-            "default_branch=" + (.default_branch // "N/A"),
-            "empty_repo=" + ((.empty_repo // false)|tostring),
-            "web_url=" + (.web_url // "N/A")
-          ' 2>/dev/null || echo "(failed to parse JSON — token or project issue)"
-          echo
-
-          echo "=== 3. Releases scope: GET /projects/$PROJECT/releases ==="
-          curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-               --write-out "HTTP_CODE=%{http_code}\n" \
-               "$API/projects/$PROJECT/releases" | head -5
+          echo "=== Re-read visibility ==="
+          curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API" \
+            | jq -r '"visibility=" + .visibility, "default_branch=" + .default_branch'

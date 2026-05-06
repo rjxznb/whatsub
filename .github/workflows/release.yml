@@ -815,3 +815,161 @@ jobs:
           [ -n "$win_entry" ] && PLATS="$PLATS windows-x86_64"
           [ -n "$mac_entry" ] && PLATS="$PLATS darwin-aarch64"
           echo "::notice::Published $TAG (manifest covers:$PLATS)"
+
+      # ───────────────────────────────────────────────────────────────
+      # Mirror to JiHu GitLab (jihulab.com) so users in mainland China can
+      # update without proxying — GitHub release-assets.githubusercontent.com
+      # (Azure Blob CDN) is intermittently unreachable from China without a
+      # working VPN, and Tauri's plugin-updater reqwest doesn't read OS proxy
+      # settings (only HTTPS_PROXY env var).
+      #
+      # Strategy: dual-publish. Updater endpoints array prefers jihulab; if
+      # that ever goes down, GitHub mirror is fallback. Same minisign key,
+      # same artifacts — only the URLs in latest.json differ.
+      #
+      # Project: rjxznb-group/whatsub-release (id 335658, public).
+      # Auth: GITLAB_TOKEN secret (api scope).
+      # Asset hosting: GitLab Generic Packages → release assets via
+      #                direct_asset_path so the public URL pattern is
+      #                <host>/<path>/-/releases/<tag>/downloads/<file>.
+      - name: Mirror to JiHu GitLab
+        if: env.GITLAB_TOKEN != ''
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          NOTES: ${{ inputs.release_notes }}
+          BUILT_WIN: ${{ needs.build-windows.result == 'success' }}
+          BUILT_MAC: ${{ needs.build-macos.result == 'success' }}
+        run: |
+          set -e
+          VERSION=$(jq -r .version client/src-tauri/tauri.conf.json)
+          TAG="v$VERSION"
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          GITLAB_HOST="https://jihulab.com"
+          PROJECT_ID="335658"
+          PROJECT_PATH="rjxznb-group/whatsub-release"
+          API="$GITLAB_HOST/api/v4/projects/$PROJECT_ID"
+
+          urlify() { basename "$1" | sed 's/ /./g'; }
+
+          # PUT to Generic Packages: idempotent (same version+filename
+          # overwrites). Uses --upload-file which streams without reading
+          # whole file into memory — fine for 100+ MB artifacts.
+          upload_file() {
+            local file="$1"
+            local name
+            name=$(urlify "$file")
+            echo "  → uploading $name ($(du -h "$file" | cut -f1))"
+            curl -sf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                 --upload-file "$file" \
+                 "$API/packages/generic/whatsub/$VERSION/$name" > /dev/null
+          }
+
+          # ── Locate fresh artifacts (re-using same dist/ from earlier step) ──
+          MSI=""; MSI_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
+          if [ "$BUILT_WIN" = "true" ]; then
+            MSI=$(find dist/windows -name "*.msi" -type f | head -1)
+            MSI_SIG=$(find dist/windows -name "*.msi.sig" -type f | head -1)
+          fi
+          if [ "$BUILT_MAC" = "true" ]; then
+            DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
+            APP_TARGZ=$(find dist/macos -name "*.app.tar.gz" -type f | head -1)
+            APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
+          fi
+
+          # ── Carry-over: if a platform wasn't built, pull its entry from
+          #    jihulab's previous release manifest so latest.json stays
+          #    complete for users on the un-rebuilt platform. ─────────────
+          PREV_LATEST=""
+          PREV_TAG=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                          "$API/releases?per_page=1" \
+                     | jq -r '.[0].tag_name // ""')
+          if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$TAG" ]; then
+            PREV_LATEST=$(curl -sL "$GITLAB_HOST/$PROJECT_PATH/-/releases/$PREV_TAG/downloads/latest.json" 2>/dev/null || echo "")
+          fi
+
+          # ── Build manifest with jihulab download URLs ──────────────────
+          # URL pattern: $GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/$filename
+          # GitLab routes that path to the asset link whose direct_asset_path matches.
+          jihulab_url() {
+            echo "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/$(urlify "$1")"
+          }
+
+          win_entry=""
+          if [ -n "$MSI" ]; then
+            url=$(jihulab_url "$MSI")
+            sig=$(cat "$MSI_SIG")
+            win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
+          elif [ -n "$PREV_LATEST" ]; then
+            win_entry=$(echo "$PREV_LATEST" | jq -c '.platforms["windows-x86_64"] // empty')
+          fi
+
+          mac_entry=""
+          if [ -n "$APP_TARGZ" ]; then
+            url=$(jihulab_url "$APP_TARGZ")
+            sig=$(cat "$APP_SIG")
+            mac_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
+          elif [ -n "$PREV_LATEST" ]; then
+            mac_entry=$(echo "$PREV_LATEST" | jq -c '.platforms["darwin-aarch64"] // empty')
+          fi
+
+          MANIFEST=$(jq -n \
+            --arg v "$VERSION" --arg n "$NOTES" --arg d "$NOW" \
+            '{version:$v, notes:$n, pub_date:$d, platforms:{}}')
+          [ -n "$win_entry" ] && MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$win_entry" '.platforms["windows-x86_64"] = $e')
+          [ -n "$mac_entry" ] && MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$mac_entry" '.platforms["darwin-aarch64"] = $e')
+          # Use a different filename than the GitHub publish step's latest.json
+          # so they don't collide on disk (we may upload both in one step later).
+          echo "$MANIFEST" > latest-jihulab.json
+
+          echo "=== latest.json (jihulab) ==="
+          cat latest-jihulab.json
+
+          # ── Upload artifacts ─────────────────────────────────────────
+          # Rename in-place to "latest.json" right before upload — the asset
+          # link on the release uses that exact name as direct_asset_path.
+          cp latest-jihulab.json latest.json
+          upload_file latest.json
+          [ -n "$MSI" ]       && { upload_file "$MSI"; upload_file "$MSI_SIG"; }
+          [ -n "$APP_TARGZ" ] && { upload_file "$DMG"; upload_file "$APP_TARGZ"; upload_file "$APP_SIG"; }
+
+          # ── Build asset links array for the Release record ──────────
+          # Each link: name (filename), url (package URL — what GitLab serves
+          # the bytes from), direct_asset_path (the routing key under
+          # /-/releases/<tag>/downloads/), link_type=package.
+          LINKS="[]"
+          add_link() {
+            local file="$1"
+            local name
+            name=$(urlify "$file")
+            local pkg_url="$API/packages/generic/whatsub/$VERSION/$name"
+            LINKS=$(echo "$LINKS" | jq --arg n "$name" --arg u "$pkg_url" --arg p "/$name" \
+                    '. + [{name:$n, url:$u, direct_asset_path:$p, link_type:"package"}]')
+          }
+          add_link latest.json
+          [ -n "$MSI" ]       && { add_link "$MSI"; add_link "$MSI_SIG"; }
+          [ -n "$APP_TARGZ" ] && { add_link "$DMG"; add_link "$APP_TARGZ"; add_link "$APP_SIG"; }
+
+          # ── Create / refresh the release ────────────────────────────
+          # GitLab has no "PATCH assets" so we delete + recreate. Tag is
+          # preserved (DELETE only removes the release record). On second
+          # POST GitLab sees existing tag and ties new release to it
+          # (ref param ignored when tag exists).
+          if curl -sf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API/releases/$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG exists — deleting + recreating to refresh asset links"
+            curl -sf -X DELETE --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API/releases/$TAG" > /dev/null
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg name "whatsub $TAG" \
+            --arg tag "$TAG" \
+            --arg desc "$NOTES" \
+            --arg ref "main" \
+            --argjson links "$LINKS" \
+            '{name:$name, tag_name:$tag, description:$desc, ref:$ref, assets:{links:$links}}')
+
+          curl -sf -X POST --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+               --header "Content-Type: application/json" \
+               --data "$PAYLOAD" \
+               "$API/releases" > /dev/null
+
+          echo "::notice::JiHu published $TAG → $GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG"

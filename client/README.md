@@ -4,13 +4,15 @@
 
 ## 下载
 
-最新版本 **v0.1.18**（2026-05-06，Mac 播放兼容修复）：
+最新版本 **v0.1.19**（2026-05-07，新增极狐镜像，国内更新无需梯子）：
 
-| 平台 | 下载 | 说明 |
-|------|------|------|
-| Windows 10/11 x64 | [whatsub_0.1.18_x64_en-US.msi](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.18/whatsub_0.1.18_x64_en-US.msi) | 双击安装，自动更新 |
-| macOS Apple Silicon | [whatsub_0.1.18_aarch64.dmg](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.18/whatsub_0.1.18_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
-| Intel Mac | — | 暂不支持 |
+| 平台 | 下载（**国内推荐**）| 下载（GitHub 备用）| 说明 |
+|------|---------------------|--------------------|------|
+| Windows 10/11 x64 | [whatsub_0.1.19_x64_en-US.msi](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.19/downloads/whatsub_0.1.19_x64_en-US.msi) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.19/whatsub_0.1.19_x64_en-US.msi) | 双击安装，自动更新 |
+| macOS Apple Silicon | [whatsub_0.1.19_aarch64.dmg](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.19/downloads/whatsub_0.1.19_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.19/whatsub_0.1.19_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
+| Intel Mac | — | — | 暂不支持 |
+
+> 国内用户推荐 jihulab 链接（极狐 GitLab，国内直连，无需梯子）；GitHub 链接作为备用。应用内自动更新会优先尝试 jihulab，失败时自动回落到 GitHub。
 
 ## 主要功能
 

@@ -37,7 +37,7 @@ const KEY_HELP: Record<string, KeyHelp> = {
   deepseek: {
     steps: [
       { text: "用手机号注册并登录 DeepSeek 开放平台（国内直连，无需梯子）" },
-      { text: "左侧菜单点「API keys」→ 右上角「创建 API key」" },
+      { text: "左侧菜单点「API keys」→ 点「创建 API key」" },
       { text: "名字填「whatsub」→「创建」，复制弹窗里出现的密钥（仅显示一次！）" },
       { text: "粘贴回这里。如果余额为 0，需要先在「充值」页充至少 5 元才能调用" },
     ],
@@ -62,7 +62,7 @@ const KEY_HELP: Record<string, KeyHelp> = {
   zhipu: {
     steps: [
       { text: "注册并登录智谱 AI 开放平台（国内直连）" },
-      { text: "右上角头像 →「API keys」管理页" },
+      { text: "点头像 →「API keys」管理页" },
       { text: "点「添加新的 API Key」→ 名称填「whatsub」→ 复制密钥" },
       { text: "粘贴回这里。glm-4-flash 模型有大量免费额度可白嫖" },
     ],

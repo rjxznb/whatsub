@@ -199,7 +199,22 @@ cargo test              # paths, ids, srt, ytdlp, whisper, library, settings,
 
 ## Release workflow
 
-Two repos: source `rjxznb/whatsub` (private), release artifacts `rjxznb/whatsub-releases` (public). Updater endpoint: `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json`. Private signing key in repo secret `TAURI_SIGNING_PRIVATE_KEY` (also `secrets/whatsub.key` locally for backup). Public key embedded in `tauri.conf.json` `plugins.updater.pubkey`.
+**Three repos, dual-publish:**
+- Source: `rjxznb/whatsub` on GitHub (private)
+- Release mirror A (international + GitHub-native UX): `rjxznb/whatsub-releases` on GitHub (public)
+- Release mirror B (China-direct, no proxy needed): `rjxznb-group/whatsub-release` on **JiHu GitLab** `jihulab.com` (public, project id 335658)
+
+**Updater endpoints (in `tauri.conf.json`, tried in order):**
+1. `https://jihulab.com/rjxznb-group/whatsub-release/-/releases/permalink/latest/downloads/latest.json` — preferred. JiHu is fully reachable from mainland China without VPN; international users can also hit it.
+2. `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json` — fallback. If JiHu is ever down, updater tries GitHub.
+
+The `permalink/latest` URL on JiHu is GitLab's "newest release by `released_at`" alias; resolves to the most recent release tag with an asset link whose `direct_asset_path: "/latest.json"` matches the URL suffix.
+
+**Why dual-publish (vs single):** Tauri-plugin-updater's reqwest client doesn't read OS-level proxy settings (only `HTTPS_PROXY` env var). On Mac/Win, even with system proxy enabled, requests bypass it. GitHub's release-assets CDN (Azure Blob) is intermittently unreachable from mainland China without a working VPN at the IP level, manifesting as `error sending request`. Hosting on JiHu — a domestic GitLab instance — sidesteps the GFW issue entirely so the in-app update flow Just Works.
+
+**Same minisign key for both mirrors.** Signature bytes are identical for the same artifact, so we don't have to maintain two key pairs. Only the `url` field inside `latest.json` differs between the two mirror manifests.
+
+Private signing key in repo secret `TAURI_SIGNING_PRIVATE_KEY` (also `secrets/whatsub.key` locally for backup). Public key embedded in `tauri.conf.json` `plugins.updater.pubkey`. JiHu API auth via secret `GITLAB_TOKEN` (Personal Access Token with `api` scope, owner-level access to the project).
 
 Releases are **automated via `.github/workflows/release.yml`** — `workflow_dispatch` only, no auto-trigger on push. The workflow has three jobs: `build-windows` (windows-latest), `build-macos` (macos-14, Apple Silicon), and `publish` (ubuntu-latest, downloads both artifacts and stitches `latest.json`).
 

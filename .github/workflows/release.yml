@@ -1,11 +1,11 @@
 # Unified release workflow.
 #
-# Builds Windows (.msi + .sig) and macOS (.dmg + .app.tar.gz + .sig) in
-# parallel, then publishes both to rjxznb/whatsub-releases as a single
-# GitHub Release with one assembled latest.json.
+# Builds Windows (NSIS *-setup.exe + .sig) and macOS (.dmg + .app.tar.gz +
+# .sig) in parallel, then publishes both to rjxznb/whatsub-releases as a
+# single GitHub Release with one assembled latest.json.
 #
 # Triggered manually from Actions UI. Use dry_run=true to produce
-# artifacts without publishing — useful for installing/testing the .msi
+# artifacts without publishing — useful for installing/testing the .exe
 # or .dmg before committing it to the public release repo. After verifying,
 # re-trigger with dry_run=false (or fetch artifacts and run the publish
 # job logic locally).
@@ -250,15 +250,16 @@ jobs:
           workspaces: client/src-tauri
           shared-key: tauri-build-windows
 
-      - name: Tauri build (.msi + .sig)
+      - name: Tauri build (NSIS .exe + .sig)
         working-directory: client
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        # --bundles msi: skip the nsis target (base tauri.conf.json has
-        # bundle.targets="all", which on Windows would also produce nsis).
-        # createUpdaterArtifacts:true ensures the .msi.sig is emitted.
-        run: pnpm tauri build --bundles msi
+        # --bundles nsis: produce the Windows installer (whatsub_<v>_x64-setup.exe)
+        # via NSIS — has built-in path picker dialog, auto-creates the install
+        # subfolder, no UAC needed (installMode: currentUser).
+        # createUpdaterArtifacts:true ensures the .exe.sig is emitted alongside.
+        run: pnpm tauri build --bundles nsis
 
       - name: Show bundle output
         run: Get-ChildItem -Recurse client/src-tauri/target/release/bundle/msi
@@ -268,8 +269,8 @@ jobs:
         with:
           name: windows-bundle
           path: |
-            client/src-tauri/target/release/bundle/msi/*.msi
-            client/src-tauri/target/release/bundle/msi/*.msi.sig
+            client/src-tauri/target/release/bundle/nsis/*-setup.exe
+            client/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
           retention-days: 7
           if-no-files-found: error
 
@@ -709,11 +710,11 @@ jobs:
           urlify() { basename "$1" | sed 's/ /./g'; }
 
           # ── Locate fresh artifacts (only those whose build ran) ─────
-          MSI=""; MSI_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
+          EXE=""; EXE_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
           if [ "$BUILT_WIN" = "true" ]; then
-            MSI=$(find dist/windows -name "*.msi" -type f | head -1)
-            MSI_SIG=$(find dist/windows -name "*.msi.sig" -type f | head -1)
-            [ -f "$MSI" ] && [ -f "$MSI_SIG" ] || { echo "::error::Windows artifact incomplete"; exit 1; }
+            EXE=$(find dist/windows -name "*-setup.exe" -type f | head -1)
+            EXE_SIG=$(find dist/windows -name "*-setup.exe.sig" -type f | head -1)
+            [ -f "$EXE" ] && [ -f "$EXE_SIG" ] || { echo "::error::Windows artifact incomplete"; exit 1; }
           fi
           if [ "$BUILT_MAC" = "true" ]; then
             DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
@@ -721,7 +722,7 @@ jobs:
             APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
             [ -f "$DMG" ] && [ -f "$APP_TARGZ" ] && [ -f "$APP_SIG" ] || { echo "::error::macOS artifact incomplete"; exit 1; }
           fi
-          echo "BUILT_WIN=$BUILT_WIN MSI=$MSI"
+          echo "BUILT_WIN=$BUILT_WIN EXE=$EXE"
           echo "BUILT_MAC=$BUILT_MAC DMG=$DMG APP_TARGZ=$APP_TARGZ"
 
           # ── For platforms NOT built this run, fetch the carry-over entry
@@ -748,7 +749,7 @@ jobs:
           # ── Upload only the freshly-built assets (--clobber to overwrite
           #    same-name assets if re-running this platform) ───────────
           UPLOAD_LIST=()
-          [ -n "$MSI" ]       && UPLOAD_LIST+=("$MSI" "$MSI_SIG")
+          [ -n "$EXE" ]       && UPLOAD_LIST+=("$EXE" "$EXE_SIG")
           [ -n "$APP_TARGZ" ] && UPLOAD_LIST+=("$DMG" "$APP_TARGZ" "$APP_SIG")
           if [ ${#UPLOAD_LIST[@]} -gt 0 ]; then
             gh release upload "$TAG" "${UPLOAD_LIST[@]}" --repo "$REPO" --clobber
@@ -759,9 +760,9 @@ jobs:
           # If we didn't build it but the existing release ALSO has it, use
           # that entry (carry over from $TAG). Otherwise, fall back to PREV.
           win_entry=""
-          if [ -n "$MSI" ]; then
-            url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$MSI")"
-            sig=$(cat "$MSI_SIG")
+          if [ -n "$EXE" ]; then
+            url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$EXE")"
+            sig=$(cat "$EXE_SIG")
             win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
           else
             # Try the current $TAG release first (e.g. previously published Win at this tag);
@@ -865,10 +866,10 @@ jobs:
           }
 
           # ── Locate fresh artifacts (re-using same dist/ from earlier step) ──
-          MSI=""; MSI_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
+          EXE=""; EXE_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
           if [ "$BUILT_WIN" = "true" ]; then
-            MSI=$(find dist/windows -name "*.msi" -type f | head -1)
-            MSI_SIG=$(find dist/windows -name "*.msi.sig" -type f | head -1)
+            EXE=$(find dist/windows -name "*-setup.exe" -type f | head -1)
+            EXE_SIG=$(find dist/windows -name "*-setup.exe.sig" -type f | head -1)
           fi
           if [ "$BUILT_MAC" = "true" ]; then
             DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
@@ -895,9 +896,9 @@ jobs:
           }
 
           win_entry=""
-          if [ -n "$MSI" ]; then
-            url=$(jihulab_url "$MSI")
-            sig=$(cat "$MSI_SIG")
+          if [ -n "$EXE" ]; then
+            url=$(jihulab_url "$EXE")
+            sig=$(cat "$EXE_SIG")
             win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
           elif [ -n "$PREV_LATEST" ]; then
             win_entry=$(echo "$PREV_LATEST" | jq -c '.platforms["windows-x86_64"] // empty')
@@ -929,7 +930,7 @@ jobs:
           # link on the release uses that exact name as direct_asset_path.
           cp latest-jihulab.json latest.json
           upload_file latest.json
-          [ -n "$MSI" ]       && { upload_file "$MSI"; upload_file "$MSI_SIG"; }
+          [ -n "$EXE" ]       && { upload_file "$EXE"; upload_file "$EXE_SIG"; }
           [ -n "$APP_TARGZ" ] && { upload_file "$DMG"; upload_file "$APP_TARGZ"; upload_file "$APP_SIG"; }
 
           # ── Build asset links array for the Release record ──────────
@@ -946,7 +947,7 @@ jobs:
                     '. + [{name:$n, url:$u, direct_asset_path:$p, link_type:"package"}]')
           }
           add_link latest.json
-          [ -n "$MSI" ]       && { add_link "$MSI"; add_link "$MSI_SIG"; }
+          [ -n "$EXE" ]       && { add_link "$EXE"; add_link "$EXE_SIG"; }
           [ -n "$APP_TARGZ" ] && { add_link "$DMG"; add_link "$APP_TARGZ"; add_link "$APP_SIG"; }
 
           # ── Create / refresh the release ────────────────────────────

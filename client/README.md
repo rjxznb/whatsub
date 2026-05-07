@@ -4,12 +4,12 @@
 
 ## 下载
 
-最新版本 **v0.1.22**（2026-05-07，启动动画大改 + 多平台帮助 + Mac 残影修复）：
+最新版本 **v0.1.23**（2026-05-07，Win 改 NSIS 安装包 + 主程序更名 whatsub.exe）：
 
 | 平台 | 下载（**国内推荐**）| 下载（GitHub 备用）| 说明 |
 |------|---------------------|--------------------|------|
-| Windows 10/11 x64 | [whatsub_0.1.22_x64_en-US.msi](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.22/downloads/whatsub_0.1.22_x64_en-US.msi) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.22/whatsub_0.1.22_x64_en-US.msi) | 双击安装，自动更新 |
-| macOS Apple Silicon | [whatsub_0.1.22_aarch64.dmg](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.22/downloads/whatsub_0.1.22_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.22/whatsub_0.1.22_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
+| Windows 10/11 x64 | [whatsub_0.1.23_x64-setup.exe](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.23/downloads/whatsub_0.1.23_x64-setup.exe) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.23/whatsub_0.1.23_x64-setup.exe) | NSIS 安装包，双击装到当前用户、无需管理员权限。**老版本（v0.1.22 及以前的 .msi 用户）请先在「程序和功能」里卸载老的 whatsub，再装新的 .exe**——两个安装系统的注册表入口不互通 |
+| macOS Apple Silicon | [whatsub_0.1.23_aarch64.dmg](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.23/downloads/whatsub_0.1.23_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.23/whatsub_0.1.23_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
 | Intel Mac | — | — | 暂不支持 |
 
 > 国内用户推荐 jihulab 链接（极狐 GitLab，国内直连，无需梯子）；GitHub 链接作为备用。应用内自动更新会优先尝试 jihulab，失败时自动回落到 GitHub。

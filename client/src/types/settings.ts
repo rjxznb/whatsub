@@ -2,6 +2,16 @@ export type LlmProvider = "openai-compatible" | "claude" | "gemini";
 
 export type WhisperModelSize = "tiny" | "base" | "small" | "medium" | "large-v3";
 
+/** Translation register applied to per-cue translations + summary phrases.
+ *  Selected per-import in ImportModal and stored on the library entry.
+ *  Legacy entries without a stored choice fall back to "colloquial". */
+export type TranslationStyle =
+  | "colloquial"  // 日常聊天 — natural conversational Chinese (default)
+  | "playful"     // 俏皮活泼 — vivid, expressive, energetic
+  | "cinematic"   // 影视字幕 — short, dramatic, screen-friendly
+  | "formal"      // 正式书面 — newspaper / textbook register
+  | "literary";   // 文艺抒情 — poetic, refined, elegant
+
 export interface OpenAICompatibleConfig {
   baseUrl: string;
   apiKey: string;
@@ -31,8 +41,6 @@ export interface Settings {
   whisperModel: WhisperModelSize;
   /** Custom directory for video + analysis files. Empty string = use default (%APPDATA%/whatsub/library). */
   libraryDir: string;
-  /** Custom directory for Whisper model files. Empty string = use default (%APPDATA%/whatsub/models). */
-  modelsDir: string;
   /** Path to a Netscape-format cookies.txt file. When set, yt-dlp uses --cookies <file>
    *  to bypass age/login walls and bot-detection prompts. Empty = no cookies. */
   cookiesFile: string;
@@ -40,6 +48,14 @@ export interface Settings {
    *  Format: "Vulkan / NVIDIA GeForce RTX 4090" | "CUDA / ..." | "CPU".
    *  Empty until the first transcribe completes. */
   whisperBackend?: string;
+  /** Per-vendor api-key + model stash. Lets DeepSeek / Kimi / 智谱 / Qwen /
+   *  MiniMax etc. each remember their own credentials so switching vendors
+   *  no longer wipes the previous one's key. The currently-active vendor's
+   *  key+model also live in the protocol slots above (openaiCompatible /
+   *  claude / gemini) — those remain the runtime source of truth; this map
+   *  is the per-vendor archive. Populated lazily; missing entry = no saved
+   *  credentials for that vendor (input fields show empty). */
+  vendorKeys?: Record<string, { apiKey: string; model: string }>;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -50,7 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   gemini: { apiKey: "", model: "gemini-2.5-pro" },
   whisperModel: "small",
   libraryDir: "",
-  modelsDir: "",
   cookiesFile: "",
   whisperBackend: "",
+  vendorKeys: {},
 };

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ExternalLink, Check, Pause, Play, Download } from "lucide-react";
+import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, ChevronDown } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
@@ -127,7 +127,7 @@ export function Settings() {
 
       <div className="max-w-2xl mx-auto p-6 space-y-8">
         <section>
-          <h2 className="font-semibold mb-3">LLM Provider</h2>
+          <h2 className="font-semibold mb-3">翻译服务</h2>
           <VendorSection draft={draft} setDraft={setDraft} />
 
           <div className="flex items-center gap-3 mt-3">
@@ -145,36 +145,27 @@ export function Settings() {
           <h2 className="font-semibold mb-3">存储路径</h2>
           <div className="space-y-3">
             <DirField
-              label="视频/字幕/分析文件目录"
+              label="视频和字幕保存位置"
               value={draft.libraryDir}
               defaultHint="默认：%APPDATA%/whatsub/library"
               onChange={(v) => setDraft({ ...draft, libraryDir: v })}
             />
-            <DirField
-              label="Whisper 模型目录"
-              value={draft.modelsDir}
-              defaultHint="默认：%APPDATA%/whatsub/models"
-              onChange={(v) => setDraft({ ...draft, modelsDir: v })}
-            />
             <FileField
-              label="yt-dlp cookies 文件（可选）"
+              label="YouTube cookies.txt 路径（可选）"
               value={draft.cookiesFile}
-              defaultHint="未设置（YouTube 偶尔需要 cookies 才能下载）"
+              defaultHint="未设置（YouTube 偶尔要求登录验证；按导入页的「?」按钮里的教程导出 cookies.txt 后选到这里）"
               filterName="cookies.txt"
               filterExt={["txt"]}
               onChange={(v) => setDraft({ ...draft, cookiesFile: v })}
             />
             <p className="text-[10px] text-zinc-500 leading-relaxed">
-              ⚠ 修改视频/模型目录不会自动迁移已有文件，但已存在条目会保留原位（不会丢失）。如需集中管理，请手动把它们移到新路径并相应修改 library.json。
+              ⚠ 改了保存位置不会自动搬已有的视频文件，但已经在的视频不会丢，会留在原来的位置正常使用。要集中管理的话请手动把文件移到新路径。
             </p>
           </div>
         </section>
 
         <section>
-          <h2 className="font-semibold mb-1">字幕识别引擎</h2>
-          <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">
-            从视频里识别出英文字幕。质量越高、文件越大、占的硬盘越多。可以下载多个版本随时切换。
-          </p>
+          <h2 className="font-semibold mb-3">字幕识别引擎</h2>
           {(() => {
             // Single-row dropdown + action, then description + (optional)
             // progress bar underneath. Replaces the previous stacked tier
@@ -288,7 +279,7 @@ export function Settings() {
             );
           })()}
           <div className="mt-3 text-xs">
-            <span className="text-zinc-500">GPU 加速：</span>
+            <span className="text-zinc-500">显卡加速：</span>
             {draft.whisperBackend ? (
               <span
                 className={
@@ -297,11 +288,13 @@ export function Settings() {
                     : "text-emerald-400 font-medium"
                 }
               >
-                {draft.whisperBackend.startsWith("CPU") ? "❌ 仅 CPU" : `✅ ${draft.whisperBackend}`}
+                {draft.whisperBackend.startsWith("CPU")
+                  ? "❌ 没用上，靠 CPU 跑（识别会慢一些）"
+                  : `✅ ${draft.whisperBackend}`}
               </span>
             ) : (
               <span className="text-zinc-500 italic">
-                未检测（首次解析视频后自动识别）
+                还没检测（导入第一个视频后会自动识别）
               </span>
             )}
           </div>
@@ -399,25 +392,9 @@ function VendorSection({
     draft.vendorId ?? inferVendorId(draft.llmProvider, draft.openaiCompatible.baseUrl);
   const vendor = getVendor(vendorId) ?? VENDORS[0];
 
-  function pickVendor(id: string) {
-    const v = getVendor(id);
-    if (!v) return;
-    const next: Settings = {
-      ...draft,
-      vendorId: v.id,
-      llmProvider: v.protocol,
-    };
-    if (v.protocol === "openai-compatible") {
-      // Auto-fill baseUrl for known vendors; leave editable for "custom".
-      next.openaiCompatible = {
-        ...draft.openaiCompatible,
-        baseUrl: v.baseUrl || draft.openaiCompatible.baseUrl,
-      };
-    }
-    setDraft(next);
-  }
-
-  // Read/write the active key+model regardless of which protocol slot stores it.
+  // Read the active key+model from whichever protocol slot the current
+  // vendor uses. The protocol slots remain runtime source of truth; the
+  // vendorKeys map is just per-vendor archive (see types/settings.ts).
   const activeKey =
     vendor.protocol === "claude"
       ? draft.claude.apiKey
@@ -431,36 +408,93 @@ function VendorSection({
       ? draft.gemini.model
       : draft.openaiCompatible.model;
 
+  function pickVendor(id: string) {
+    const v = getVendor(id);
+    if (!v) return;
+    if (v.id === vendor.id) return;
+
+    // 1) Stash the OUTGOING vendor's current key+model under its own slot.
+    //    First-time switch from a fresh-install settings → seeds the stash
+    //    with whatever the user had typed before this feature existed.
+    const stash: Record<string, { apiKey: string; model: string }> = {
+      ...(draft.vendorKeys ?? {}),
+      [vendor.id]: { apiKey: activeKey, model: activeModel },
+    };
+
+    // 2) Load the INCOMING vendor's saved credentials, or blank+default model.
+    const restored = stash[v.id];
+    const newKey = restored?.apiKey ?? "";
+    const newModel = restored?.model ?? (v.models[0] ?? "");
+
+    const next: Settings = {
+      ...draft,
+      vendorId: v.id,
+      llmProvider: v.protocol,
+      vendorKeys: stash,
+    };
+    if (v.protocol === "openai-compatible") {
+      next.openaiCompatible = {
+        ...draft.openaiCompatible,
+        baseUrl: v.baseUrl || draft.openaiCompatible.baseUrl,
+        apiKey: newKey,
+        model: newModel,
+      };
+    } else if (v.protocol === "claude") {
+      next.claude = { apiKey: newKey, model: newModel };
+    } else if (v.protocol === "gemini") {
+      next.gemini = { apiKey: newKey, model: newModel };
+    }
+    setDraft(next);
+  }
+
+  // setActiveKey / setActiveModel write to BOTH the live protocol slot
+  // AND the per-vendor stash so user edits persist regardless of whether
+  // they save before switching vendors.
   function setActiveKey(v: string) {
+    const stash = {
+      ...(draft.vendorKeys ?? {}),
+      [vendor.id]: { apiKey: v, model: activeModel },
+    };
     if (vendor.protocol === "claude") {
-      setDraft({ ...draft, claude: { ...draft.claude, apiKey: v } });
+      setDraft({ ...draft, vendorKeys: stash, claude: { ...draft.claude, apiKey: v } });
     } else if (vendor.protocol === "gemini") {
-      setDraft({ ...draft, gemini: { ...draft.gemini, apiKey: v } });
+      setDraft({ ...draft, vendorKeys: stash, gemini: { ...draft.gemini, apiKey: v } });
     } else {
       setDraft({
         ...draft,
+        vendorKeys: stash,
         openaiCompatible: { ...draft.openaiCompatible, apiKey: v },
       });
     }
   }
   function setActiveModel(v: string) {
+    const stash = {
+      ...(draft.vendorKeys ?? {}),
+      [vendor.id]: { apiKey: activeKey, model: v },
+    };
     if (vendor.protocol === "claude") {
-      setDraft({ ...draft, claude: { ...draft.claude, model: v } });
+      setDraft({ ...draft, vendorKeys: stash, claude: { ...draft.claude, model: v } });
     } else if (vendor.protocol === "gemini") {
-      setDraft({ ...draft, gemini: { ...draft.gemini, model: v } });
+      setDraft({ ...draft, vendorKeys: stash, gemini: { ...draft.gemini, model: v } });
     } else {
       setDraft({
         ...draft,
+        vendorKeys: stash,
         openaiCompatible: { ...draft.openaiCompatible, model: v },
       });
     }
   }
 
   const isCustom = vendor.id === "custom";
-  const showBaseUrl = vendor.protocol === "openai-compatible";
+  // Only show the API 地址 field for "自定义" vendor — every preset has its
+  // URL hard-coded in vendors.ts and the input would just be a read-only
+  // display the user can't change. Hiding it on presets cleans the UI without
+  // affecting routing (getProvider still resolves the URL from the vendor
+  // preset internally).
+  const showBaseUrl = isCustom;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div>
         <label className="text-sm text-zinc-300 block">
           模型厂商
@@ -481,7 +515,7 @@ function VendorSection({
       {showBaseUrl && (
         <div>
           <label className="text-sm text-zinc-300 block">
-            Base URL
+            API 地址
             <input
               type="text"
               value={
@@ -526,37 +560,115 @@ function VendorSection({
         </a>
       )}
 
-      <div>
-        <label className="text-sm text-zinc-300 block">
-          Model
-          <input
-            type="text"
-            value={activeModel}
-            list={`models-${vendor.id}`}
-            onChange={(e) => setActiveModel(e.target.value)}
-            placeholder={vendor.models[0] ?? "model name"}
-            className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100"
-          />
-          {vendor.models.length > 0 && (
-            <datalist id={`models-${vendor.id}`}>
-              {vendor.models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          )}
-        </label>
-        {vendor.models.length > 0 && (
-          <div className="text-[10px] text-zinc-500 mt-1">
-            可点输入框右侧 ▾ 选预设模型，或手动输入其它模型名
-          </div>
-        )}
-      </div>
+      <ModelField
+        models={vendor.models}
+        value={activeModel}
+        onChange={setActiveModel}
+      />
+      {vendor.models.length > 0 && (
+        <div className="-mt-2 text-[10px] text-zinc-500">
+          点输入框右侧的图标看推荐模型列表，也可以手动输入其它模型名
+        </div>
+      )}
 
       {vendor.note && (
         <div className="text-[11px] text-zinc-400 italic bg-zinc-900/40 border-l-2 border-zinc-700 px-3 py-1.5 rounded-r">
           {vendor.note}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Model name input with a click-to-open dropdown listing the vendor's
+ * recommended models. Replaces the previous `<input list=...>` + `<datalist>`
+ * pair, where the browser's native datalist filtered the list to entries
+ * matching the current input value — meaning once the user had a model name
+ * in the field they could no longer browse the full preset list. This custom
+ * version always shows everything; user can still type any name freely.
+ */
+function ModelField({
+  models,
+  value,
+  onChange,
+}: {
+  models: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click. Pointerdown on document so we beat any handlers
+  // that re-render the input during the same event.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const showButton = models.length > 0;
+
+  return (
+    <div>
+      <label className="text-sm text-zinc-300 block">
+        使用的模型
+        <div ref={containerRef} className="relative mt-1">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={models[0] ?? "model name"}
+            className={
+              "w-full px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-100 " +
+              (showButton ? "pr-8" : "")
+            }
+          />
+          {showButton && (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-label="展开模型列表"
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-1 flex items-center text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded"
+            >
+              <ChevronDown
+                className={"h-4 w-4 transition-transform " + (open ? "rotate-180" : "")}
+              />
+            </button>
+          )}
+          {open && showButton && (
+            <div className="absolute z-10 left-0 right-0 mt-1 bg-zinc-900 border border-zinc-700 rounded shadow-lg max-h-60 overflow-y-auto">
+              {models.map((m) => {
+                const active = m === value;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      onChange(m);
+                      setOpen(false);
+                    }}
+                    className={
+                      "w-full text-left px-3 py-1.5 text-sm transition-colors " +
+                      (active
+                        ? "bg-blue-500/20 text-blue-300"
+                        : "text-zinc-200 hover:bg-zinc-800")
+                    }
+                  >
+                    {m}
+                    {active && <span className="ml-2 text-blue-400">✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </label>
     </div>
   );
 }
@@ -695,9 +807,9 @@ function SecretField({
           type="button"
           onClick={() => setReveal((r) => !r)}
           title={reveal ? "隐藏" : "显示"}
-          className="px-3 text-zinc-400 hover:text-zinc-100 select-none"
+          className="px-3 flex items-center text-zinc-400 hover:text-zinc-100 select-none"
         >
-          {reveal ? "🙈" : "👁"}
+          {reveal ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
         </button>
       </div>
       {value && !reveal && (

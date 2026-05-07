@@ -1,9 +1,10 @@
 import type { Provider } from "./providers/types";
 import type { Subtitle, SrtCue, AnalysisResult } from "./types";
+import type { TranslationStyle } from "../types/settings";
 import { batchSubtitles } from "./batchSubtitles";
 import { JsonLineParser } from "./streamingJson";
 import {
-  SYSTEM_PROMPT,
+  buildSystemPrompt,
   buildUserPrompt,
   buildContinuationPrompt,
   buildSummaryPrompt,
@@ -22,6 +23,12 @@ export interface RunAnalysisOptions {
   previouslyAnalyzed?: Subtitle[];
   batchSize?: number;
   /**
+   * Translation register applied across both phases. Defaults to "colloquial"
+   * if not provided so existing call sites without a style stay consistent
+   * with the pre-multi-style behavior.
+   */
+  style?: TranslationStyle;
+  /**
    * AbortSignal for user-initiated stop. Threads through to the provider's
    * fetch call so the in-flight HTTP body reader unblocks promptly.
    * runAnalysis returns early (without throwing) when aborted.
@@ -32,6 +39,7 @@ export interface RunAnalysisOptions {
 export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
   const batchSize = opts.batchSize ?? 50;
   const batches = batchSubtitles(opts.cues, batchSize);
+  const systemPrompt = buildSystemPrompt(opts.style ?? "colloquial");
   // Collect every analyzed cue so the final summary call sees the WHOLE
   // transcript (resumed sessions seed this from previouslyAnalyzed).
   const analyzedCues: Subtitle[] = [...(opts.previouslyAnalyzed ?? [])];
@@ -62,7 +70,7 @@ export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
       opts.onCue(cue);
     };
     for await (const chunk of opts.provider.stream({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt,
       userPrompt,
       signal: opts.signal,
     })) {
@@ -85,7 +93,7 @@ export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
       if (summary) opts.onSummary(summary);
     };
     for await (const chunk of opts.provider.stream({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt,
       userPrompt: buildSummaryPrompt(analyzedCues),
       signal: opts.signal,
     })) {

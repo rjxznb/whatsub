@@ -1,6 +1,66 @@
 import type { SrtCue, Subtitle } from "./types";
+import type { TranslationStyle } from "../types/settings";
 
-export const SYSTEM_PROMPT = `You are an English subtitle analyst for a learning app.
+/**
+ * Per-style guidance inserted into the system prompt's "translation register"
+ * paragraph (replaces the generic Rule #7). Each entry tells the model the
+ * register, vocabulary tilt, and what to do with filler words. The other
+ * 9 rules + JSON schema are identical across styles.
+ *
+ * Adding a new style: add a key here, add the same key to TranslationStyle
+ * in types/settings.ts, and add a label in TRANSLATION_STYLE_LABELS below.
+ */
+const STYLE_GUIDANCE: Record<TranslationStyle, string> = {
+  colloquial: `Translation register: NATURAL CHINESE CONVERSATION. Sound like a young
+native speaker chatting with friends. Allow contractions, omitted subjects,
+soft particles (吧/啊/呢/嘛). Translate filler words faithfully (Uh→呃,
+Hmm→嗯, You know→你懂的). Avoid 书面化措辞 like 因此/此外/然而 unless
+the original is also formal. Idioms welcomed when they fit, but don't force
+them.`,
+
+  playful: `Translation register: VIVID AND EXPRESSIVE. Reach for punchy verbs and
+colorful adjectives over neutral ones (爽 over 开心, 拽 over 厉害, 整 over 做).
+Onomatopoeia and exclamations encouraged (wow→哇塞, oh no→糟了, ugh→啊这).
+Translate with the energy of a voice actor, not a news anchor — preserve
+emotional beats. Light internet vernacular OK when it sounds natural; avoid
+stale memes.`,
+
+  cinematic: `Translation register: MOVIE-SUBTITLE STYLE. **Brevity is a hard
+constraint** — translations should be roughly the same length as the English
+or shorter, never longer. Cut filler, redundant subjects, polite hedges.
+Allow drama (短促有力的措辞、emotional emphasis), and where it improves
+flow you may use a more literary turn ("此情可待" over "我会一直记得").
+No 啊/吧/嘛 particles. Suitable for film, drama, prestige TV.`,
+
+  formal: `Translation register: FORMAL WRITTEN CHINESE. Full sentences, complete
+punctuation, regular grammar. Vocabulary tilts toward newspaper/textbook
+level (因此/然而/此外/此刻 are fine; 不过/但是 also OK in moderation).
+Drop filler words rather than transcribing them ("Uh..."→just elide them).
+No particles like 啊/吧/嘛. Suitable for business, news, academic content.`,
+
+  literary: `Translation register: REFINED AND POETIC. Word choice precise and elegant;
+favor 四字格 / 文言-tinged phrasing where it fits naturally (don't force it
+on plain conversation). Preserve mood and imagery over literal accuracy. May
+trim filler aggressively. Suitable for poetry, romance, literary essays,
+auteur cinema. NEVER cross into stiff archaism — the goal is *evocative*,
+not *museum-piece*.`,
+};
+
+/** UI labels for the style dropdown. Emoji + 中文 short label. */
+export const TRANSLATION_STYLE_LABELS: Record<TranslationStyle, string> = {
+  colloquial: "💬 日常聊天",
+  playful: "✨ 俏皮活泼",
+  cinematic: "🎬 影视字幕",
+  formal: "📰 正式书面",
+  literary: "📖 文艺抒情",
+};
+
+export function buildSystemPrompt(style: TranslationStyle = "colloquial"): string {
+  const styleBlock = STYLE_GUIDANCE[style] ?? STYLE_GUIDANCE.colloquial;
+  return SYSTEM_PROMPT_TEMPLATE.replace("{{STYLE_GUIDANCE}}", styleBlock);
+}
+
+const SYSTEM_PROMPT_TEMPLATE = `You are an English subtitle analyst for a learning app.
 
 Given English subtitle cues, produce structured analysis: Chinese translations, key phrase highlighting, and (when explicitly requested in a separate follow-up turn) a global "key phrases" review list.
 
@@ -55,7 +115,7 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
 6. NEVER use raw double quotes inside JSON string values. For Chinese quoted text use 「」 not "". For English quoted text use single quotes or rephrase.
 
-7. Translations are conversational, fluent Chinese — translate filler words too ("Uh..." → "呃...").
+7. {{STYLE_GUIDANCE}}
 
 8. Each highlightWord must be a substring of THE SAME CUE'S text. Don't span across cues.
 

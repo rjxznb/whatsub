@@ -210,11 +210,16 @@ export function Player() {
     // them). The summary phase needs to see all analyzed cues, not just this
     // run's slice, so keyPhrases reflect the FULL transcript.
     const previouslyAnalyzed = useAnalysis.getState().subtitles.slice();
+    // Style: per-entry choice (set in ImportModal at import); legacy entries
+    // without a stored choice fall back to "colloquial".
+    const entry = library.videos.find((v) => v.id === videoId);
+    const style = entry?.analysisStyle ?? "colloquial";
     try {
       await runAnalysis({
         provider,
         cues: remaining,
         previouslyAnalyzed,
+        style,
         signal: localController.signal,
         onCue: (c: Subtitle) => {
           if (localController.signal.aborted) return;

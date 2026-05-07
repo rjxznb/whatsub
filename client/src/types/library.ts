@@ -1,3 +1,5 @@
+import type { TranslationStyle } from "./settings";
+
 export type LibrarySource =
   | { type: "local"; originalPath: string }
   | { type: "url"; url: string };
@@ -16,6 +18,10 @@ export interface LibraryEntry {
   /** Absolute path to the dir holding source.mp4 / transcript.srt / analysis.json.
    *  Frozen at import time. Optional for entries created before this field existed. */
   videoDir?: string;
+  /** Translation style chosen at import time. Drives the system prompt for
+   *  this entry's analysis. Optional for legacy entries — Player falls back
+   *  to settings.translationStyle then to "colloquial". */
+  analysisStyle?: TranslationStyle;
 }
 
 export interface Library {

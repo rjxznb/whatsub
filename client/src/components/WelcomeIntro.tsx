@@ -37,25 +37,38 @@ const BG_GRADIENT =
   "radial-gradient(ellipse at center, rgba(40,40,50,0.35) 0%, rgba(0,0,0,1) 70%)";
 
 // ---- Timeline (frames @ 30fps) ----
-const PHASE_HEY_START = 30;
-const PHASE_HEY_END = 52;
-const PHASE_WHAT_START = 82;
-const PHASE_WHAT_END = 96;
-const PHASE_SUB_START = 96;
-const PHASE_SUB_END = 110;
-const PHASE_HOLD_END = 150;
-const PHASE_FLY_END = 200;
+const PHASE_HEY_START = 53;
+const PHASE_HEY_END = 75;
+const PHASE_WHAT_START = 105;
+const PHASE_WHAT_END = 119;
+const PHASE_SUB_START = 119;
+const PHASE_SUB_END = 133;
+const PHASE_HOLD_END = 173;
+// Fly = 30 frames (1.0s). Drives BOTH whatSub's translate-up + scale-down
+// AND hey's linear opacity/width fade — shorten this and both speed up
+// proportionally. easeOutExpo already front-loads the motion so most of
+// whatSub's visible travel completes in the first ~10 frames; the rest is
+// the asymptotic tail. 30 frames feels snappy without clipping the tail.
+const PHASE_FLY_END = 203;
 // "Welcome to" drops in immediately when whatSub lands — physically simulated
-// fall + 3 progressively smaller rebounds, ~1s end-to-end. Width grows in
-// step with the FIRST impact so whatSub finishes shifting right by the time
-// Welcome stops bouncing visibly.
+// fall + 3 visibly distinct rebounds (each smaller than the last). Total
+// drop+bounce duration is ~1.5s so the initial drop reads as weighted (not
+// rushed) and each successive bounce has enough screen time to register.
+// Width grows in step with the FIRST impact so whatSub finishes shifting
+// right by the time Welcome stops bouncing visibly.
 const PHASE_DROP_PAUSE_END = PHASE_FLY_END;
-const PHASE_DROP_END = 230;
+const PHASE_DROP_END = 248;
 // Cards rise as the bounce settles for one continuous motion — they
 // start just before the bounce visually finishes.
 const PHASE_CARDS_START = PHASE_DROP_END - 10;
-const PHASE_CARDS_END = 260;
-const PHASE_IDLE = 265;
+const PHASE_CARDS_END = 278;
+const PHASE_IDLE = 283;
+
+// ---- Audio cue ----
+// Single startup chime, fires at frame 0 the instant the intro mounts.
+// Source file lives in client/public/audio/ and is served from the static
+// root, so the path is "/audio/<file>" (relative URL, no host prefix).
+const AUDIO_STARTUP: string = "/audio/startup_audio.mp3";
 
 // Final headline position — referenced by the welcome span layout. Kept as
 // exports purely so a future caller could echo them; FirstRunGate no longer
@@ -118,7 +131,10 @@ function easeOutCubic(t: number): number {
 // with gravity. With real physics, fall + bounce intervals scale by the
 // same factor as the heights, so the rhythm matches what your eye expects
 // from a real falling object.
-const RESTITUTION = 0.38;          // velocity retained per impact (rubber ball ≈ 0.4-0.5)
+// 0.6 = 60% velocity retained per impact, giving 3 visibly distinct bounce
+// peaks (height proportions 1.0 / 0.36 / 0.13 / 0.047). Lower values like
+// 0.38 made the 2nd bounce already invisible at headline-font scale.
+const RESTITUTION = 0.6;
 const G = 2;                       // gravity (px/time² in normalized units)
 const T_FALL = Math.sqrt(2 / G);   // time of initial fall from height 1
 // Total motion time = initial fall + sum of all subsequent bounce arcs.
@@ -233,11 +249,13 @@ export function WelcomeIntro({ children }: Props) {
     fontSize: number;
   } | null>(null);
   useEffect(() => {
-    // Measure once hey is fully typed and stable, well before fly. We
-    // pick the middle of hold so layout is settled and the breathe-scale
-    // wobble has averaged out enough that the snapshot matches what's
-    // visible.
-    const MEASURE_AT = (PHASE_HEY_END + PHASE_HOLD_END) / 2;
+    // Measure as late in hold as possible — we MUST capture after PHASE_SUB_END
+    // (so the inline-flex content is the full "hey, whatSub" and hey's
+    // position is at its final pre-fly resting place, not partway through
+    // Sub's typing where the container is narrower and hey sits further
+    // right). PHASE_HOLD_END - 3 gives a small buffer so the capture lands
+    // a few frames before fly starts, with the layout fully settled.
+    const MEASURE_AT = PHASE_HOLD_END - 3;
     if (frame >= MEASURE_AT && !heyGhost && heyMeasureRef.current) {
       const rect = heyMeasureRef.current.getBoundingClientRect();
       const cs = getComputedStyle(heyMeasureRef.current);
@@ -268,7 +286,14 @@ export function WelcomeIntro({ children }: Props) {
     function loop(t: number) {
       if (startRef.current === null) startRef.current = t;
       const elapsed = t - startRef.current;
-      const f = Math.floor(elapsed / (1000 / 30));
+      // Continuous float frame counter (no Math.floor) — lets every lerp /
+      // ease / physics-bounce interpolation run at the browser's full RAF
+      // rate (60Hz on most displays, 120Hz on ProMotion) instead of being
+      // visibly stepped at 30Hz. The PHASE_* constants are still "30fps
+      // units" so their numeric meaning doesn't change. The few places
+      // that need integer frames (typing character count) Math.floor at
+      // the use site, not here.
+      const f = elapsed / (1000 / 30);
       setFrame(f);
       // Stop once we hit the static idle frame — the cursor is already
       // invisible by then so there's nothing left to animate.
@@ -279,6 +304,27 @@ export function WelcomeIntro({ children }: Props) {
     rafRef.current = requestAnimationFrame(loop);
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  // ---- Startup chime ----
+  // Preload + auto-play once on mount. The intro's animation starts at the
+  // same instant this component mounts, so there's no need to gate on the
+  // frame counter — fire as soon as the Audio element is constructed.
+  // catch() swallows browser autoplay-policy rejections (rare in Tauri's
+  // WebView2 / WKWebView, which allow autoplay for local content).
+  useEffect(() => {
+    if (!AUDIO_STARTUP) return;
+    const a = new Audio(AUDIO_STARTUP);
+    a.preload = "auto";
+    void a.play().catch((err) => {
+      console.warn("WelcomeIntro startup audio play blocked:", err);
+    });
+    return () => {
+      // Stop the chime if the user navigates away mid-intro (e.g. dev-mode
+      // resize remount), otherwise it'd keep playing as an orphaned element.
+      a.pause();
+      a.currentTime = 0;
     };
   }, []);
 
@@ -342,10 +388,13 @@ export function WelcomeIntro({ children }: Props) {
   const welcomeFontScale = animFontSize / TITLE_FONT_PX;
   const welcomeAnimWidth = welcomeBaseW * welcomeFontScale * welcomeWidthT;
 
-  // hey, opacity dips ahead of width-collapse; we let inline-flex naturally
-  // recenter around it via `display: none` when fully faded, which is
-  // imperceptible since opacity is already 0 by then.
-  const heyOpacity = clamp01(1 - flyT * 1.6);
+  // hey's disappearance is decoupled from flyT (which is easeOutExpo and
+  // front-loaded — would dump 75% of the fade into the first 20% of fly,
+  // looking like a snap rather than a gradual fade). heyT is a linear ramp
+  // over the SAME wall-clock duration as flyT, so hey fades + collapses at
+  // a constant rate while whatSub still flies with its easeOutExpo curve.
+  const heyT = clamp01((frame - PHASE_HOLD_END) / (PHASE_FLY_END - PHASE_HOLD_END));
+  const heyOpacity = 1 - heyT;
   const heyVisible = heyOpacity > 0.01;
 
   // Cursor fades out across fly. Past fly-end it's invisible regardless of
@@ -490,8 +539,10 @@ export function WelcomeIntro({ children }: Props) {
                   // Pre-fly hey, is fully visible. During fly we hide it
                   // (visibility, not display, so the slot still occupies
                   // space we can collapse smoothly) and the ghost overlay
-                  // takes over the visible role.
-                  visibility: flyT > 0 ? "hidden" : "visible",
+                  // takes over the visible role. Linear heyT (not flyT)
+                  // drives both the visibility flip and the collapse so
+                  // hey vanishes at a constant rate rather than spiking.
+                  visibility: heyT > 0 ? "hidden" : "visible",
                   // Width: pre-fly = auto (fits text). During fly we lerp
                   // from the hey-glyph-width-at-current-fontsize down to 0.
                   // We use em (a fraction of current fontSize) so the slot
@@ -499,10 +550,10 @@ export function WelcomeIntro({ children }: Props) {
                   // keeping the collapse proportional rather than getting
                   // visually stuck at a stale px width.
                   width:
-                    flyT > 0 && heyGhost
-                      ? `${(heyGhost.width / heyGhost.fontSize) * (1 - flyT)}em`
+                    heyT > 0 && heyGhost
+                      ? `${(heyGhost.width / heyGhost.fontSize) * (1 - heyT)}em`
                       : "auto",
-                  marginRight: `${0.18 * (1 - flyT)}em`,
+                  marginRight: `${0.18 * (1 - heyT)}em`,
                   display: "inline-block",
                   overflow: "hidden",
                   whiteSpace: "pre",
@@ -544,8 +595,10 @@ export function WelcomeIntro({ children }: Props) {
           the headline container flies up. Same font / size / weight /
           letter-spacing / lineHeight as the inline measurement so the
           ghost is pixel-identical to where hey, sat in the headline; the
-          eye sees a single continuous element that fades, not a swap. */}
-      {flyT > 0 && heyGhost && (
+          eye sees a single continuous element that fades, not a swap.
+          Render gate is heyT (not flyT) so it stays consistent with the
+          inline visibility flip — both flip at exactly the same frame. */}
+      {heyT > 0 && heyGhost && (
         <span
           style={{
             position: "fixed",

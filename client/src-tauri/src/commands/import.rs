@@ -19,6 +19,11 @@ pub struct ImportRequest {
     /// Defaults to "standard" (720p) when missing for backward compat.
     #[serde(default = "default_quality")]
     pub quality: String,
+    /// Translation style: "colloquial" / "playful" / "cinematic" / "formal" /
+    /// "literary". Stored on the library entry; used by the Player at analysis
+    /// time. Optional — missing falls back to settings default.
+    #[serde(default)]
+    pub analysis_style: Option<String>,
 }
 
 fn default_quality() -> String {
@@ -99,6 +104,7 @@ pub async fn import_video(app: AppHandle, req: ImportRequest) -> AppResult<Impor
         status: LibraryStatus::Analyzing,
         last_error: None,
         video_dir: Some(out_dir.to_string_lossy().to_string()),
+        analysis_style: req.analysis_style.clone(),
     };
     library_upsert(entry)?;
 

@@ -24,7 +24,7 @@ export const MODEL_TIERS: readonly ModelTier[] = [
     size: "tiny",
     name: "极速",
     sizeMB: 75,
-    description: "下载最小、识别最快，但容易漏字、错字。适合在配置较低的电脑上跑、或对准确度要求不高时。",
+    description: "",
   },
   {
     size: "base",

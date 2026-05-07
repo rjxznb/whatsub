@@ -68,6 +68,15 @@ export const VENDORS: VendorPreset[] = [
     note: "阿里出品，国内直连，turbo 版本几分钱一个视频",
   },
   {
+    id: "minimax",
+    name: "MiniMax",
+    protocol: "openai-compatible",
+    baseUrl: "https://api.minimaxi.com/v1",
+    models: ["MiniMax-M2", "MiniMax-Text-01", "abab6.5s-chat"],
+    keyConsoleUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+    note: "国内直连，海螺 AI 同款厂商，文本模型免费额度比较大",
+  },
+  {
     id: "siliconflow",
     name: "SiliconFlow (硅基流动)",
     protocol: "openai-compatible",

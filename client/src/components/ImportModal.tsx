@@ -9,6 +9,8 @@ import { useAnalysis } from "../store/analysis";
 import { getTier } from "../llm/modelTiers";
 import type { WhisperModelSize } from "../types/settings";
 import { friendlyError } from "../utils/friendlyError";
+import { TRANSLATION_STYLE_LABELS } from "../llm/prompts";
+import type { TranslationStyle } from "../types/settings";
 
 interface Props {
   onClose: () => void;
@@ -88,6 +90,10 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   // / "best" (no cap). 720p default — subtitle learning doesn't benefit from
   // 1080p+ and 720p downloads in 1/3 the time on most connections.
   const [quality, setQuality] = useState<"low" | "standard" | "high" | "best">("standard");
+  // Translation register for AI analysis. Default 日常聊天; user picks per
+  // import. Persists onto the library entry's analysisStyle so the Player
+  // picks it up at analysis time.
+  const [analysisStyle, setAnalysisStyle] = useState<TranslationStyle>("colloquial");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -221,6 +227,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           sourceValue,
           whisperModel: settings.whisperModel,
           quality,
+          analysisStyle,
         },
       });
       startFor(result.videoId);
@@ -668,6 +675,24 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             </button>
           </div>
         )}
+
+        {/* Translation style — applies to both URL and local imports.
+            Controls the LLM's translation register; saved on the library
+            entry so the Player picks the matching prompt at analysis time. */}
+        <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+          <span className="shrink-0">翻译风格</span>
+          <select
+            value={analysisStyle}
+            onChange={(e) => setAnalysisStyle(e.target.value as TranslationStyle)}
+            className="flex-1 px-2 py-1.5 bg-zinc-800 text-zinc-100 rounded border border-zinc-700"
+          >
+            {(Object.keys(TRANSLATION_STYLE_LABELS) as TranslationStyle[]).map((s) => (
+              <option key={s} value={s}>
+                {TRANSLATION_STYLE_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {error && <div className="mt-3 text-sm text-red-400">{error}</div>}
 

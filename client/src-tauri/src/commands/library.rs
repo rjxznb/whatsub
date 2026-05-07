@@ -42,6 +42,15 @@ pub struct LibraryEntry {
     /// written before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_dir: Option<String>,
+
+    /// Translation style chosen at import time (e.g. "colloquial", "playful",
+    /// "cinematic", "formal", "literary"). Drives the system prompt for this
+    /// entry's LLM analysis. Optional: missing means legacy entry — Player
+    /// falls back to settings.translationStyle then to "colloquial". We keep
+    /// this as a free-form String at the Rust layer so adding new styles in
+    /// the frontend doesn't require a Rust enum bump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -219,6 +228,7 @@ mod tests {
             status: LibraryStatus::Analyzing,
             last_error: None,
             video_dir: None,
+            analysis_style: None,
         }
     }
 

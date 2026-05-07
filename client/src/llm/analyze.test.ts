@@ -62,7 +62,12 @@ describe("runAnalysis", () => {
       batchSize: 50,
     });
 
-    expect(cueOut).toEqual([1, 2]);
+    // parseCue authoritatively uses the *input* cue's time/endTime/text rather
+    // than the LLM-echoed values (see analyze.ts:138-140 — fixed the
+    // text="undefined" bug some models triggered by skipping the echo).
+    // So the expected times here are the input cues' (0, 1), NOT the LLM mock's
+    // echoed values (1, 2).
+    expect(cueOut).toEqual([0, 1]);
     expect(summary?.keyPhrases?.[0]?.expression).toBe("hello");
   });
 
@@ -123,7 +128,9 @@ describe("runAnalysis", () => {
     ).resolves.toBeUndefined();
 
     // Cue went through; summary stays null because phase 2 failed silently.
-    expect(cueOut).toEqual([1]);
+    // Expected time is the input cue's (0), not the LLM echo's (1) — see note
+    // in the first test about parseCue's authoritative-input semantics.
+    expect(cueOut).toEqual([0]);
     expect(summary).toBeNull();
   });
 
@@ -153,8 +160,9 @@ describe("runAnalysis", () => {
     });
 
     // First cue made it through; subsequent cues skipped because signal aborted.
-    // Phase 2 also skipped because signal was already aborted.
-    expect(cueOut).toEqual([1]);
+    // Phase 2 also skipped because signal was already aborted. Expected time
+    // is input cue's (0), not LLM echo's (1) — parseCue authoritative-input.
+    expect(cueOut).toEqual([0]);
     expect(summary).toBeNull();
   });
 });

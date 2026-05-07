@@ -151,9 +151,9 @@ export function Settings() {
               onChange={(v) => setDraft({ ...draft, libraryDir: v })}
             />
             <FileField
-              label="YouTube cookies.txt 路径（可选）"
+              label="cookies.txt 路径（可选）"
               value={draft.cookiesFile}
-              defaultHint="未设置（YouTube 偶尔要求登录验证；按导入页的「?」按钮里的教程导出 cookies.txt 后选到这里）"
+              defaultHint="未设置（YouTube / B 站 / 腾讯视频 等需要登录或会员的视频要靠这个文件；按导入页的「?」按钮里的教程导出 cookies.txt 后选到这里）"
               filterName="cookies.txt"
               filterExt={["txt"]}
               onChange={(v) => setDraft({ ...draft, cookiesFile: v })}

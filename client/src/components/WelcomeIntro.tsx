@@ -235,39 +235,46 @@ export function WelcomeIntro({ children }: Props) {
     };
   }, []);
 
-  // Snapshot the inline "hey," box right before fly begins so we can
-  // render a fixed-positioned ghost in the same spot during fly. Without
-  // this, "hey," visually flies upward with whatSub (it lives inside the
+  // Snapshot the inline "hey," and "?" boxes right before fly begins so we
+  // can render fixed-positioned ghosts in the same spot during fly. Without
+  // this, both would visually fly upward with whatSub (they live inside the
   // headline container that gets translate+scaled), which conflicts with
-  // the intent of "let hey fade away in place while whatSub leaves."
-  const heyMeasureRef = useRef<HTMLSpanElement>(null);
-  const [heyGhost, setHeyGhost] = useState<{
+  // the intent of "let the greeting bookends fade away in place while
+  // whatSub leaves alone for the title slot."
+  type Ghost = {
     left: number;
     top: number;
     width: number;
     height: number;
     fontSize: number;
-  } | null>(null);
+  };
+  const heyMeasureRef = useRef<HTMLSpanElement>(null);
+  const [heyGhost, setHeyGhost] = useState<Ghost | null>(null);
+  const qmarkMeasureRef = useRef<HTMLSpanElement>(null);
+  const [qmarkGhost, setQmarkGhost] = useState<Ghost | null>(null);
   useEffect(() => {
     // Measure as late in hold as possible — we MUST capture after PHASE_SUB_END
-    // (so the inline-flex content is the full "hey, whatSub" and hey's
+    // (so the inline-flex content is the full "hey, whatSub?" and hey's
     // position is at its final pre-fly resting place, not partway through
     // Sub's typing where the container is narrower and hey sits further
     // right). PHASE_HOLD_END - 3 gives a small buffer so the capture lands
     // a few frames before fly starts, with the layout fully settled.
     const MEASURE_AT = PHASE_HOLD_END - 3;
-    if (frame >= MEASURE_AT && !heyGhost && heyMeasureRef.current) {
-      const rect = heyMeasureRef.current.getBoundingClientRect();
-      const cs = getComputedStyle(heyMeasureRef.current);
-      setHeyGhost({
+    if (frame < MEASURE_AT) return;
+    const snap = (el: HTMLSpanElement): Ghost => {
+      const rect = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return {
         left: rect.left,
         top: rect.top,
         width: rect.width,
         height: rect.height,
         fontSize: parseFloat(cs.fontSize),
-      });
-    }
-  }, [frame, heyGhost]);
+      };
+    };
+    if (!heyGhost && heyMeasureRef.current) setHeyGhost(snap(heyMeasureRef.current));
+    if (!qmarkGhost && qmarkMeasureRef.current) setQmarkGhost(snap(qmarkMeasureRef.current));
+  }, [frame, heyGhost, qmarkGhost]);
 
   const centerY = vp.h / 2;
   // Pre-fly headline size scales with viewport height (so the giant
@@ -341,6 +348,12 @@ export function WelcomeIntro({ children }: Props) {
     clamp01((frame - PHASE_SUB_START) / (PHASE_SUB_END - PHASE_SUB_START)) * SUB_TEXT.length;
   const subTyped = sliceTo(SUB_TEXT, Math.floor(subChars));
 
+  // The "?" caps the brand line — appears the same frame Sub finishes
+  // typing. Single character so we just snap it in rather than running a
+  // typing window for it. Color is white (INK) — overrides Sub's ACCENT
+  // since the ? is rendered in its own span (color doesn't bleed across).
+  const qmarkTyped = frame >= PHASE_SUB_END ? "?" : "";
+
   const lineOpacity = easeOutExpo(clamp01((frame - (PHASE_HEY_START - 4)) / 10));
   const hasStartedTyping = frame >= PHASE_HEY_START;
   const cursorColor = frame >= PHASE_SUB_START ? ACCENT : INK;
@@ -351,7 +364,10 @@ export function WelcomeIntro({ children }: Props) {
   // Land at finalTitlePx (responsive, derived from viewport width) so the
   // post-fly idle state matches what the user resizes to without snapping
   // — if the user resizes mid-fly the target moves smoothly with them.
-  const flyT = easeOutExpo(clamp01((frame - PHASE_HOLD_END) / (PHASE_FLY_END - PHASE_HOLD_END)));
+  // Linear (not eased) — whatSub moves at constant speed in a straight
+  // line to the title slot. Previous easeOutExpo gave a "thrown object"
+  // feel that front-loaded the motion; user wanted plainer/uniform.
+  const flyT = clamp01((frame - PHASE_HOLD_END) / (PHASE_FLY_END - PHASE_HOLD_END));
   const animTop = lerp(centerY, TITLE_CENTER_TOP_PX, flyT);
   const animFontSize = lerp(headlinePx, finalTitlePx, flyT);
   const animCursorPx = lerp(cursorPx, Math.round(finalTitlePx * 0.85), flyT);
@@ -388,14 +404,50 @@ export function WelcomeIntro({ children }: Props) {
   const welcomeFontScale = animFontSize / TITLE_FONT_PX;
   const welcomeAnimWidth = welcomeBaseW * welcomeFontScale * welcomeWidthT;
 
-  // hey's disappearance is decoupled from flyT (which is easeOutExpo and
-  // front-loaded — would dump 75% of the fade into the first 20% of fly,
-  // looking like a snap rather than a gradual fade). heyT is a linear ramp
-  // over the SAME wall-clock duration as flyT, so hey fades + collapses at
-  // a constant rate while whatSub still flies with its easeOutExpo curve.
-  const heyT = clamp01((frame - PHASE_HOLD_END) / (PHASE_FLY_END - PHASE_HOLD_END));
+  // hey + "?" have TWO independent timelines during fly:
+  //
+  //   heyT (fast)        — visual opacity fade. Completes in the first
+  //                        HEY_FADE_FRACTION of fly so the bookends visually
+  //                        vanish quickly (cosmetic only).
+  //   heyLayoutT (slow)  — slot width collapse + inline visibility flip.
+  //                        Synced with flyT, linear over the full fly window.
+  //
+  // Why two: whatSub's screen position depends on the inline-flex layout —
+  // as hey/? slots collapse, the centered container re-centers and whatSub
+  // shifts left. If layout collapse ran on heyT (faster than flyT), whatSub's
+  // path would have a kink (rapid NW first, then pure N) instead of a single
+  // straight diagonal from start to title slot. Tying layout collapse to
+  // flyT keeps whatSub's velocity constant on BOTH axes — a clean straight
+  // line — while opacity still gets to fade out faster (purely visual, no
+  // geometric impact).
+  //
+  // The HEY_FADE_FRACTION knob: lower for snappier visual disappearance
+  // (0.35 = first 35% of fly), 1.0 to fade in lockstep with the layout.
+  const HEY_FADE_FRACTION = 0.5;
+  const heyT = clamp01(
+    (frame - PHASE_HOLD_END) /
+      ((PHASE_FLY_END - PHASE_HOLD_END) * HEY_FADE_FRACTION),
+  );
   const heyOpacity = 1 - heyT;
-  const heyVisible = heyOpacity > 0.01;
+  const heyLayoutT = flyT;
+  // Keep the inline span mounted until the slot is fully collapsed.
+  // Previously this was gated on heyOpacity, which unmounted the span
+  // mid-fly and snapped whatSub left by the residual slot width in one
+  // frame. Gating on layout instead means unmount only happens once the
+  // slot is already 0 width — layout-neutral.
+  const heyVisible = heyLayoutT < 0.99;
+
+  // Pre-fly bookend slot widths in ABSOLUTE PIXELS. Using px (not em)
+  // keeps the slot-collapse a single linear (1 - flyT) factor instead of
+  // compounding with animFontSize's own (1 - flyT) shrink — that compound
+  // produces a quadratic px-width over flyT, which translates to a CURVED
+  // path for whatSub on the horizontal axis (the inline-flex re-centering
+  // around the shrinking content). Px-fixed slot widths give linear-in-
+  // flyT collapse, matching the linear vertical animTop, so whatSub
+  // traces a single straight line from origin to title slot.
+  const heySlotPx = heyGhost ? heyGhost.width : 0;
+  const heySlotMarginPx = heyGhost ? 0.18 * heyGhost.fontSize : 0;
+  const qmarkSlotPx = qmarkGhost ? qmarkGhost.width : 0;
 
   // Cursor fades out across fly. Past fly-end it's invisible regardless of
   // blink, so we don't keep the blink ticking once flying.
@@ -461,6 +513,15 @@ export function WelcomeIntro({ children }: Props) {
           left: "50%",
           transform: `translate(-50%, -50%) scale(${breatheScale})`,
           transformOrigin: "center center",
+          // willChange + backfaceVisibility promote this to its own
+          // composite layer so the browser GPU-translates a cached glyph
+          // texture per frame instead of re-painting + re-compositing the
+          // whole row. Without these, macOS WKWebView leaves glyph trail
+          // artifacts during the fly transform animation (a known
+          // CALayer-invalidation bug specific to Safari/WKWebView; Chromium
+          // / Edge WebView2 don't have it).
+          willChange: "transform, opacity",
+          backfaceVisibility: "hidden",
           fontFamily: "Caveat, cursive",
           fontSize: animFontSize,
           fontWeight: 700,
@@ -539,23 +600,29 @@ export function WelcomeIntro({ children }: Props) {
                   // Pre-fly hey, is fully visible. During fly we hide it
                   // (visibility, not display, so the slot still occupies
                   // space we can collapse smoothly) and the ghost overlay
-                  // takes over the visible role. Linear heyT (not flyT)
-                  // drives both the visibility flip and the collapse so
-                  // hey vanishes at a constant rate rather than spiking.
-                  visibility: heyT > 0 ? "hidden" : "visible",
-                  // Width: pre-fly = auto (fits text). During fly we lerp
-                  // from the hey-glyph-width-at-current-fontsize down to 0.
-                  // We use em (a fraction of current fontSize) so the slot
-                  // scales with animFontSize as the headline shrinks,
-                  // keeping the collapse proportional rather than getting
-                  // visually stuck at a stale px width.
+                  // takes over the visible role. heyLayoutT (= flyT) drives
+                  // both the visibility flip and the collapse so the slot
+                  // shrinks at the SAME rate whatSub is travelling vertically
+                  // — that's what keeps whatSub's path a single straight
+                  // diagonal line rather than two segments with a kink.
+                  visibility: heyLayoutT > 0 ? "hidden" : "visible",
+                  // Width: pre-fly = auto (fits text at current fontSize,
+                  // ≈ heySlotPx since fontSize is still headlinePx). During
+                  // fly we collapse linearly in PIXELS — see heySlotPx
+                  // declaration above for why px (not em).
                   width:
-                    heyT > 0 && heyGhost
-                      ? `${(heyGhost.width / heyGhost.fontSize) * (1 - heyT)}em`
+                    heyLayoutT > 0 && heyGhost
+                      ? `${heySlotPx * (1 - heyLayoutT)}px`
                       : "auto",
-                  marginRight: `${0.18 * (1 - heyT)}em`,
+                  marginRight: `${heySlotMarginPx * (1 - heyLayoutT)}px`,
                   display: "inline-block",
-                  overflow: "hidden",
+                  // Caveat is a cursive font where descenders (y, p, g) and
+                  // right-bearings (?, !) extend past the metric advance
+                  // box. overflow: hidden would cut those off pre-fly. We
+                  // don't need clipping during fly either since the inline
+                  // text is visibility:hidden then — the ghost takes over
+                  // the visible role.
+                  overflow: "visible",
                   whiteSpace: "pre",
                 }}
               >
@@ -566,13 +633,65 @@ export function WelcomeIntro({ children }: Props) {
             {/* Hovering "Sub" pops it with a soft white halo — playful
                 affordance to invite a click without actually doing
                 anything. inline-block so transform applies; transform
-                doesn't disturb sibling layout (no reflow). */}
+                doesn't disturb sibling layout (no reflow).
+
+                During fly we disable the hover effect entirely. Two
+                reasons: (a) once flying, Sub is in motion and inviting a
+                click is misleading; (b) on macOS WKWebView, stacking the
+                hover scale-up + text-shadow on top of the parent's
+                animating transform causes glyph trail artifacts (the
+                compositor leaves stale glyph layers behind). Idle Sub
+                still gets the playful hover. */}
             <span
-              style={{ color: ACCENT, display: "inline-block" }}
-              className="cursor-pointer transition-transform duration-300 ease-out hover:scale-125 hover:[text-shadow:0_0_24px_rgba(255,255,255,0.85),0_0_48px_rgba(255,255,255,0.4)]"
+              style={{
+                color: ACCENT,
+                display: "inline-block",
+                pointerEvents: flyT > 0 ? "none" : "auto",
+              }}
+              className={
+                flyT > 0
+                  ? "cursor-default"
+                  : "cursor-pointer transition-transform duration-300 ease-out hover:scale-125 hover:[text-shadow:0_0_24px_rgba(255,255,255,0.85),0_0_48px_rgba(255,255,255,0.4)]"
+              }
             >
               {subTyped}
             </span>
+            {/* "?" caps the brand line in white — same Caveat font as the
+                rest (inherited from the headline container). Sits between
+                Sub and the cursor so the cursor naturally blinks just
+                right of the question mark once it appears.
+
+                Disappears just like "hey,": pre-fly visible, during fly
+                visibility:hidden + slot collapses 1→0 (so whatSub
+                re-centers as the right bookend collapses too), and a
+                fixed-position ghost rendered below fades opacity in place. */}
+            {heyVisible && (
+              <span
+                ref={qmarkMeasureRef}
+                style={{
+                  color: INK,
+                  display: "inline-block",
+                  // Both controls switch on heyLayoutT (= flyT) so the right
+                  // bookend collapses in lockstep with the left, keeping
+                  // whatSub centered (relative to the shrinking content
+                  // width) at a constant horizontal velocity through fly.
+                  visibility: heyLayoutT > 0 ? "hidden" : "visible",
+                  // Px-based collapse — same reason as hey: keeps
+                  // whatSub's horizontal motion linear in flyT.
+                  width:
+                    heyLayoutT > 0 && qmarkGhost
+                      ? `${qmarkSlotPx * (1 - heyLayoutT)}px`
+                      : "auto",
+                  // overflow: visible (not hidden) — same reason as hey:
+                  // Caveat's "?" curves out past the advance box, and
+                  // overflow: hidden would chop the right half off.
+                  overflow: "visible",
+                  whiteSpace: "pre",
+                }}
+              >
+                {qmarkTyped}
+              </span>
+            )}
             {cursorOpacity > 0.01 && (
               <span
                 style={{
@@ -619,6 +738,33 @@ export function WelcomeIntro({ children }: Props) {
           }}
         >
           {HEY_TEXT}
+        </span>
+      )}
+
+      {/* "?" ghost — twin of the hey ghost above, captured at the same
+          pre-fly frame and fading via the same heyOpacity timeline so the
+          two greeting bookends disappear in lockstep visually. */}
+      {heyT > 0 && qmarkGhost && (
+        <span
+          style={{
+            position: "fixed",
+            left: qmarkGhost.left,
+            top: qmarkGhost.top,
+            width: qmarkGhost.width,
+            height: qmarkGhost.height,
+            fontFamily: "Caveat, cursive",
+            fontSize: qmarkGhost.fontSize,
+            fontWeight: 700,
+            color: INK,
+            lineHeight: 1,
+            letterSpacing: "-0.01em",
+            whiteSpace: "pre",
+            opacity: heyOpacity,
+            pointerEvents: "none",
+            zIndex: 11,
+          }}
+        >
+          ?
         </span>
       )}
 

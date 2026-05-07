@@ -519,7 +519,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             {showHelp && (
               <div className="mt-3 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto">
                 <div className="flex items-start justify-between gap-2 sticky top-0 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-zinc-800 border-b border-zinc-700">
-                  <div className="text-zinc-100 font-medium">下载失败常见原因</div>
+                  <div className="text-zinc-100 font-medium">支持的平台 + 下载失败常见原因</div>
                   <button
                     type="button"
                     onClick={() => setShowHelp(false)}
@@ -530,12 +530,26 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                   </button>
                 </div>
 
+                <div className="px-2 py-1.5 rounded border border-blue-500/30 bg-blue-500/5 text-blue-100 text-[11px] leading-relaxed">
+                  📺 <span className="font-semibold">支持 1800+ 站点</span>，常用的有：
+                  <span className="text-blue-200">YouTube · 哔哩哔哩 · 优酷 · 腾讯视频 · 爱奇艺 · 抖音 · 快手 · 微博 · TikTok · Vimeo · Twitter/X · Twitch 录播</span> 等。
+                  直接粘 URL 就行，每个站的处理都一样。
+                  <a
+                    href="https://github.com/yt-dlp/yt-dlp/blob/master/supported-sites.md"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-1 text-blue-300 underline"
+                  >
+                    完整列表
+                  </a>
+                </div>
+
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-amber-300">①  没有梯子（中国大陆）：</span>
+                    <span className="text-amber-300">①  没有梯子（仅国际平台）：</span>
                   </div>
                   <div className="mt-1">
-                    YouTube / Bilibili 国际站等都需要梯子。yt-dlp 走系统代理（不是浏览器代理），请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN。
+                    YouTube / TikTok / Vimeo / Twitter 等国际站需要梯子。**国内站（B 站、优酷、抖音等）国内裸网就能下，不需要梯子。** yt-dlp 走系统代理（不是浏览器代理），下国际站前请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN。
                   </div>
                   <div className="mt-1.5 px-2 py-1.5 rounded border border-rose-500/30 bg-rose-500/5 text-rose-200 text-[11px] leading-relaxed">
                     ⚠️ <span className="font-semibold">不要只开浏览器梯子</span>（比如 SwitchyOmega、Chrome / Edge 自带的代理扩展）——这种只在浏览器内生效，本软件读不到。必须用系统级代理 / 全局模式 / TUN 模式（Clash、v2rayN、Surge 等都有这个开关），让 <span className="font-semibold">本软件和浏览器走的是同一个梯子</span>。
@@ -555,20 +569,25 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
 
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-amber-300">②  YouTube 需要 cookies：</span>
+                    <span className="text-amber-300">②  需要登录信息（cookies）：</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-medium">
                       🌟 最常见
                     </span>
                   </div>
                   <div className="mt-1">
-                    即使有梯子，YouTube 检测到流量来自代理时会要求登录验证。这是绝大多数下载失败的原因——按下面 ③ 导出 cookies 后基本能解决。
+                    很多站点会在「检测到代理流量 / 视频是 VIP / 大会员 / 18+ / 年龄受限」时要求登录验证。这是绝大多数下载失败的原因——按下面 ③ 导出 cookies 后基本能解决。
                   </div>
-                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug">
-                    📋 报错关键词：
-                    <code className="bg-zinc-900 px-1 rounded text-rose-300">
-                      Sign in to confirm you're not a bot
-                    </code>
-                    {" "}— 看到这条就 100% 是这个问题。
+                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug space-y-0.5">
+                    <div>📋 报错关键词举例：</div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-rose-300">Sign in to confirm you're not a bot</code>
+                      {" "}— YouTube 反 bot 检查，看到这条 100% 是这个问题
+                    </div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-rose-300">需要登录账号</code>
+                      {" "}/ <code className="bg-zinc-900 px-1 rounded text-rose-300">need login</code>
+                      {" "}— B 站、抖音等国内站点的等价表达
+                    </div>
                   </div>
                 </div>
 
@@ -586,10 +605,14 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                         Get cookies.txt LOCALLY
                       </a>
                     </li>
-                    <li>登录 YouTube 网页</li>
                     <li>
-                      点浏览器扩展按钮，再点 Get cookies.txt LOCALLY，弹窗里点
-                      Export All Cookies 保存为 .txt 文件
+                      <span className="text-zinc-300 font-medium">登录所有你要下视频的网站</span>
+                      （YouTube / 哔哩哔哩 / 优酷 / 抖音 ...）。一次登好，下面那一份 cookies.txt 就对所有站点生效，不用每个站单独导
+                    </li>
+                    <li>
+                      浏览器**任意页面**点扩展按钮 →「Get cookies.txt LOCALLY」，弹窗里点
+                      <span className="font-medium"> Export All Cookies </span>
+                      保存为 .txt 文件（不是 Export Current Page，否则只导当前域名一个站的）
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <img
                           src="/help/cookies-step3-extension.png"
@@ -604,7 +627,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                       </div>
                     </li>
                     <li>
-                      回 app 设置页 → 「yt-dlp cookies 文件」选这个 .txt
+                      回 app 设置页 → 「cookies.txt 路径」选这个 .txt
                       <div className="mt-2">
                         <img
                           src="/help/cookies-step4-settings.png"
@@ -613,7 +636,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                         />
                       </div>
                     </li>
-                    <li>cookies 通常 1-2 周后过期，再失败时重新导出即可</li>
+                    <li>YouTube 反 bot cookies 通常 1-2 周失效；B 站等国内站的 cookies 一般几个月才失效。下载再失败就重新导出覆盖文件即可（**不用重启 app**，每次下载实时读）</li>
                   </ol>
                 </div>
 
@@ -622,13 +645,13 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                     <span className="text-amber-300">④  视频本身限制：</span>
                   </div>
                   <div className="mt-1">
-                    会员/付费/年龄限制/区域锁定/已删除/私密视频 yt-dlp 也下不了，跟代理和 cookies 无关，只能换视频。
+                    付费 / 会员 / 大会员 / VIP / 18+ / 区域锁定 / 已删除 / 私密视频，部分能靠登录态 cookies 解决（如 B 站大会员、YouTube 18+），区域锁则要换梯子节点；私密 / 已删除的视频谁也下不了。
                   </div>
                   <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug space-y-0.5">
-                    <div>📋 报错关键词举例：</div>
+                    <div>📋 各家平台报错关键词举例：</div>
                     <div>
                       <code className="bg-zinc-900 px-1 rounded text-zinc-400">Members-only video</code>
-                      {" "}→ 频道会员专享
+                      {" "}→ YouTube 频道会员专享
                     </div>
                     <div>
                       <code className="bg-zinc-900 px-1 rounded text-zinc-400">Sign in to confirm your age</code>
@@ -636,12 +659,20 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                     </div>
                     <div>
                       <code className="bg-zinc-900 px-1 rounded text-zinc-400">not made this video available in your country</code>
-                      {" "}→ 区域锁定
+                      {" "}→ 区域锁定（换梯子节点试试）
+                    </div>
+                    <div>
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">大会员专享</code>
+                      {" "}/{" "}
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">付费观看</code>
+                      {" "}→ B 站 / 腾讯视频 / 爱奇艺 等付费内容（需对应账号 cookies）
                     </div>
                     <div>
                       <code className="bg-zinc-900 px-1 rounded text-zinc-400">This video is private</code>
                       {" "}/{" "}
                       <code className="bg-zinc-900 px-1 rounded text-zinc-400">removed by the user</code>
+                      {" "}/{" "}
+                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">视频不存在</code>
                       {" "}→ 私密 / 已删除
                     </div>
                   </div>

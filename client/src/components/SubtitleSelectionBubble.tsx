@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search, Star, Loader2, AlertCircle } from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { useVocabulary } from "../store/vocab";
+import { makeVocabId } from "../types/vocab";
 import { useSettings } from "../store/settings";
 import type { Settings } from "../types/settings";
 import { normalizeExpression } from "../utils/normalizeExpression";
@@ -71,7 +72,7 @@ export function SubtitleSelectionBubble({
     setHoverPreview(null);
     lookupAbortRef.current?.abort();
 
-    const id = info.expression.toLowerCase().trim();
+    const id = makeVocabId(info.expression);
     const existing = entries.find((e) => e.id === id);
     if (existing) {
       // Already-saved: auto-expand with vocab values; debounce-upsert active.
@@ -118,8 +119,8 @@ export function SubtitleSelectionBubble({
 
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     debounceTimerRef.current = setTimeout(() => {
-      void add({
-        id: info.expression.toLowerCase().trim(),
+      add({
+        id: makeVocabId(info.expression),
         expression: info.expression,
         meaningZh,
         usage,
@@ -128,9 +129,9 @@ export function SubtitleSelectionBubble({
         cueTime: info.cueTime,
         cueText: info.cueText,
         addedAt:
-          entries.find((e) => e.id === info.expression.toLowerCase().trim())
+          entries.find((e) => e.id === makeVocabId(info.expression))
             ?.addedAt ?? new Date().toISOString(),
-      });
+      }).catch((e) => console.error("debounced vocab upsert failed", e));
     }, 500);
 
     return () => {
@@ -204,7 +205,7 @@ export function SubtitleSelectionBubble({
       return;
     }
     await add({
-      id: info.expression.toLowerCase().trim(),
+      id: makeVocabId(info.expression),
       expression: info.expression,
       meaningZh,
       usage,
@@ -257,6 +258,10 @@ export function SubtitleSelectionBubble({
         updatedAt: new Date().toISOString(),
       };
       saveDraft(draft);
+    } else if (info && !saved) {
+      // User cleared inputs (or never typed) on an unsaved word — wipe any
+      // stale draft so it doesn't ghost-restore on next selection.
+      clearDraft(info.expression);
     }
     setInfo(null);
   };

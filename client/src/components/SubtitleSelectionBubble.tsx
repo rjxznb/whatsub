@@ -148,19 +148,14 @@ export function SubtitleSelectionBubble({
     if (!info) return;
     const onSelChange = () => {
       // Defer one macrotask so document.activeElement reflects post-click
-      // focus state. Without this defer, clicking into the bubble's textarea
-      // fires selectionchange BEFORE focus has settled — activeElement is
-      // still the previous element, the textarea-focus guard fails through,
-      // and the bubble dismisses itself mid-edit.
+      // focus state, then bail when focus is anywhere inside the bubble.
+      // We previously restricted this to textarea/input only, but Chromium
+      // moves focus to <button> on click — so hovering [替换] / [追加]
+      // re-renders the textarea, fires selectionchange, finds activeElement
+      // is the AI button, and the over-strict guard let the close fire.
       setTimeout(() => {
         const active = document.activeElement;
-        if (
-          active &&
-          bubbleRef.current?.contains(active) &&
-          (active.tagName === "TEXTAREA" || active.tagName === "INPUT")
-        ) {
-          return;
-        }
+        if (active && bubbleRef.current?.contains(active)) return;
         const sel = window.getSelection();
         if (!sel || sel.isCollapsed) closeBubble();
       }, 0);

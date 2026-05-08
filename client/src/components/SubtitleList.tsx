@@ -12,6 +12,10 @@ interface Props {
   autoScroll: boolean;
   editing: boolean;
   onChanged?: () => void;
+  /** Lowercased expressions saved in vocab for THIS video. Used to render
+   *  dashed underlines on already-saved words. Computed in Player.tsx via
+   *  useMemo over useVocabulary().entries filtered by videoId. */
+  vocabSet: Set<string>;
 }
 
 function emptyCueAfter(idx: number, subs: Subtitle[]): Subtitle {
@@ -40,6 +44,7 @@ export function SubtitleList({
   autoScroll,
   editing,
   onChanged,
+  vocabSet,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const { phase, updateSubtitle, deleteSubtitle, insertSubtitle, reorderSubtitles } =
@@ -213,7 +218,7 @@ export function SubtitleList({
                 {formatTime(s.time)} → {formatTime(s.endTime)}
               </div>
               <div className="text-base leading-relaxed text-zinc-100">
-                {renderEnglishWithHighlights(s)}
+                {renderEnglishWithHighlights(s, vocabSet)}
               </div>
               <div className="text-zinc-400 text-sm mt-0.5">
                 {renderTranslationWithHighlights(s)}
@@ -451,14 +456,67 @@ function EditableRow({
   );
 }
 
-function renderEnglishWithHighlights(s: Subtitle): ReactNode {
-  if (s.highlightWords.length === 0) return s.text;
-  const words = [...s.highlightWords].sort(
+export function renderEnglishWithHighlights(
+  s: Subtitle,
+  vocabSet: Set<string>,
+): ReactNode {
+  // Pass 1: LLM highlightWords (yellow + keyNote tooltip).
+  const llmWords = [...s.highlightWords].sort(
     (a, b) => s.text.indexOf(a) - s.text.indexOf(b)
   );
-  return renderWithSpans(s.text, words, (w) => (
+  const tokens = sliceWithSpans(s.text, llmWords, (w) => (
     <HighlightWord key={`${w}-${s.text.indexOf(w)}`} word={w} note={s.keyNotes[w]} />
   ));
+
+  // Pass 2: in each plain-text token, find vocab matches (case-insensitive,
+  // longest first to handle phrase before single-word).
+  if (vocabSet.size === 0) return tokens;
+  const vocabPhrases = [...vocabSet].sort((a, b) => b.length - a.length);
+  return tokens.flatMap((tok, i) => {
+    if (typeof tok !== "string") return [tok];
+    return spliceVocabUnderlines(tok, vocabPhrases, i);
+  });
+}
+
+function spliceVocabUnderlines(
+  text: string,
+  phrasesLowercased: string[],
+  baseKey: number,
+): ReactNode[] {
+  const lower = text.toLowerCase();
+  type Hit = { start: number; end: number };
+  const hits: Hit[] = [];
+  for (const phrase of phrasesLowercased) {
+    let from = 0;
+    while (true) {
+      const idx = lower.indexOf(phrase, from);
+      if (idx === -1) break;
+      const end = idx + phrase.length;
+      const conflicts = hits.some((h) => idx < h.end && end > h.start);
+      if (!conflicts) hits.push({ start: idx, end });
+      from = end;
+    }
+  }
+  hits.sort((a, b) => a.start - b.start);
+  if (hits.length === 0) return [text];
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  hits.forEach((h, i) => {
+    if (h.start > cursor) out.push(text.slice(cursor, h.start));
+    out.push(
+      <span
+        key={`vocab-${baseKey}-${i}`}
+        data-highlight="true"
+        title="已收藏"
+        className="border-b border-dashed border-zinc-500/70"
+      >
+        {text.slice(h.start, h.end)}
+      </span>
+    );
+    cursor = h.end;
+  });
+  if (cursor < text.length) out.push(text.slice(cursor));
+  return out;
 }
 
 function renderTranslationWithHighlights(s: Subtitle): ReactNode {
@@ -472,7 +530,7 @@ function renderTranslationWithHighlights(s: Subtitle): ReactNode {
   const sorted = [...zhPhrases].sort(
     (a, b) => s.translation.indexOf(a) - s.translation.indexOf(b)
   );
-  return renderWithSpans(s.translation, sorted, (zh, key) => (
+  return sliceWithSpans(s.translation, sorted, (zh, key) => (
     // data-highlight="true" lets the SubtitleList's hover delegation freeze
     // auto-scroll on the Chinese highlight too — same as the English ones
     // (HighlightWord component sets the same attribute). Without it, hovering
@@ -492,7 +550,7 @@ function renderTranslationWithHighlights(s: Subtitle): ReactNode {
  * Walk `text` left to right, wrapping each occurrence of `phrases` in turn with `wrap()`.
  * Skips phrases not found in text or that overlap a previously placed wrap.
  */
-function renderWithSpans(
+function sliceWithSpans(
   text: string,
   phrases: string[],
   wrap: (phrase: string, key: string) => ReactNode

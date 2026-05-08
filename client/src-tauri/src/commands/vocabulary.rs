@@ -26,6 +26,12 @@ pub struct VocabEntry {
     pub cue_time: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cue_text: Option<String>,
+    /// User-authored note attached to this vocab card (TipTap JSON document
+    /// serialized as a string). None when the user hasn't added a note yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note_updated_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -77,6 +83,33 @@ pub fn vocab_add(entry: VocabEntry) -> AppResult<Vec<VocabEntry>> {
 pub fn vocab_remove(id: String) -> AppResult<Vec<VocabEntry>> {
     let mut v = read()?;
     v.entries.retain(|e| e.id != id);
+    write(&v)?;
+    Ok(v.entries)
+}
+
+/// Update just the `note` + `note_updated_at` fields of an existing entry.
+/// Pass `note: None` (or omit) to clear the note. Returns the full list so
+/// the frontend store stays in sync.
+///
+/// We could have folded this into `vocab_add` (which is upsert) but that
+/// requires the JS caller to know all the other fields to write back —
+/// a separate command keeps the call site simple ("just save the note").
+#[tauri::command]
+pub fn vocab_update_note(id: String, note: Option<String>) -> AppResult<Vec<VocabEntry>> {
+    let mut v = read()?;
+    let now = chrono::Utc::now().timestamp_millis();
+    if let Some(slot) = v.entries.iter_mut().find(|e| e.id == id) {
+        match note {
+            Some(content) if !content.is_empty() => {
+                slot.note = Some(content);
+                slot.note_updated_at = Some(now);
+            }
+            _ => {
+                slot.note = None;
+                slot.note_updated_at = None;
+            }
+        }
+    }
     write(&v)?;
     Ok(v.entries)
 }

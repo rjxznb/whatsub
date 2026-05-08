@@ -18,6 +18,10 @@ pub fn vocabulary_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("vocabulary.json"))
 }
 
+pub fn license_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("license.json"))
+}
+
 /// Custom library dir from settings, or `<app_data_dir>/library` by default.
 pub fn library_dir() -> Result<PathBuf, String> {
     if let Some(custom) = read_settings_string("libraryDir") {

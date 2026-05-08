@@ -14,6 +14,12 @@ export interface VocabEntry {
    *  saved before this field existed will not have it). */
   cueTime?: number;
   cueText?: string;
+  /** User-authored note attached to this vocab card. Stored as TipTap JSON
+   *  document (serialized as a string in vocabulary.json so the schema stays
+   *  free-form). Empty/undefined when the user hasn't added a note. */
+  note?: string;
+  /** ms timestamp of the last note edit. Used for sort + showing "上次编辑" hint. */
+  noteUpdatedAt?: number;
 }
 
 export function makeVocabId(expression: string): string {

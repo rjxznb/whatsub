@@ -43,6 +43,13 @@ const PHASE_WHAT_START = 105;
 const PHASE_WHAT_END = 119;
 const PHASE_SUB_START = 119;
 const PHASE_SUB_END = 133;
+// Beat between "b" landing and "?" punching in. Without this gap the two
+// appear on the same frame (Sub finishes typing → qmark renders) which
+// reads as a single event and makes the cursor jump right by width("b") +
+// width("?") at once. ~270ms (8 frames @ 30fps) gives the eye time to
+// register "Sub" + blinking cursor before "?" pops in and the cursor
+// shifts one character right — the natural typewriter rhythm.
+const PHASE_QMARK_APPEAR = PHASE_SUB_END + 8;
 const PHASE_HOLD_END = 173;
 // Fly = 30 frames (1.0s). Drives BOTH whatSub's translate-up + scale-down
 // AND hey's linear opacity/width fade — shorten this and both speed up
@@ -348,17 +355,29 @@ export function WelcomeIntro({ children }: Props) {
     clamp01((frame - PHASE_SUB_START) / (PHASE_SUB_END - PHASE_SUB_START)) * SUB_TEXT.length;
   const subTyped = sliceTo(SUB_TEXT, Math.floor(subChars));
 
-  // The "?" caps the brand line — appears the same frame Sub finishes
-  // typing. Single character so we just snap it in rather than running a
-  // typing window for it. Color is white (INK) — overrides Sub's ACCENT
-  // since the ? is rendered in its own span (color doesn't bleed across).
-  const qmarkTyped = frame >= PHASE_SUB_END ? "?" : "";
+  // The "?" caps the brand line — punches in 8 frames AFTER Sub finishes
+  // typing (PHASE_QMARK_APPEAR), so it doesn't blur into the same event
+  // as "b" landing. The cursor naturally trails the qmark span (rendered
+  // last in the inline-flex row) so once "?" appears the cursor is on
+  // its right. Single character — we snap it in rather than running a
+  // typing window. Color is white (INK), overriding Sub's ACCENT since
+  // the ? lives in its own span.
+  const qmarkTyped = frame >= PHASE_QMARK_APPEAR ? "?" : "";
 
   const lineOpacity = easeOutExpo(clamp01((frame - (PHASE_HEY_START - 4)) / 10));
   const hasStartedTyping = frame >= PHASE_HEY_START;
   const cursorColor = frame >= PHASE_SUB_START ? ACCENT : INK;
+  // Breathe amplitude tapers linearly to 0 over the last 15 frames of hold so
+  // the transition to the flat scale=1.0 fly state is continuous. Without
+  // this, breatheScale dropped from ~1.002 to 1.0 in a single frame at
+  // PHASE_HOLD_END — that 0.2% scale snap shifted whatSub by ~0.6px (since
+  // it sits ~300px off the headline's center), visible as a tiny position
+  // jump at the moment fly starts.
+  const breatheTaper = clamp01((PHASE_HOLD_END - frame) / 15);
   const breatheScale =
-    frame < PHASE_HOLD_END ? 1 + Math.sin((frame / 30) * 1.2) * 0.004 : 1;
+    frame < PHASE_HOLD_END
+      ? 1 + Math.sin((frame / 30) * 1.2) * 0.004 * breatheTaper
+      : 1;
 
   // ---- Fly transition ----
   // Land at finalTitlePx (responsive, derived from viewport width) so the
@@ -522,6 +541,17 @@ export function WelcomeIntro({ children }: Props) {
           // / Edge WebView2 don't have it).
           willChange: "transform, opacity",
           backfaceVisibility: "hidden",
+          // Padding gives the WKWebView composite layer extra texture
+          // around the inline content so Caveat's glyph overflow
+          // (descender on "y", right curl on "?", trailing tail on "b")
+          // has room to render WITHIN the layer bounds. Without it, the
+          // composite layer is sized exactly to the layout bounding rect
+          // and ink that draws past that rect gets clipped (Mac-only —
+          // Chromium auto-pads composite layers for ink overflow, but
+          // WKWebView doesn't). Padding is symmetric so translate(-50%,
+          // -50%) re-centers the (now padded) box around viewport center
+          // — the visible text position is unchanged.
+          padding: "0.3em 0.4em",
           fontFamily: "Caveat, cursive",
           fontSize: animFontSize,
           fontWeight: 700,
@@ -614,7 +644,21 @@ export function WelcomeIntro({ children }: Props) {
                     heyLayoutT > 0 && heyGhost
                       ? `${heySlotPx * (1 - heyLayoutT)}px`
                       : "auto",
-                  marginRight: `${heySlotMarginPx * (1 - heyLayoutT)}px`,
+                  // marginRight: pre-capture (heyGhost still null), use the
+                  // em-based formula so the gap between "hey," and "what"
+                  // exists from frame 0 onward — without this fallback,
+                  // heySlotMarginPx is 0 pre-capture, the gap is 0, and at
+                  // the moment heyGhost gets captured (frame 170) the gap
+                  // pops up to 23px, shoving whatSub ~11px to the right
+                  // visibly. Once heyGhost exists, switch to px-based for
+                  // the linear-collapse trajectory math (em would multiply
+                  // by animFontSize, breaking the straight-line path).
+                  // 0.18em and heySlotMarginPx are equal at fontSize =
+                  // headlinePx (which holds throughout pre-fly), so the
+                  // switch at capture time is layout-neutral.
+                  marginRight: heyGhost
+                    ? `${heySlotMarginPx * (1 - heyLayoutT)}px`
+                    : `${0.18 * (1 - heyLayoutT)}em`,
                   display: "inline-block",
                   // Caveat is a cursive font where descenders (y, p, g) and
                   // right-bearings (?, !) extend past the metric advance

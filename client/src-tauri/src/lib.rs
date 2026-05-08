@@ -44,6 +44,10 @@ pub fn run() {
             commands::vocabulary::vocab_list,
             commands::vocabulary::vocab_add,
             commands::vocabulary::vocab_remove,
+            commands::vocabulary::vocab_update_note,
+            commands::license::license_get_device_info,
+            commands::license::license_read_state,
+            commands::license::license_save_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

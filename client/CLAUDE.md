@@ -2,6 +2,8 @@
 
 Tauri 2 desktop app for English subtitle learning. Pipeline: import (yt-dlp / local) → ffmpeg audio extract → whisper.cpp transcribe → user-configured LLM (DeepSeek / Claude / Gemini / etc.) for Chinese translation + key-phrase highlighting → bilingual player.
 
+> **Companion repo: `../license-server/`** is a separate Cloudflare Worker + D1 project that mints + validates license keys for this client. The two communicate only via `POST /api/activate` (one-time per device). After activation the desktop app runs fully offline. See [`../license-server/README.md`](../license-server/README.md) for the server side.
+
 ## Stack
 
 Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs).
@@ -35,6 +37,7 @@ client/
 | `commands/library.rs` | list/get/upsert/delete/set_status/rename/reorder/freeze_paths/reveal_in_explorer |
 | `commands/analysis.rs` | save/load_analysis, load_transcript, video_source_path, **write_text_file** (SRT/CSV export), **export_burned_video** + **cancel_export** (ffmpeg burn-in pipeline; `ExportState` held in Tauri `.manage()`) |
 | `commands/vocabulary.rs` | `vocab_list/add/remove`. Storage: `vocabulary.json` at app data root. Dedupe by id = `expression.toLowerCase().trim()` |
+| `commands/license.rs` | License device-fingerprint + local persistence. 4 invokes: `license_get_device_info` (fingerprint = sha256 of `machine_uid` + `:whatsub:v1` salt; deviceLabel from `whoami::devicename`), `license_read_state` (parses `<app-data>/license.json`; returns null if missing or corrupt), `license_save_state` (writes after server-side activation succeeds), `license_clear_state` (user clicks "release this device"). Network calls to the activate endpoint live on the JS side using fetch — Rust just provides hardware introspection + persistence. Salt namespaces our fingerprint so the same hardware activating a different product doesn't collide on shared license servers |
 | `commands/models.rs` | whisper_model_status / download |
 | `commands/import.rs` | `import_video` orchestrator |
 | `pipeline/spawn.rs` | `run_sidecar()` — spawn + stderr tail for error diagnostics. "terminated abnormally" branch includes captured stderr + Mac-specific dyld hint. **Windows-only**: prepends `<resource_dir>/binaries/` to the child process's PATH so whisper-cli resolves its companion DLLs (whisper.dll, ggml*.dll). bundle.resources puts those DLLs at `<install>/resources/binaries/` which isn't in Windows' default DLL search order — without this fix whisper-cli exits with `STATUS_DLL_NOT_FOUND` (-1073741515) on every fresh MSI install |
@@ -90,6 +93,7 @@ Built from whisper.cpp v1.8.4 in CI (`.github/workflows/release.yml`). Windows u
 | `components/ImportModal.tsx` | URL/local tabs; live phase checklist via `pipeline-event` with **per-tier ETA** (lookups `MODEL_TIERS` for friendly tier name + estimated seconds-per-10min). **画质 dropdown** on URL tab (low/standard/high/best → 480/720/1080/源画质) passes `quality` into `import_video` invoke. Cookies-tutorial help panel is internally scrollable (`max-h-[60vh] overflow-y-auto` + sticky close button); window-level Esc closes the **error-detail dialog** → help panel → whole modal in priority order. Each fail-mode in help lists the exact yt-dlp error keyword (cookies "Sign in to confirm you're not a bot" flagged 🌟 最常见). Errors rendered as a single-line clickable `⚠️ <fe.title>` row (truncate-ellipsis); click opens a **separate top-layer (z-60) scrollable dialog** with title + suggestion + 复制详情 + bounded `<pre>` for the full stderr — keeps the long stderr from pushing the parent modal past 90vh and dominating the screen |
 | `components/ProgressBanner.tsx` | Phases: downloading/extracting/transcribing/analyzing/**paused**/error. **停止/继续** buttons (paused). Calls Player's onStop/onContinue |
 | `components/FirstRunGate.tsx` | Welcome if no LLM key OR no Whisper model. Two-card layout: ① 翻译服务 (vendor dropdown defaults to deepseek for fresh installs but respects `settings.vendorId` if user previously picked a different vendor), ② 字幕识别引擎. Card ② **auto-promotes any already-downloaded tier** to `settings.whisperModel` on mount (prefer largest) so a reinstall with leftover `ggml-*.bin` doesn't force re-download. Per-tier badge shows live `下载中 X%` for the active download (uses `pct` state) instead of the stale paused-snapshot from `partialPct` |
+| `components/LicenseGate.tsx` | **Outermost gate in App.tsx** — wraps the BrowserRouter so until `useLicense().mode === 'ACTIVE'`, no routing / FirstRunGate / UpdateChecker / BackendListener mounts. Renders 3 states: `INITIALIZING` (loading spinner), `NEEDS_KEY` (full-screen activation form), `ACTIVE` (children pass through). Activation form posts to `ACTIVATE_ENDPOINT` constant (`https://whatsub-license.<sub>.workers.dev/api/activate`); 30s timeout because first GFW handshake from China can take 5-10s. Three error states displayed with distinct UI: `invalid_key`, `device_limit` (lists currently-active devices with fingerprint tail so user identifies which is which), `network` (mentions Cloudflare reachability) |
 | `hooks/useTauriEvent.ts` | `listen()` wrapper with cleanup |
 | `hooks/useVideoSync.ts` | rAF binding video.currentTime → cue index |
 | `hooks/useSpeech.ts` | Web Speech API; voice persistence; auto-cancel on new utterance |
@@ -97,6 +101,7 @@ Built from whisper.cpp v1.8.4 in CI (`.github/workflows/release.yml`). Windows u
 | `store/library.ts` | Library list + optimistic reorder/rename |
 | `store/analysis.ts` | phase, progressPercent, subtitles[], summary, error. `appendSubtitle` dedupes by `(time, endTime, text)`. Includes `paused` phase + cue edit ops (update/delete/insert/reorder) |
 | `store/vocab.ts` | entries[], reload/add/remove/toggle/has |
+| `store/license.ts` | License gate state machine (`INITIALIZING` → `NEEDS_KEY` ↔ `ACTIVE`). `init()` reads local license.json + device info via Rust invokes. `activate(key)` POSTs to ACTIVATE_ENDPOINT with key/fingerprint/deviceLabel and routes server response into typed `ActivateError` (invalid_key / device_limit / network / bad_request / unknown). `deactivate()` clears local license.json (server-side slot release requires admin) |
 | `llm/types.ts` | Subtitle, KeyPhrase, AnalysisResult, SrtCue |
 | `llm/vendors.ts` | 10 vendor presets (DeepSeek/OpenAI/Kimi/智谱/Qwen/SiliconFlow/Ollama/Claude/Gemini/Custom); `inferVendorId()` for legacy settings |
 | `llm/prompts.ts` | SYSTEM_PROMPT (踩过的坑 rules) + `buildUserPrompt` / `buildContinuationPrompt` (per-cue, no summary) / **`buildSummaryPrompt(Subtitle[])`** (final global pass) |
@@ -118,6 +123,7 @@ Built from whisper.cpp v1.8.4 in CI (`.github/workflows/release.yml`). Windows u
 settings.json              # always at default path
 library.json               # always at default path; videos[] include absolute thumbnailPath + videoDir
 vocabulary.json            # ⭐ saved phrases (cross-video)
+license.json               # { key, fingerprint, deviceLabel, activatedAt }; presence = ACTIVE state
 models/ggml-<size>.bin     # default; settings.modelsDir overrides for new downloads only
 library/<video_id>/
   source.mp4 · audio.wav · transcript.srt · thumb.jpg · analysis.json · info.json
@@ -178,6 +184,7 @@ Stop button: `abortRef.current.abort()`; phase=paused; force-flush partial save.
 9. **Vendor preset layer over protocol.** 3 internal protocols (`openai-compatible` / `claude` / `gemini`) cover wire format; 10 user-facing vendors (`llm/vendors.ts`) combine protocol + preset baseUrl + suggested models + console link. `inferVendorId()` reverse-maps legacy settings.json.
 10. **Vocabulary deep links + sort modes.** Star saves cue context (cueTime + cueText). Vocab page sort: 按视频分组 / 最近 / 最早 / 字母. Click vocab entry → `/player/:id?t=<sec>` → seek video.
 11. **Tauri 2 platform overlay** (`tauri.macos.conf.json`) keeps Mac config (frameworks list) out of the base file so Windows builds don't reference missing dylibs.
+12. **License gate is one-time, online only at activation; pure offline forever after.** No periodic verification, no revocation, no JWT — just a presence check on `license.json`. Once activated the app never phones home again. Trade-offs: (a) refunds aren't supported (we tell buyers "数字商品售出不退" upfront), (b) cracking the local file or patching the gate is trivial — the protection mechanism is the ONE-TIME network call enforcing the 3-device limit per key, plus the unfair effort/reward ratio for casual sharers. The fingerprint is `sha256(machine_uid || ":whatsub:v1")`, server-side stored as opaque hex. ACTIVATE_ENDPOINT is hard-coded into the binary so users can't redirect the activation call to a fake server via settings. Companion server lives in `../license-server/` (Cloudflare Worker + D1).
 
 ## Build / dev
 
@@ -275,6 +282,8 @@ The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf
 
 - **Opus-in-MP4 / VP9-in-MP4 won't play in the in-app `<video>` tag on Mac** (silent black frame, no error, no "play anyway" prompt). Tauri WebView on Mac is WKWebView → AVFoundation, which **hard-rejects** these codec/container combinations. QuickTime is more forgiving (warns "incompatible portions" but plays via software fallback), so Win developers won't notice this — Win Media Foundation also tolerates Opus-in-MP4. Naive yt-dlp format selectors like `bv*[ext=mp4]+ba` pick mp4 video but unconstrained "best audio" — YouTube's DASH default audio is Opus-in-WebM, which yt-dlp then muxes into the requested mp4 container. Fix: format selector must constrain BOTH video (`vcodec^=avc1` for H.264) AND audio (`ext=m4a` for AAC), with progressive fallback chain. As belt-and-suspenders, also pass `--postprocessor-args "Merger:-c:v copy -c:a aac -b:a 192k"` so any audio stream that does fall through gets transcoded to AAC during merge (video stream stays copied, no re-encode cost).
 
+- **Cloudflare Workers from China without VPN: first TCP handshake takes 5-10s** (subsequent connections on the same socket are 500ms). GFW does TCP-level throttling on Cloudflare's edge — not a hard ban, just RST-on-SYN that forces retry until a fallback POP responds. Empirical test from a Chinese ISP: first activation request 6320ms, subsequent calls 460-686ms. **Implication for the LicenseGate:** must use a generous fetch timeout (we use 30s), and the activation modal's spinner copy explicitly says "首次可能需要 10-15 秒" so the user doesn't think the app froze. A 5s timeout would kill many legit first-activations. After activation the desktop app runs fully offline so this only bites once per device.
+
 ## Known limitations / TODO
 
 - All OpenAI-compatible vendors share one API-key slot (`settings.openaiCompatible`) — switching DeepSeek ↔ Kimi loses prior key.
@@ -300,6 +309,11 @@ The workflow runs `pnpm tauri build` on a macos-14 runner with `tauri.macos.conf
 | Subtitle highlight logic | `src/components/SubtitleList.tsx` |
 | Cookies / yt-dlp args | `src-tauri/src/pipeline/ytdlp.rs` |
 | Whisper download / transcribe / GPU detection | `src-tauri/src/pipeline/whisper.rs` |
+| License gate UI / error states | `src/components/LicenseGate.tsx` |
+| License state machine | `src/store/license.ts` |
+| Device fingerprint algorithm | `src-tauri/src/commands/license.rs` (function `compute_fingerprint`) |
+| Activation endpoint URL | `src/types/license.ts` (constant `ACTIVATE_ENDPOINT`) |
+| License server (Cloudflare Worker, separate repo) | `../license-server/` |
 | Asset protocol issue (video won't load) | `src-tauri/tauri.conf.json` `assetProtocol.scope` |
 | Sidecar permission errors | `src-tauri/capabilities/default.json` `shell:allow-execute.allow` |
 | Mac binary build / dylib swap | `.github/workflows/build-mac-binaries.yml` + `tauri.macos.conf.json` |

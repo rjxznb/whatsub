@@ -4,3 +4,4 @@ pub mod analysis;
 pub mod models;
 pub mod import;
 pub mod vocabulary;
+pub mod license;

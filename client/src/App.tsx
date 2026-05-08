@@ -5,6 +5,7 @@ import { Player } from "./pages/Player";
 import { Settings } from "./pages/Settings";
 import { Vocab } from "./pages/Vocab";
 import { FirstRunGate } from "./components/FirstRunGate";
+import { LicenseGate } from "./components/LicenseGate";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
@@ -30,24 +31,30 @@ function BackendListener() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <BackendListener />
-      <Routes>
-        <Route path="/" element={<Navigate to="/library" replace />} />
-        <Route
-          path="/library"
-          element={
-            <FirstRunGate>
-              <Library />
-            </FirstRunGate>
-          }
-        />
-        <Route path="/player/:videoId" element={<Player />} />
-        <Route path="/vocab" element={<Vocab />} />
-        <Route path="/settings" element={<Settings />} />
-      </Routes>
-      <UpdateChecker />
-    </BrowserRouter>
+    // LicenseGate is the OUTERMOST gate: until the user enters a valid
+    // license key, none of the routing / settings / update-checker code
+    // runs. This is intentional — pre-activation we don't want background
+    // network calls (LLM keys, updater, etc.) firing.
+    <LicenseGate>
+      <BrowserRouter>
+        <BackendListener />
+        <Routes>
+          <Route path="/" element={<Navigate to="/library" replace />} />
+          <Route
+            path="/library"
+            element={
+              <FirstRunGate>
+                <Library />
+              </FirstRunGate>
+            }
+          />
+          <Route path="/player/:videoId" element={<Player />} />
+          <Route path="/vocab" element={<Vocab />} />
+          <Route path="/settings" element={<Settings />} />
+        </Routes>
+        <UpdateChecker />
+      </BrowserRouter>
+    </LicenseGate>
   );
 }
 

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Star, Trash2, Volume2, FileOutput } from "lucide-react";
+import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check } from "lucide-react";
+import { NoteBubble } from "../components/NoteBubble";
+import { NoteBadge } from "../components/NoteBadge";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useVocabulary } from "../store/vocab";
@@ -151,7 +153,11 @@ export function Vocab() {
       }));
     })();
     body = (
-      <div className="p-6 space-y-6">
+      // pr-14: extra 32px on the right (over the 24px from p-6) so the
+      // rightmost column's NoteBadge — which dangles ~40px past the
+      // card's right edge — has room to render fully without being
+      // clipped by the wrapper's overflow-x-hidden.
+      <div className="p-6 pr-14 space-y-6">
         {groups.map((g) => (
           <section key={g.videoId}>
             <div className="flex items-center gap-2 mb-2">
@@ -171,7 +177,11 @@ export function Vocab() {
               <span className="text-zinc-600 text-xs">·</span>
               <span className="text-zinc-500 text-xs">{g.items.length} 条</span>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* gap-x bumped to 12 (48px) so the NoteBadge tag — which
+                dangles ~40px past the card's right edge with its 26°
+                tilt — has room to swing without overlapping the next
+                card. Vertical gap stays small. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-3">
               {g.items.map((e) => (
                 <VocabCard
                   key={e.id}
@@ -195,8 +205,10 @@ export function Vocab() {
       return a.expression.toLowerCase().localeCompare(b.expression.toLowerCase());
     });
     body = (
-      <div className="p-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      // pr-14: same reason as the byVideo branch — clear the badge's
+      // right-side overhang without resorting to clipping it.
+      <div className="p-6 pr-14">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-3">
           {sorted.map((e) => (
             <VocabCard
               key={e.id}
@@ -213,7 +225,14 @@ export function Vocab() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    // overflow-x-hidden: NoteBadge SVG containers sit at right:-51px on
+    // each card and extend ~40px past the card's right edge. On the
+    // rightmost grid column those SVGs poke past the page's content
+    // area and trigger a viewport-level horizontal scroll, leaving an
+    // unused strip of background visible to the right of the cards.
+    // The badge overflow is purely decorative — clipping it at the
+    // viewport edge has no functional cost.
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 overflow-x-hidden">
       <header className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800">
         <Link
           to="/library"
@@ -222,11 +241,26 @@ export function Vocab() {
         >
           <ArrowLeft className="h-5 w-5" />
         </Link>
-        <h1 className="text-lg font-semibold flex-1">
-          我的词汇本{" "}
-          <span className="text-zinc-500 text-sm font-normal">
-            ({entries.length})
-          </span>
+        <h1 className="text-lg font-semibold flex-1 flex items-baseline gap-2 flex-wrap min-w-0">
+          <span className="shrink-0">我的词汇本</span>
+          {entries.length === 0 ? (
+            <span className="text-zinc-500 text-sm font-normal italic">
+              等你来贡献第一个短语 ✨
+            </span>
+          ) : (
+            <span className="text-zinc-400 text-sm font-normal flex items-baseline gap-1.5">
+              <span>· 已经收藏</span>
+              {/* Caveat handwriting font + amber color makes the number
+                  feel like a personal tally mark — the user's growing
+                  trophy count, not a debug stat. text-2xl gives it
+                  visual prominence over the surrounding labels without
+                  pushing the header layout around too much. */}
+              <span className="font-handwrite font-bold text-amber-300 text-2xl leading-none">
+                {entries.length}
+              </span>
+              <span>个短语</span>
+            </span>
+          )}
         </h1>
         <input
           value={search}
@@ -234,18 +268,7 @@ export function Vocab() {
           placeholder="搜索短语 / 中文释义 ..."
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortMode)}
-          className="px-2 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm text-zinc-200"
-          title="排序方式"
-        >
-          {(Object.keys(SORT_LABELS) as SortMode[]).map((k) => (
-            <option key={k} value={k}>
-              {SORT_LABELS[k]}
-            </option>
-          ))}
-        </select>
+        <SortDropdown value={sort} onChange={setSort} />
         <button
           type="button"
           disabled={entries.length === 0}
@@ -273,8 +296,49 @@ interface CardProps {
 
 function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) {
   const href = playerHrefFor(e);
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Bubble open-state lives on the card so each card has its own. We
+  // capture the card's bounding rect at the moment the bubble opens —
+  // not on every render — so the fold-back animation has a stable
+  // target even if the card scrolled mid-edit.
+  const [editing, setEditing] = useState<{
+    rect: { left: number; top: number; width: number; height: number };
+  } | null>(null);
+  const updateNote = useVocabulary((s) => s.updateNote);
+  const hasNote = !!e.note;
+
+  function openEditor() {
+    if (!cardRef.current) return;
+    const r = cardRef.current.getBoundingClientRect();
+    setEditing({
+      rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+    });
+  }
+
   return (
-    <div className="border border-zinc-800 rounded-md p-3 bg-zinc-900/40 group">
+    <div
+      ref={cardRef}
+      onDoubleClick={(ev) => {
+        // Prevent double-click from selecting text in the card or
+        // navigating via the <Link>'s text. Open the editor instead.
+        ev.preventDefault();
+        openEditor();
+      }}
+      className={
+        // Hover lights the card up with a warm amber halo + brighter
+        // border (matching the amber expression text — feels like the
+        // word itself glows on hover). Active gives a small scale-down
+        // + slightly darker bg so a click reads as a tactile "press in"
+        // even though the card itself isn't the navigation target.
+        // transition-all 150ms is fast enough for transform to snap on
+        // press but slow enough that hover-in feels smooth.
+        "relative border border-zinc-800 rounded-md p-3 bg-zinc-900/40 group cursor-default " +
+        "transition-all duration-150 ease-out " +
+        "hover:border-amber-400/40 hover:bg-zinc-900/70 " +
+        "hover:shadow-[0_0_28px_-6px_rgba(251,191,36,0.35)] " +
+        "active:scale-[0.98] active:bg-zinc-900/90 active:shadow-[0_0_18px_-8px_rgba(251,191,36,0.25)]"
+      }
+    >
       <div className="flex items-center gap-2 flex-wrap">
         <Link
           to={href}
@@ -314,6 +378,125 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
       {showSource && e.videoTitle && (
         <div className="text-zinc-500 text-[11px] mt-2 truncate">
           来自：{e.videoTitle}
+        </div>
+      )}
+
+      {/* Tag indicator + drag-off handle when a note exists.
+          The tag dangles by a string from the card's punched hole.
+          User drags it past PULL_THRESHOLD → onPullOff fires → editor opens. */}
+      {hasNote && !editing && <NoteBadge onPullOff={openEditor} />}
+
+      {/* TipTap editor in a portal — positioned relative to the card via
+          the captured rect. Unmounts after the fold animation completes. */}
+      {editing && (
+        <NoteBubble
+          initialNote={e.note ?? ""}
+          cardRect={editing.rect}
+          onDone={(note) => {
+            void updateNote(e.id, note);
+            setEditing(null);
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Custom sort dropdown. Replaces the native <select> so we can animate
+ *  the open transition (native <select> hands rendering off to the OS
+ *  and ignores any CSS animation on it). The trigger button gets the
+ *  same click-pop feedback as toolbar buttons; the panel unrolls
+ *  downward via clip-path (see App.css `animate-sort-slide-down`). */
+function SortDropdown({
+  value,
+  onChange,
+}: {
+  value: SortMode;
+  onChange: (v: SortMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  // Trigger button's measured width — captured at open time and applied
+  // to the menu so the panel always matches the button's actual rendered
+  // width, regardless of which option is currently selected (different
+  // labels have different lengths).
+  const [menuWidth, setMenuWidth] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onMouseDown(e: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [open]);
+
+  function handleSelect(k: SortMode) {
+    onChange(k);
+    setOpen(false);
+  }
+
+  function handleToggle() {
+    if (!open && triggerRef.current) {
+      setMenuWidth(triggerRef.current.offsetWidth);
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={handleToggle}
+        title="排序方式"
+        // active:border-zinc-400 + transition-colors gives a brief border
+        // highlight on press without changing the bg color (no scaling
+        // either — text/icon stay perfectly still). Press is instant on
+        // mousedown; release fades back over 200ms so a quick click
+        // still registers as a visible "blink" of the border.
+        className="px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm text-zinc-200 hover:border-zinc-700 active:border-zinc-400 transition-colors duration-200 flex items-center gap-1.5 min-w-[120px] justify-between"
+      >
+        <span>{SORT_LABELS[value]}</span>
+        <ChevronDown
+          className={
+            "w-3.5 h-3.5 text-zinc-400 transition-transform " +
+            (open ? "rotate-180" : "")
+          }
+        />
+      </button>
+
+      {open && (
+        <div
+          className="absolute right-0 top-full mt-1 z-30 bg-zinc-900 border border-zinc-700 rounded shadow-2xl py-1 overflow-hidden animate-sort-slide-down"
+          style={{
+            transformOrigin: "top center",
+            width: menuWidth ?? undefined,
+          }}
+        >
+          {(Object.keys(SORT_LABELS) as SortMode[]).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => handleSelect(k)}
+              className={
+                "w-full px-3 py-1.5 text-sm text-left flex items-center justify-between gap-3 hover:bg-zinc-800 transition-colors " +
+                (k === value
+                  ? "bg-blue-500/15 text-blue-300"
+                  : "text-zinc-200")
+              }
+            >
+              <span>{SORT_LABELS[k]}</span>
+              {k === value && <Check className="w-3.5 h-3.5 text-blue-300" />}
+            </button>
+          ))}
         </div>
       )}
     </div>

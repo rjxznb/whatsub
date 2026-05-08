@@ -83,3 +83,143 @@ body::-webkit-scrollbar-corner,
 *::-webkit-scrollbar-corner {
   background: transparent !important;
 }
+
+/* ── TipTap note editor (used by NoteBubble in vocab cards) ──────────────
+   Tailwind's @tailwindcss/typography would handle this but it's another
+   ~30KB dep just for one editor. We restyle the few tags we use directly. */
+.prose-note {
+  color: rgb(228 228 231); /* zinc-200 */
+  font-size: 14px;
+  line-height: 1.6;
+}
+.prose-note p { margin: 0.25em 0; }
+.prose-note h1 { font-size: 18px; font-weight: 700; margin: 0.4em 0 0.2em; color: rgb(244 244 245); }
+.prose-note h2 { font-size: 16px; font-weight: 600; margin: 0.4em 0 0.2em; color: rgb(244 244 245); }
+.prose-note h3 { font-size: 14px; font-weight: 600; margin: 0.3em 0 0.15em; color: rgb(244 244 245); }
+.prose-note strong { font-weight: 700; color: rgb(244 244 245); }
+.prose-note em { font-style: italic; }
+.prose-note u { text-decoration: underline; text-decoration-thickness: 1.5px; }
+.prose-note s { text-decoration: line-through; }
+.prose-note code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 0.9em;
+  color: rgb(252 211 77); /* amber-300 — readable against dark code bg */
+}
+.prose-note mark {
+  background-color: var(--tt-highlight, rgb(253 230 138)); /* amber-200 default */
+  color: rgb(24 24 27);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+.prose-note ul {
+  list-style: disc;
+  padding-left: 1.4em;
+  margin: 0.3em 0;
+}
+.prose-note ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+  margin: 0.3em 0;
+}
+.prose-note ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0.4em;
+}
+.prose-note ul[data-type="taskList"] li {
+  display: flex;
+  gap: 0.5em;
+  margin: 0.2em 0;
+}
+.prose-note ul[data-type="taskList"] li label {
+  flex-shrink: 0;
+  margin-top: 0.25em;
+}
+.prose-note blockquote {
+  border-left: 3px solid rgb(82 82 91); /* zinc-600 */
+  padding-left: 0.8em;
+  margin: 0.4em 0;
+  color: rgb(161 161 170); /* zinc-400 */
+  font-style: italic;
+}
+.prose-note .note-link {
+  color: rgb(96 165 250); /* blue-400 */
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  cursor: pointer;
+}
+/* Placeholder shown when the editor is empty */
+.prose-note p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: rgb(113 113 122); /* zinc-500 */
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* Toolbar button click feedback. Triggered via React `key` re-mount in
+   ToolBtn — every click forces the icon-wrapping <span> to re-mount with
+   this animation class, replaying the keyframe. The 1.25× peak +
+   blue glow makes the click feel like the button "registered" the
+   action even when the underlying state change (e.g. toggling bold)
+   doesn't visually change anything in the toolbar itself. */
+@keyframes toolbar-pop {
+  0% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(59, 130, 246, 0));
+  }
+  40% {
+    transform: scale(1.3);
+    filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.85));
+  }
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 0 rgba(59, 130, 246, 0));
+  }
+}
+.animate-toolbar-pop {
+  animation: toolbar-pop 220ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  display: inline-flex;
+}
+
+/* Heading-dropdown "red carpet" reveal. clip-path retracts from the
+   right edge so the rectangular pill seems to unroll horizontally from
+   the left. The chips inside sit at their final positions from the
+   start — they become visible as the clip retracts past them, which
+   reads as items appearing sequentially "on the carpet." */
+@keyframes carpet-unroll {
+  0% {
+    clip-path: inset(0 100% 0 0);
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+  }
+}
+.animate-carpet-unroll {
+  animation: carpet-unroll 340ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  /* clip-path animations stutter without compositor hint on some GPUs */
+  will-change: clip-path;
+}
+
+/* Sort-dropdown "curtain" reveal. clip-path's bottom inset retracts
+   from 100% (everything below the top edge clipped) to 0 (no clip), so
+   the menu appears to unfurl downward like a window blind. Items sit
+   at their final positions throughout — none of the squishing artifacts
+   you'd get from animating scaleY. */
+@keyframes sort-slide-down {
+  0% {
+    clip-path: inset(0 0 100% 0);
+    opacity: 0;
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+.animate-sort-slide-down {
+  animation: sort-slide-down 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: clip-path;
+}
+

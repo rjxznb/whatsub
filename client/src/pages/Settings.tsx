@@ -9,6 +9,7 @@ import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import { useModelDownload } from "../store/modelDownload";
 import { useUpdater } from "../hooks/useUpdater";
+import { useLicense } from "../store/license";
 import { getVersion } from "@tauri-apps/api/app";
 
 export function Settings() {
@@ -318,8 +319,60 @@ export function Settings() {
           )}
         </div>
 
+        <LicenseSection />
+
         <UpdateSection />
       </div>
+    </div>
+  );
+}
+
+/** Read-only license info card. No self-service deactivation:换设备 by
+ *  user-driven local file delete would leave the server-side slot still
+ *  consumed and is misleading; users who want to switch machines should
+ *  contact support to release the slot in the admin backend. The
+ *  fingerprint tail shown here is what they reference in that ticket
+ *  ("please release device …XXXXXX") so support can pinpoint the row
+ *  in admin without ambiguity. */
+function LicenseSection() {
+  const license = useLicense();
+
+  if (license.mode !== 'ACTIVE' || !license.state) return null;
+
+  const fpTail = license.state.fingerprint.slice(-6);
+  const activatedDate = new Date(license.state.activatedAt);
+  const formatDate = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+  return (
+    <section className="border-t border-zinc-800 pt-6">
+      <h2 className="font-semibold mb-3">软件授权</h2>
+      <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
+        <Row label="授权码">
+          <span className="font-mono text-emerald-300">{license.state.key}</span>
+        </Row>
+        <Row label="本机标识">
+          <span>{license.state.deviceLabel}</span>
+          <span className="ml-2 font-mono text-zinc-500 text-xs">…{fpTail}</span>
+        </Row>
+        <Row label="激活时间">
+          <span className="text-zinc-300">{formatDate(activatedDate)}</span>
+        </Row>
+      </div>
+      <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
+        换电脑想转移授权？请联系客服并备注本机标识尾号
+        <span className="font-mono mx-1">{fpTail}</span>
+        ，客服会在后台释放设备槽位，您即可在新设备激活。
+      </p>
+    </section>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-3">
+      <span className="text-zinc-500 w-20 shrink-0">{label}</span>
+      <span className="flex-1 min-w-0 truncate">{children}</span>
     </div>
   );
 }

@@ -14,6 +14,9 @@ interface VocabState {
   /** Add if missing, remove if present. Returns the resulting saved state. */
   toggle: (entry: Omit<VocabEntry, "id" | "addedAt">) => Promise<boolean>;
   has: (expression: string) => boolean;
+  /** Update / clear the note attached to a vocab entry. Pass `note=null` to
+   *  remove the note (Rust treats empty string + null both as "remove"). */
+  updateNote: (id: string, note: string | null) => Promise<void>;
 }
 
 export const useVocabulary = create<VocabState>((set, get) => ({
@@ -48,5 +51,9 @@ export const useVocabulary = create<VocabState>((set, get) => ({
   has(expression) {
     const id = makeVocabId(expression);
     return get().entries.some((e) => e.id === id);
+  },
+  async updateNote(id, note) {
+    const list = await invoke<VocabEntry[]>("vocab_update_note", { id, note });
+    set({ entries: list });
   },
 }));

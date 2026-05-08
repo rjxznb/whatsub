@@ -56,9 +56,6 @@ export function SubtitleSelectionBubble({
     meaningZh: string;
     usage: string;
   } | null>(null);
-  const [hoverPreview, setHoverPreview] = useState<
-    null | "replace" | "append"
-  >(null);
   const [mounted, setMounted] = useState(false);
   const lookupAbortRef = useRef<AbortController | null>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
@@ -70,7 +67,6 @@ export function SubtitleSelectionBubble({
     if (!info) return;
     setLookup({ kind: "idle" });
     setSuggestion(null);
-    setHoverPreview(null);
     lookupAbortRef.current?.abort();
 
     const id = makeVocabId(info.expression);
@@ -436,13 +432,10 @@ export function SubtitleSelectionBubble({
             <div className="flex gap-2">
               <button
                 type="button"
-                onMouseEnter={() => setHoverPreview("replace")}
-                onMouseLeave={() => setHoverPreview(null)}
                 onClick={() => {
                   setMeaningZh(suggestion.meaningZh);
                   setUsage(suggestion.usage);
                   setSuggestion(null);
-                  setHoverPreview(null);
                 }}
                 className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
               >
@@ -450,13 +443,10 @@ export function SubtitleSelectionBubble({
               </button>
               <button
                 type="button"
-                onMouseEnter={() => setHoverPreview("append")}
-                onMouseLeave={() => setHoverPreview(null)}
                 onClick={() => {
                   setMeaningZh(joinWithBreak(meaningZh, suggestion.meaningZh));
                   setUsage(joinWithBreak(usage, suggestion.usage));
                   setSuggestion(null);
-                  setHoverPreview(null);
                 }}
                 className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
               >
@@ -464,40 +454,12 @@ export function SubtitleSelectionBubble({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setSuggestion(null);
-                  setHoverPreview(null);
-                }}
+                onClick={() => setSuggestion(null)}
                 className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
               >
                 忽略
               </button>
             </div>
-            {/* Hover preview — appears BELOW the buttons so it doesn't push
-             *  them and cause hover-flicker. Empty space when not hovering. */}
-            {hoverPreview && (
-              <div className="border-t border-amber-500/30 pt-2 mt-1 text-xs">
-                <div className="text-amber-300 font-medium mb-1">
-                  {hoverPreview === "replace"
-                    ? "📋 替换后效果预览"
-                    : "➕ 追加后效果预览"}
-                </div>
-                <div className="text-zinc-100 max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed bg-zinc-950/60 rounded px-2 py-1.5">
-                  <div className="mb-1">
-                    <span className="text-zinc-500">📖 </span>
-                    {hoverPreview === "replace"
-                      ? suggestion.meaningZh || "（空）"
-                      : joinWithBreak(meaningZh, suggestion.meaningZh) || "（空）"}
-                  </div>
-                  <div>
-                    <span className="text-zinc-500">💬 </span>
-                    {hoverPreview === "replace"
-                      ? suggestion.usage || "（空）"
-                      : joinWithBreak(usage, suggestion.usage) || "（空）"}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -578,5 +540,5 @@ function clampLeft(x: number): number {
 function joinWithBreak(a: string, b: string): string {
   if (!a.trim()) return b;
   if (!b.trim()) return a;
-  return `${a}\n\n${b}`;
+  return `${a}\n${b}`;
 }

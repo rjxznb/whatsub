@@ -181,3 +181,22 @@ Rules:
 
 Output exactly one JSON object on one line. No fences, no prose, no other lines.`;
 }
+
+/**
+ * Single-shot lookup of a user-selected word or short phrase. Used by the
+ * subtitle selection bubble to fetch a Chinese gloss + usage for arbitrary
+ * vocab adds (separate from the per-cue analysis pipeline).
+ *
+ * Output is parsed by `lookupExpression.ts` as a single JSON object.
+ */
+export function buildLookupPrompt(expression: string, cueText: string): string {
+  return `请给出下面英文单词或短语的中文释义和简短中文用法说明。结合上下文判断在这一句里的具体含义。
+
+单词/短语：${expression}
+
+上下文：${cueText}
+
+输出严格的 JSON 对象，只能包含两个字段，不要任何其他文字、Markdown 代码块、注释：
+
+{"meaningZh": "中文释义（10-30 字）", "usage": "中文用法说明（30-80 字，举一个简单例子或描述使用语境）"}`;
+}

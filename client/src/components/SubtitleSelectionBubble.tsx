@@ -60,7 +60,9 @@ export function SubtitleSelectionBubble({
   const [hoverPreview, setHoverPreview] = useState<
     null | "replace" | "append"
   >(null);
+  const [mounted, setMounted] = useState(false);
   const lookupAbortRef = useRef<AbortController | null>(null);
+  const bubbleRef = useRef<HTMLDivElement>(null);
   const { entries, has, toggle, add } = useVocabulary();
   const { settings } = useSettings();
 
@@ -151,6 +153,63 @@ export function SubtitleSelectionBubble({
     return () => document.removeEventListener("selectionchange", onSelChange);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info, saved, meaningZh, usage]);
+
+  // Block wheel + touchmove on the list while bubble is visible — prevents
+  // scrolling the selection out from under the bubble.
+  useEffect(() => {
+    if (!info) return;
+    const list = listRef.current;
+    if (!list) return;
+    const block = (e: Event) => e.preventDefault();
+    list.addEventListener("wheel", block, { passive: false });
+    list.addEventListener("touchmove", block, { passive: false });
+    return () => {
+      list.removeEventListener("wheel", block);
+      list.removeEventListener("touchmove", block);
+    };
+  }, [info, listRef]);
+
+  // Outside-click close.
+  useEffect(() => {
+    if (!info) return;
+    const onDown = (e: MouseEvent) => {
+      if (!bubbleRef.current) return;
+      if (bubbleRef.current.contains(e.target as Node)) return;
+      // Click on selection itself — let it stand; selectionchange will close
+      // if it collapses.
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        const x = e.clientX, y = e.clientY;
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return;
+      }
+      closeBubble();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, saved, meaningZh, usage]);
+
+  // ESC closes.
+  useEffect(() => {
+    if (!info) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeBubble();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, saved, meaningZh, usage]);
+
+  // Fade-in animation: mounted flips on next animation frame.
+  useEffect(() => {
+    if (!info) {
+      setMounted(false);
+      return;
+    }
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, [info?.expression]);
 
   if (!info) return null;
 
@@ -268,8 +327,13 @@ export function SubtitleSelectionBubble({
 
   return (
     <div
+      ref={bubbleRef}
       style={{ position: "fixed", top, left, width: BUBBLE_WIDTH }}
-      className="z-50 flex flex-col rounded-lg border border-zinc-700 bg-zinc-900/95 shadow-xl backdrop-blur"
+      className={
+        "z-50 flex flex-col rounded-lg border border-zinc-700 bg-zinc-900/95 shadow-xl backdrop-blur " +
+        "transition-all duration-150 ease-out " +
+        (mounted ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-1 scale-95")
+      }
     >
       {/* Header row */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800">

@@ -93,12 +93,17 @@ export function SubtitleSelectionBubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info?.expression]);
 
-  // Detect selection (unchanged from Task 7).
+  // Detect selection. Mouseup events that originate INSIDE the bubble
+  // (e.g., clicking a textarea or button) bubble up to listRef and would
+  // otherwise re-read the document selection — which by then has been
+  // cleared by the textarea taking focus, returning null and closing
+  // the bubble. Skip those.
   useEffect(() => {
     if (disabled) return;
     const list = listRef.current;
     if (!list) return;
-    const onMouseUp = () => {
+    const onMouseUp = (e: MouseEvent) => {
+      if (bubbleRef.current?.contains(e.target as Node)) return;
       setTimeout(() => setInfo(readSelection(list, subtitles)), 0);
     };
     list.addEventListener("mouseup", onMouseUp);

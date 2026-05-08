@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { exit } from "@tauri-apps/plugin-process";
+import { Command } from "@tauri-apps/plugin-shell";
 
 // Tauri's updater behaves differently per platform after install completes:
 //   - Windows: msiexec restarts the app for us — calling relaunch() would
@@ -8,9 +9,22 @@ import { relaunch } from "@tauri-apps/plugin-process";
 //     dir, BREAKING the install. Don't relaunch.
 //   - macOS:   updater just replaces the .app bundle on disk and exits the
 //     install task; the running process stays on the OLD binary forever
-//     unless WE relaunch. Without this, the user sees the "installing /
-//     restart" UI but nothing ever happens.
+//     unless WE relaunch.
+//
+// On macOS we used to call plugin-process's relaunch(), which does
+// `Command::new(current_exe).spawn()` then `exit(0)`. That spawn bypasses
+// Launch Services and on some user setups (Translocation, Gatekeeper, post-
+// update file-handle staleness) the new process never actually appears —
+// the OLD process exits or gets stuck and the user has to ⌘Q + reopen
+// manually.
+//
+// More reliable pattern: shell out to `open -b com.whatsub.app` (which goes
+// through Launch Services, the same path Finder/Dock use), then exit our
+// own process. The 500ms delay before exit gives `open` a chance to register
+// with LS before we go away. shell-execute scope for `open` is granted in
+// capabilities/default.json.
 const IS_MAC = /Mac/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "");
+const APP_BUNDLE_ID = "com.whatsub.app";
 
 export type UpdateStatus =
   | { type: "idle" }
@@ -79,20 +93,21 @@ export function useUpdater() {
       //   - Windows: msiexec waits for our exe to exit, replaces files, then
       //     auto-relaunches. Tauri handles the exit. We do nothing.
       //   - macOS:   the new .app bundle is now on disk but the OLD process
-      //     is still in memory. Tauri does NOT exit/relaunch automatically
-      //     here despite the docs implying otherwise. We must call
-      //     relaunch() ourselves, which exits this process and re-launches
-      //     the app from disk (now the new version).
+      //     is still in memory. We launch the new bundle via Launch Services
+      //     (`open -b <bundle id>`) — the same code path Finder/Dock use,
+      //     so the new instance gets a proper Dock icon, focus, and bundle
+      //     context — then exit our own process after a short delay so the
+      //     spawned `open` command has time to register the launch request
+      //     with LS before our process disappears.
       if (IS_MAC) {
         try {
-          await relaunch();
+          await Command.create("open", ["-b", APP_BUNDLE_ID]).spawn();
+          await new Promise((r) => setTimeout(r, 500));
+          await exit(0);
         } catch (e) {
-          // If relaunch itself fails (rare), surface a clear "please
-          // restart manually" message instead of leaving the user in a
-          // permanent "installing..." state.
           setStatus({
             type: "error",
-            message: `更新已下载，但自动重启失败：${e}。请手动退出应用并重新打开。`,
+            message: `更新已下载，但自动重启失败：${e}。请手动退出应用并重新打开，新版本下次启动时生效。`,
           });
         }
       }

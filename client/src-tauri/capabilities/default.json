@@ -25,7 +25,12 @@
       "allow": [
         { "name": "yt-dlp", "sidecar": true, "args": true },
         { "name": "ffmpeg", "sidecar": true, "args": true },
-        { "name": "whisper-cli", "sidecar": true, "args": true }
+        { "name": "whisper-cli", "sidecar": true, "args": true },
+        {
+          "name": "open",
+          "cmd": "open",
+          "args": ["-b", { "validator": "^[a-zA-Z0-9.\\-]+$" }]
+        }
       ]
     }
   ]

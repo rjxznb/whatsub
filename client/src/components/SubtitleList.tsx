@@ -481,9 +481,10 @@ export function renderEnglishWithHighlights(
 /**
  * Wraps each non-overlapping case-insensitive match of `phrasesLowercased`
  * inside `text` with a dashed-underline span. CALLER CONTRACT: phrases must
- * already be lowercased — internal comparison is `text.toLowerCase().indexOf(phrase)`,
- * so non-lowercased input silently misses case-mismatched entries. Sort happens
- * here (longest first) so multi-word phrases pre-empt single-word components.
+ * already be lowercased AND pre-sorted longest-first — internal comparison is
+ * `text.toLowerCase().indexOf(phrase)`, so non-lowercased input silently misses
+ * case-mismatched entries; the longest-first order is what makes multi-word
+ * phrases pre-empt their single-word components via the conflict check below.
  */
 function spliceVocabUnderlines(
   text: string,

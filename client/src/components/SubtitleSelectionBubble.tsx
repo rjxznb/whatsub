@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Star, Loader2, AlertCircle } from "lucide-react";
+import { Sparkles, Star, Loader2, AlertCircle, X } from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { useVocabulary } from "../store/vocab";
 import { makeVocabId } from "../types/vocab";
@@ -285,8 +285,10 @@ export function SubtitleSelectionBubble({
       addedAt: new Date().toISOString(),
     });
     clearDraft(info.expression);
-    setInfo(null);
-    window.getSelection()?.removeAllRanges();
+    // Stay open after save — ⭐ flips to filled (saved=true derives from
+    // useVocabulary().has on next render), inputs remain editable, and any
+    // further edits will debounce-upsert. User dismisses via the explicit
+    // X close button, ESC, or by clicking outside.
   };
 
   const previewMeaning =
@@ -399,6 +401,14 @@ export function SubtitleSelectionBubble({
           }
         >
           <Star className="h-4 w-4" fill={saved ? "currentColor" : "none"} />
+        </button>
+        <button
+          type="button"
+          onClick={closeBubble}
+          title="关闭"
+          className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+        >
+          <X className="h-4 w-4" />
         </button>
       </div>
 

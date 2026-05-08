@@ -15,36 +15,42 @@ const cue = (overrides: Partial<Subtitle> = {}): Subtitle => ({
   ...overrides,
 });
 
+const empty = new Map<string, { meaningZh: string; usage: string }>();
+const vocab = (
+  ...phrases: string[]
+): Map<string, { meaningZh: string; usage: string }> =>
+  new Map(phrases.map((p) => [p, { meaningZh: "", usage: "" }]));
+
 describe("renderEnglishWithHighlights", () => {
   it("renders plain text when neither LLM highlight nor vocab match", () => {
     const { container } = render(
-      <div>{renderEnglishWithHighlights(cue(), new Set())}</div>
+      <div>{renderEnglishWithHighlights(cue(), empty)}</div>
     );
     expect(container.querySelectorAll("[data-highlight]")).toHaveLength(0);
     expect(container.textContent).toBe("I need to catch up on emails apparently");
   });
 
-  it("wraps a vocab hit in a dashed-underline span", () => {
+  it("wraps a vocab hit in a thin yellow underline span", () => {
     const { container } = render(
-      <div>{renderEnglishWithHighlights(cue(), new Set(["apparently"]))}</div>
+      <div>{renderEnglishWithHighlights(cue(), vocab("apparently"))}</div>
     );
     const spans = container.querySelectorAll("[data-highlight=\"true\"]");
     expect(spans.length).toBe(1);
     expect(spans[0].textContent).toBe("apparently");
-    expect(spans[0].className).toContain("border-dashed");
+    expect(spans[0].className).toContain("border-amber-400");
   });
 
   it("matches case-insensitively (vocab id is lowercased)", () => {
     const c = cue({ text: "Apparently it's late" });
     const { container } = render(
-      <div>{renderEnglishWithHighlights(c, new Set(["apparently"]))}</div>
+      <div>{renderEnglishWithHighlights(c, vocab("apparently"))}</div>
     );
     const spans = container.querySelectorAll("[data-highlight=\"true\"]");
     expect(spans.length).toBe(1);
     expect(spans[0].textContent).toBe("Apparently");
   });
 
-  it("LLM yellow highlight takes precedence over vocab dashed underline for overlapping ranges", () => {
+  it("LLM yellow highlight takes precedence over vocab underline for overlapping ranges", () => {
     const c = cue({
       text: "I catch up later",
       highlightWords: ["catch up"],
@@ -52,11 +58,14 @@ describe("renderEnglishWithHighlights", () => {
       highlightTranslations: { "catch up": "追上" },
     });
     const { container } = render(
-      <div>{renderEnglishWithHighlights(c, new Set(["catch up"]))}</div>
+      <div>{renderEnglishWithHighlights(c, vocab("catch up"))}</div>
     );
     const all = container.querySelectorAll("[data-highlight=\"true\"]");
     expect(all.length).toBe(1);
-    expect(all[0].className).not.toContain("border-dashed");
+    // Yellow LLM HighlightWord uses bg-amber-300 + text-black; vocab uses
+    // border-amber-400 — assert the LLM style won (no border-amber on the only span).
+    expect(all[0].className).not.toContain("border-amber-400");
+    expect(all[0].className).toContain("bg-amber-300");
   });
 
   it("renders both LLM highlight and a separate vocab match in same cue", () => {
@@ -67,22 +76,36 @@ describe("renderEnglishWithHighlights", () => {
       highlightTranslations: { "catch up": "追上" },
     });
     const { container } = render(
-      <div>{renderEnglishWithHighlights(c, new Set(["apparently"]))}</div>
+      <div>{renderEnglishWithHighlights(c, vocab("apparently"))}</div>
     );
     const all = container.querySelectorAll("[data-highlight=\"true\"]");
     expect(all.length).toBe(2);
-    const dashed = container.querySelectorAll(".border-dashed");
-    expect(dashed.length).toBe(1);
-    expect(dashed[0].textContent).toBe("apparently");
+    const vocabSpans = container.querySelectorAll(".border-amber-400\\/70");
+    expect(vocabSpans.length).toBe(1);
+    expect(vocabSpans[0].textContent).toBe("apparently");
   });
 
   it("longest phrase wins when shorter phrase is a prefix (longest-first sort)", () => {
     const c = cue({ text: "I catch up later" });
     const { container } = render(
-      <div>{renderEnglishWithHighlights(c, new Set(["catch", "catch up"]))}</div>
+      <div>{renderEnglishWithHighlights(c, vocab("catch", "catch up"))}</div>
     );
     const spans = container.querySelectorAll("[data-highlight=\"true\"]");
     expect(spans.length).toBe(1);
     expect(spans[0].textContent).toBe("catch up");
+  });
+
+  it("populates the hover tooltip from vocab map values", () => {
+    const m = new Map<string, { meaningZh: string; usage: string }>([
+      ["apparently", { meaningZh: "显然", usage: "口语里表达..." }],
+    ]);
+    const { container } = render(
+      <div>{renderEnglishWithHighlights(cue(), m)}</div>
+    );
+    // Tooltip element is conditionally rendered on hover — but VocabHighlight
+    // also sets title="已收藏" only when there's NO note. With a real meaning
+    // the title attribute should be omitted.
+    const span = container.querySelector("[data-highlight=\"true\"]");
+    expect(span?.getAttribute("title")).toBeNull();
   });
 });

@@ -403,18 +403,19 @@ export function Player() {
 
   const currentIdx = useVideoSync(videoRef, analysis.subtitles);
 
-  // Lowercased expressions saved in vocab for the CURRENT video. Used by
-  // SubtitleList to render dashed underlines on already-saved words.
+  // Map of vocab entries saved from the CURRENT video, keyed by lowercased+
+  // trimmed expression (= VocabEntry.id). Used by SubtitleList to render
+  // thin-yellow vocab highlights with hover tooltips on already-saved words.
   // Recomputed when entries or videoId change.
-  const vocabSetForVideo = useMemo(
-    () =>
-      new Set(
-        vocab.entries
-          .filter((e) => e.videoId === videoId)
-          .map((e) => e.id)
-      ),
-    [vocab.entries, videoId]
-  );
+  const vocabMapForVideo = useMemo(() => {
+    const m = new Map<string, { meaningZh: string; usage: string }>();
+    for (const e of vocab.entries) {
+      if (e.videoId === videoId) {
+        m.set(e.id, { meaningZh: e.meaningZh, usage: e.usage });
+      }
+    }
+    return m;
+  }, [vocab.entries, videoId]);
 
   function jump(t: number) {
     if (videoRef.current) videoRef.current.currentTime = t;
@@ -585,7 +586,7 @@ export function Player() {
                 autoScroll={autoScrollSubtitle}
                 editing={editingSubtitle}
                 onChanged={schedulePartialSave}
-                vocabSet={vocabSetForVideo}
+                vocabMap={vocabMapForVideo}
                 videoId={videoId ?? ""}
                 videoTitle={entry?.title ?? videoId ?? ""}
               />

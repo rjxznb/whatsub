@@ -2,9 +2,16 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { HighlightWord } from "./HighlightWord";
+import { VocabHighlight } from "./VocabHighlight";
 import { SubtitleSelectionBubble } from "./SubtitleSelectionBubble";
 import { formatTime, formatEditTime, parseEditTime } from "../utils/time";
 import { useAnalysis } from "../store/analysis";
+
+/** Per-vocab-entry data shown when the user hovers a thin-yellow vocab span. */
+export interface VocabHighlightInfo {
+  meaningZh: string;
+  usage: string;
+}
 
 interface Props {
   subtitles: Subtitle[];
@@ -13,10 +20,11 @@ interface Props {
   autoScroll: boolean;
   editing: boolean;
   onChanged?: () => void;
-  /** Lowercased expressions saved in vocab for THIS video. Used to render
-   *  dashed underlines on already-saved words. Computed in Player.tsx via
-   *  useMemo over useVocabulary().entries filtered by videoId. */
-  vocabSet: Set<string>;
+  /** Map keyed by lowercased+trimmed expression (= VocabEntry.id) → meaning/usage,
+   *  for rendering thin-yellow vocab highlights with hover tooltips on
+   *  already-saved words. Computed in Player.tsx via useMemo over
+   *  useVocabulary().entries filtered by videoId. */
+  vocabMap: Map<string, VocabHighlightInfo>;
   /** Used by SubtitleSelectionBubble to record which video an entry came from. */
   videoId: string;
   videoTitle: string;
@@ -48,7 +56,7 @@ export function SubtitleList({
   autoScroll,
   editing,
   onChanged,
-  vocabSet,
+  vocabMap,
   videoId,
   videoTitle,
 }: Props) {
@@ -224,7 +232,7 @@ export function SubtitleList({
                 {formatTime(s.time)} → {formatTime(s.endTime)}
               </div>
               <div className="text-base leading-relaxed text-zinc-100 selection:bg-amber-400/40 selection:text-amber-50">
-                {renderEnglishWithHighlights(s, vocabSet)}
+                {renderEnglishWithHighlights(s, vocabMap)}
               </div>
               <div className="text-zinc-400 text-sm mt-0.5 selection:bg-amber-400/30 selection:text-amber-100">
                 {renderTranslationWithHighlights(s)}
@@ -471,7 +479,7 @@ function EditableRow({
 
 export function renderEnglishWithHighlights(
   s: Subtitle,
-  vocabSet: Set<string>,
+  vocabMap: Map<string, VocabHighlightInfo>,
 ): ReactNode {
   // Pass 1: LLM highlightWords (yellow + keyNote tooltip).
   const llmWords = [...s.highlightWords].sort(
@@ -483,29 +491,34 @@ export function renderEnglishWithHighlights(
 
   // Pass 2: in each plain-text token, find vocab matches (case-insensitive,
   // longest first to handle phrase before single-word).
-  if (vocabSet.size === 0) return tokens;
-  const vocabPhrases = [...vocabSet].sort((a, b) => b.length - a.length);
+  if (vocabMap.size === 0) return tokens;
+  const vocabPhrases = [...vocabMap.keys()].sort((a, b) => b.length - a.length);
   return tokens.flatMap((tok, i) => {
     if (typeof tok !== "string") return [tok];
-    return spliceVocabUnderlines(tok, vocabPhrases, i);
+    return spliceVocabUnderlines(tok, vocabPhrases, vocabMap, i);
   });
 }
 
 /**
  * Wraps each non-overlapping case-insensitive match of `phrasesLowercased`
- * inside `text` with a dashed-underline span. CALLER CONTRACT: phrases must
- * already be lowercased AND pre-sorted longest-first — internal comparison is
- * `text.toLowerCase().indexOf(phrase)`, so non-lowercased input silently misses
- * case-mismatched entries; the longest-first order is what makes multi-word
- * phrases pre-empt their single-word components via the conflict check below.
+ * inside `text` with a thin-yellow VocabHighlight (with hover tooltip).
+ * CALLER CONTRACT: phrases must already be lowercased AND pre-sorted
+ * longest-first — internal comparison is `text.toLowerCase().indexOf(phrase)`,
+ * so non-lowercased input silently misses case-mismatched entries; the
+ * longest-first order is what makes multi-word phrases pre-empt their
+ * single-word components via the conflict check below.
+ *
+ * Phrases that match are looked up in `vocabMap` to surface the saved
+ * meaning/usage in the tooltip.
  */
 function spliceVocabUnderlines(
   text: string,
   phrasesLowercased: string[],
+  vocabMap: Map<string, VocabHighlightInfo>,
   baseKey: number,
 ): ReactNode[] {
   const lower = text.toLowerCase();
-  type Hit = { start: number; end: number };
+  type Hit = { start: number; end: number; phrase: string };
   const hits: Hit[] = [];
   for (const phrase of phrasesLowercased) {
     let from = 0;
@@ -514,7 +527,7 @@ function spliceVocabUnderlines(
       if (idx === -1) break;
       const end = idx + phrase.length;
       const conflicts = hits.some((h) => idx < h.end && end > h.start);
-      if (!conflicts) hits.push({ start: idx, end });
+      if (!conflicts) hits.push({ start: idx, end, phrase });
       from = end;
     }
   }
@@ -524,15 +537,14 @@ function spliceVocabUnderlines(
   let cursor = 0;
   hits.forEach((h, i) => {
     if (h.start > cursor) out.push(text.slice(cursor, h.start));
+    const info = vocabMap.get(h.phrase);
     out.push(
-      <span
+      <VocabHighlight
         key={`vocab-${baseKey}-${i}`}
-        data-highlight="true"
-        title="已收藏"
-        className="border-b border-dashed border-zinc-500/70"
-      >
-        {text.slice(h.start, h.end)}
-      </span>
+        word={text.slice(h.start, h.end)}
+        meaningZh={info?.meaningZh}
+        usage={info?.usage}
+      />
     );
     cursor = h.end;
   });

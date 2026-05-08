@@ -177,7 +177,10 @@ export function SubtitleSelectionBubble({
 
   const showingPreview = hoverPreview !== null;
 
-  const top = Math.max(8, info.rect.top - (expanded ? 200 : 44));
+  const top = Math.max(
+    8,
+    info.rect.top - (expanded ? (suggestion ? 330 : 200) : 44),
+  );
   const left = clampLeft(info.rect.left + info.rect.width / 2 - BUBBLE_WIDTH / 2);
 
   const llmReady = isProviderReady(settings);

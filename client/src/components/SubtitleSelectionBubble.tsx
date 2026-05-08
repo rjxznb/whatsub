@@ -51,6 +51,13 @@ export function SubtitleSelectionBubble({
   const [meaningZh, setMeaningZh] = useState("");
   const [usage, setUsage] = useState("");
   const [lookup, setLookup] = useState<LookupState>({ kind: "idle" });
+  const [suggestion, setSuggestion] = useState<{
+    meaningZh: string;
+    usage: string;
+  } | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<
+    null | "replace" | "append"
+  >(null);
   const lookupAbortRef = useRef<AbortController | null>(null);
   const { has, toggle, add } = useVocabulary();
   const { settings } = useSettings();
@@ -62,6 +69,8 @@ export function SubtitleSelectionBubble({
     setMeaningZh("");
     setUsage("");
     setLookup({ kind: "idle" });
+    setSuggestion(null);
+    setHoverPreview(null);
     lookupAbortRef.current?.abort();
   }, [info?.expression]);
 
@@ -107,8 +116,14 @@ export function SubtitleSelectionBubble({
         ctrl.signal,
       );
       if (ctrl.signal.aborted) return;
-      setMeaningZh(result.meaningZh);
-      setUsage(result.usage);
+      const userHasContent = meaningZh.trim() || usage.trim();
+      if (userHasContent) {
+        // Don't overwrite — show suggestion card instead.
+        setSuggestion(result);
+      } else {
+        setMeaningZh(result.meaningZh);
+        setUsage(result.usage);
+      }
       setLookup({ kind: "idle" });
     } catch (e) {
       if (ctrl.signal.aborted) return;
@@ -145,6 +160,22 @@ export function SubtitleSelectionBubble({
     setInfo(null);
     window.getSelection()?.removeAllRanges();
   };
+
+  const previewMeaning =
+    hoverPreview === "replace"
+      ? suggestion?.meaningZh ?? meaningZh
+      : hoverPreview === "append" && suggestion?.meaningZh
+      ? joinWithBreak(meaningZh, suggestion.meaningZh)
+      : meaningZh;
+
+  const previewUsage =
+    hoverPreview === "replace"
+      ? suggestion?.usage ?? usage
+      : hoverPreview === "append" && suggestion?.usage
+      ? joinWithBreak(usage, suggestion.usage)
+      : usage;
+
+  const showingPreview = hoverPreview !== null;
 
   const top = Math.max(8, info.rect.top - (expanded ? 200 : 44));
   const left = clampLeft(info.rect.left + info.rect.width / 2 - BUBBLE_WIDTH / 2);
@@ -212,21 +243,82 @@ export function SubtitleSelectionBubble({
           <label className="flex flex-col gap-1">
             <span className="text-xs text-zinc-500">📖 中文释义</span>
             <textarea
-              value={meaningZh}
+              value={previewMeaning}
               onChange={(e) => setMeaningZh(e.target.value)}
               rows={2}
-              className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-blue-400 resize-none"
+              readOnly={showingPreview}
+              className={
+                "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
+                (showingPreview
+                  ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
+                  : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
+              }
             />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-zinc-500">💬 用法</span>
             <textarea
-              value={usage}
+              value={previewUsage}
               onChange={(e) => setUsage(e.target.value)}
               rows={2}
-              className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-blue-400 resize-none"
+              readOnly={showingPreview}
+              className={
+                "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
+                (showingPreview
+                  ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
+                  : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
+              }
             />
           </label>
+          {suggestion && (
+            <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-950/20 p-2">
+              <div className="text-xs font-medium text-amber-300">AI 建议</div>
+              <div className="text-xs text-amber-100/80">
+                <div>📖 {suggestion.meaningZh || "（空）"}</div>
+                <div>💬 {suggestion.usage || "（空）"}</div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onMouseEnter={() => setHoverPreview("replace")}
+                  onMouseLeave={() => setHoverPreview(null)}
+                  onClick={() => {
+                    setMeaningZh(suggestion.meaningZh);
+                    setUsage(suggestion.usage);
+                    setSuggestion(null);
+                    setHoverPreview(null);
+                  }}
+                  className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
+                >
+                  替换
+                </button>
+                <button
+                  type="button"
+                  onMouseEnter={() => setHoverPreview("append")}
+                  onMouseLeave={() => setHoverPreview(null)}
+                  onClick={() => {
+                    setMeaningZh(joinWithBreak(meaningZh, suggestion.meaningZh));
+                    setUsage(joinWithBreak(usage, suggestion.usage));
+                    setSuggestion(null);
+                    setHoverPreview(null);
+                  }}
+                  className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
+                >
+                  追加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSuggestion(null);
+                    setHoverPreview(null);
+                  }}
+                  className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
+                >
+                  忽略
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -301,4 +393,10 @@ function clampLeft(x: number): number {
   const min = 8;
   const max = (typeof window !== "undefined" ? window.innerWidth : 1200) - BUBBLE_WIDTH - 8;
   return Math.max(min, Math.min(x, max));
+}
+
+function joinWithBreak(a: string, b: string): string {
+  if (!a.trim()) return b;
+  if (!b.trim()) return a;
+  return `${a}\n\n${b}`;
 }

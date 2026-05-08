@@ -142,6 +142,16 @@ export function SubtitleSelectionBubble({
   useEffect(() => {
     if (!info) return;
     const onSelChange = () => {
+      // Don't dismiss while user is editing inside the bubble — focusing a
+      // textarea collapses the document selection in some browsers.
+      const active = document.activeElement;
+      if (
+        active &&
+        bubbleRef.current?.contains(active) &&
+        (active.tagName === "TEXTAREA" || active.tagName === "INPUT")
+      ) {
+        return;
+      }
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) closeBubble();
     };
@@ -299,7 +309,27 @@ export function SubtitleSelectionBubble({
   const llmReady = isProviderReady(settings);
 
   const closeBubble = () => {
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+      // For saved entries: flush the latest typed content synchronously so
+      // a quick close (within the 500ms debounce window) doesn't lose the edit.
+      if (info && saved) {
+        add({
+          id: makeVocabId(info.expression),
+          expression: info.expression,
+          meaningZh,
+          usage,
+          videoId,
+          videoTitle,
+          cueTime: info.cueTime,
+          cueText: info.cueText,
+          addedAt:
+            entries.find((e) => e.id === makeVocabId(info.expression))
+              ?.addedAt ?? new Date().toISOString(),
+        }).catch((e) => console.error("flush-on-close vocab upsert failed", e));
+      }
+    }
     if (info && !saved && (meaningZh.trim() || usage.trim())) {
       const draft: VocabDraft = {
         expression: info.expression,

@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.23"
+version = "0.1.24"
 description = "A Tauri App"
 authors = ["jimmy"]
 edition = "2021"
@@ -45,4 +45,13 @@ reqwest = { version = "0.12", features = ["stream"] }
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
+# Stable per-machine UUID for license device fingerprinting:
+#   - Windows: HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid
+#   - macOS:   IOPlatformUUID
+#   - Linux:   /etc/machine-id
+# Same machine boots → same uid; different machine → different uid.
+machine-uid = "0.5"
+# Pretty device label for the admin UI ("renjx 的 MacBook" instead of a hash)
+# and OS hostname fallback. Small crate, no transitive heavies.
+whoami = "1.5"
 

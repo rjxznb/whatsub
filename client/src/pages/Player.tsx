@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, FileOutput } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -403,6 +403,19 @@ export function Player() {
 
   const currentIdx = useVideoSync(videoRef, analysis.subtitles);
 
+  // Lowercased expressions saved in vocab for the CURRENT video. Used by
+  // SubtitleList to render dashed underlines on already-saved words.
+  // Recomputed when entries or videoId change.
+  const vocabSetForVideo = useMemo(
+    () =>
+      new Set(
+        vocab.entries
+          .filter((e) => e.videoId === videoId)
+          .map((e) => e.id)
+      ),
+    [vocab.entries, videoId]
+  );
+
   function jump(t: number) {
     if (videoRef.current) videoRef.current.currentTime = t;
   }
@@ -572,6 +585,9 @@ export function Player() {
                 autoScroll={autoScrollSubtitle}
                 editing={editingSubtitle}
                 onChanged={schedulePartialSave}
+                vocabSet={vocabSetForVideo}
+                videoId={videoId ?? ""}
+                videoTitle={entry?.title ?? videoId ?? ""}
               />
             )}
             {tab === "keyPhrases" && (

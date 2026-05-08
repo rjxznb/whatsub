@@ -16,6 +16,9 @@ interface Props {
    *  dashed underlines on already-saved words. Computed in Player.tsx via
    *  useMemo over useVocabulary().entries filtered by videoId. */
   vocabSet: Set<string>;
+  /** Used by SubtitleSelectionBubble to record which video an entry came from. */
+  videoId: string;
+  videoTitle: string;
 }
 
 function emptyCueAfter(idx: number, subs: Subtitle[]): Subtitle {
@@ -45,6 +48,8 @@ export function SubtitleList({
   editing,
   onChanged,
   vocabSet,
+  videoId: _videoId,        // wired up in Task 7
+  videoTitle: _videoTitle,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const { phase, updateSubtitle, deleteSubtitle, insertSubtitle, reorderSubtitles } =

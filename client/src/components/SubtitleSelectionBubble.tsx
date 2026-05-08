@@ -7,6 +7,9 @@ import type { Settings } from "../types/settings";
 import { normalizeExpression } from "../utils/normalizeExpression";
 import { lookupExpression } from "../llm/lookupExpression";
 import { getProvider } from "../llm/providers";
+import { friendlyError } from "../utils/friendlyError";
+
+const BUBBLE_WIDTH = 400;
 
 interface SelectionInfo {
   expression: string;
@@ -109,11 +112,12 @@ export function SubtitleSelectionBubble({
       setLookup({ kind: "idle" });
     } catch (e) {
       if (ctrl.signal.aborted) return;
-      setLookup({ kind: "error", message: String(e) });
+      setLookup({ kind: "error", message: friendlyError(String(e), "analyzing").title });
     }
   };
 
   const onStar = async () => {
+    lookupAbortRef.current?.abort();
     if (saved) {
       // Toggle behavior — remove and stay open so user can re-edit + re-save.
       await toggle({
@@ -143,13 +147,13 @@ export function SubtitleSelectionBubble({
   };
 
   const top = Math.max(8, info.rect.top - (expanded ? 200 : 44));
-  const left = clampLeft(info.rect.left + info.rect.width / 2 - 200);
+  const left = clampLeft(info.rect.left + info.rect.width / 2 - BUBBLE_WIDTH / 2);
 
   const llmReady = isProviderReady(settings);
 
   return (
     <div
-      style={{ position: "fixed", top, left, width: 400 }}
+      style={{ position: "fixed", top, left, width: BUBBLE_WIDTH }}
       className="z-50 flex flex-col rounded-lg border border-zinc-700 bg-zinc-900/95 shadow-xl backdrop-blur"
     >
       {/* Header row */}
@@ -295,6 +299,6 @@ function closestCue(node: Node): HTMLElement | null {
 
 function clampLeft(x: number): number {
   const min = 8;
-  const max = (typeof window !== "undefined" ? window.innerWidth : 1200) - 248;
+  const max = (typeof window !== "undefined" ? window.innerWidth : 1200) - BUBBLE_WIDTH - 8;
   return Math.max(min, Math.min(x, max));
 }

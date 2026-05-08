@@ -144,26 +144,14 @@ export function SubtitleSelectionBubble({
   }, [meaningZh, usage, saved, info?.expression, suggestion]);
 
   // Hide on collapsed selection.
-  useEffect(() => {
-    if (!info) return;
-    const onSelChange = () => {
-      // Defer one macrotask so document.activeElement reflects post-click
-      // focus state, then bail when focus is anywhere inside the bubble.
-      // We previously restricted this to textarea/input only, but Chromium
-      // moves focus to <button> on click — so hovering [替换] / [追加]
-      // re-renders the textarea, fires selectionchange, finds activeElement
-      // is the AI button, and the over-strict guard let the close fire.
-      setTimeout(() => {
-        const active = document.activeElement;
-        if (active && bubbleRef.current?.contains(active)) return;
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed) closeBubble();
-      }, 0);
-    };
-    document.addEventListener("selectionchange", onSelChange);
-    return () => document.removeEventListener("selectionchange", onSelChange);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [info, saved, meaningZh, usage]);
+  // Bubble close paths: outside-click (mousedown) + ESC + explicit X button.
+  // We deliberately do NOT close on selectionchange-collapsed because clicking
+  // ANY focusable element inside the bubble (textareas, buttons, the AI 重新查
+  // ...) collapses the document-level selection on the cue text, racing focus
+  // changes with selectionchange events in browser-specific ways. Every guard
+  // we tried (textarea-only / any-focus-in-bubble / deferred activeElement)
+  // had false-positive closes for legitimate bubble interactions. Outside-click
+  // already handles "user clicked elsewhere"; we don't need a second mechanism.
 
   // Block wheel + touchmove on the list while bubble is visible — prevents
   // scrolling the selection out from under the bubble.
@@ -291,22 +279,6 @@ export function SubtitleSelectionBubble({
     // X close button, ESC, or by clicking outside.
   };
 
-  const previewMeaning =
-    hoverPreview === "replace"
-      ? suggestion?.meaningZh ?? meaningZh
-      : hoverPreview === "append" && suggestion?.meaningZh
-      ? joinWithBreak(meaningZh, suggestion.meaningZh)
-      : meaningZh;
-
-  const previewUsage =
-    hoverPreview === "replace"
-      ? suggestion?.usage ?? usage
-      : hoverPreview === "append" && suggestion?.usage
-      ? joinWithBreak(usage, suggestion.usage)
-      : usage;
-
-  const showingPreview = hoverPreview !== null;
-
   const top = Math.max(
     8,
     info.rect.top - (suggestion ? 330 : 200),
@@ -430,39 +402,45 @@ export function SubtitleSelectionBubble({
         <label className="flex flex-col gap-1">
           <span className="text-xs text-zinc-500">📖 中文释义</span>
           <textarea
-            value={previewMeaning}
+            value={meaningZh}
             onChange={(e) => setMeaningZh(e.target.value)}
             rows={2}
-            readOnly={showingPreview}
-            className={
-              "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
-              (showingPreview
-                ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
-                : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
-            }
+            className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-blue-400 resize-none"
           />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-zinc-500">💬 用法</span>
           <textarea
-            value={previewUsage}
+            value={usage}
             onChange={(e) => setUsage(e.target.value)}
             rows={2}
-            readOnly={showingPreview}
-            className={
-              "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
-              (showingPreview
-                ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
-                : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
-            }
+            className="w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 focus:outline-none focus:border-blue-400 resize-none"
           />
         </label>
         {suggestion && (
           <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-950/20 p-2">
-            <div className="text-xs font-medium text-amber-300">AI 建议</div>
-            <div className="text-xs text-amber-100/80">
-              <div>📖 {suggestion.meaningZh || "（空）"}</div>
-              <div>💬 {suggestion.usage || "（空）"}</div>
+            <div className="text-xs font-medium text-amber-300">
+              AI 建议
+              {hoverPreview === "replace" && " · 替换后效果预览"}
+              {hoverPreview === "append" && " · 追加后效果预览"}
+            </div>
+            <div className="text-xs text-amber-100/90 max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+              <div className="mb-1">
+                <span className="text-amber-300">📖 </span>
+                {hoverPreview === "replace"
+                  ? suggestion.meaningZh || "（空）"
+                  : hoverPreview === "append" && suggestion.meaningZh
+                  ? joinWithBreak(meaningZh, suggestion.meaningZh)
+                  : suggestion.meaningZh || "（空）"}
+              </div>
+              <div>
+                <span className="text-amber-300">💬 </span>
+                {hoverPreview === "replace"
+                  ? suggestion.usage || "（空）"
+                  : hoverPreview === "append" && suggestion.usage
+                  ? joinWithBreak(usage, suggestion.usage)
+                  : suggestion.usage || "（空）"}
+              </div>
             </div>
             <div className="flex gap-2">
               <button

@@ -268,14 +268,15 @@ export function SubtitleList({
             onDragOver={(e) => {
               // ALWAYS preventDefault during a drag — without it the
               // browser's default action is "no drop allowed" and the
-              // cursor shows the forbidden symbol. Same-row drops are
-              // filtered later in onDrop. Use the bubble phase here for
-              // the visual highlight, but the capture-phase variant below
-              // is what guarantees the cursor stays "move".
-              if (draggedIdx === null) return;
+              // cursor shows the forbidden symbol. We don't gate on
+              // `draggedIdx` because React's state-update for setDraggedIdx
+              // (fired in onDragStart) doesn't always commit before the
+              // first few dragover events fire — the stale closure would
+              // see null and bail, killing the cursor for the whole drag.
+              // Same-row drops are filtered in onDrop instead.
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
-              if (draggedIdx !== i) setDragOverIdx(i);
+              if (draggedIdx !== null && draggedIdx !== i) setDragOverIdx(i);
             }}
             // Capture phase fires BEFORE any nested textarea/input has a
             // chance to claim the dragover with its native text-drop
@@ -283,7 +284,6 @@ export function SubtitleList({
             // row caused the browser to set "forbidden" cursor regardless
             // of the row's bubble-phase handler.
             onDragOverCapture={(e) => {
-              if (draggedIdx === null) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
             }}

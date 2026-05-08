@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { HighlightWord } from "./HighlightWord";
+import { SubtitleSelectionBubble } from "./SubtitleSelectionBubble";
 import { formatTime, formatEditTime, parseEditTime } from "../utils/time";
 import { useAnalysis } from "../store/analysis";
 
@@ -48,8 +49,8 @@ export function SubtitleList({
   editing,
   onChanged,
   vocabSet,
-  videoId: _videoId,        // wired up in Task 7
-  videoTitle: _videoTitle,
+  videoId,
+  videoTitle,
 }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const { phase, updateSubtitle, deleteSubtitle, insertSubtitle, reorderSubtitles } =
@@ -304,6 +305,13 @@ export function SubtitleList({
         );
         })
       )}
+      <SubtitleSelectionBubble
+        listRef={listRef}
+        subtitles={subtitles}
+        videoId={videoId}
+        videoTitle={videoTitle}
+        disabled={editing}
+      />
     </div>
   );
 }

@@ -419,27 +419,18 @@ export function SubtitleSelectionBubble({
         </label>
         {suggestion && (
           <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-950/20 p-2">
-            <div className="text-xs font-medium text-amber-300">
-              AI 建议
-              {hoverPreview === "replace" && " · 替换后效果预览"}
-              {hoverPreview === "append" && " · 追加后效果预览"}
-            </div>
-            <div className="text-xs text-amber-100/90 max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+            <div className="text-xs font-medium text-amber-300">AI 建议</div>
+            {/* LLM raw result — fixed height, never changes on hover. Stable
+             *  layout above the buttons so hovering can't push buttons out
+             *  from under the cursor and trigger mouseEnter/Leave flicker. */}
+            <div className="text-xs text-amber-100/90 max-h-32 overflow-y-auto whitespace-pre-wrap leading-relaxed">
               <div className="mb-1">
                 <span className="text-amber-300">📖 </span>
-                {hoverPreview === "replace"
-                  ? suggestion.meaningZh || "（空）"
-                  : hoverPreview === "append" && suggestion.meaningZh
-                  ? joinWithBreak(meaningZh, suggestion.meaningZh)
-                  : suggestion.meaningZh || "（空）"}
+                {suggestion.meaningZh || "（空）"}
               </div>
               <div>
                 <span className="text-amber-300">💬 </span>
-                {hoverPreview === "replace"
-                  ? suggestion.usage || "（空）"
-                  : hoverPreview === "append" && suggestion.usage
-                  ? joinWithBreak(usage, suggestion.usage)
-                  : suggestion.usage || "（空）"}
+                {suggestion.usage || "（空）"}
               </div>
             </div>
             <div className="flex gap-2">
@@ -482,6 +473,31 @@ export function SubtitleSelectionBubble({
                 忽略
               </button>
             </div>
+            {/* Hover preview — appears BELOW the buttons so it doesn't push
+             *  them and cause hover-flicker. Empty space when not hovering. */}
+            {hoverPreview && (
+              <div className="border-t border-amber-500/30 pt-2 mt-1 text-xs">
+                <div className="text-amber-300 font-medium mb-1">
+                  {hoverPreview === "replace"
+                    ? "📋 替换后效果预览"
+                    : "➕ 追加后效果预览"}
+                </div>
+                <div className="text-zinc-100 max-h-40 overflow-y-auto whitespace-pre-wrap leading-relaxed bg-zinc-950/60 rounded px-2 py-1.5">
+                  <div className="mb-1">
+                    <span className="text-zinc-500">📖 </span>
+                    {hoverPreview === "replace"
+                      ? suggestion.meaningZh || "（空）"
+                      : joinWithBreak(meaningZh, suggestion.meaningZh) || "（空）"}
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">💬 </span>
+                    {hoverPreview === "replace"
+                      ? suggestion.usage || "（空）"
+                      : joinWithBreak(usage, suggestion.usage) || "（空）"}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

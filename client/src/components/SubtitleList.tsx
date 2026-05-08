@@ -223,10 +223,10 @@ export function SubtitleList({
               <div className="text-zinc-500 text-[11px]">
                 {formatTime(s.time)} → {formatTime(s.endTime)}
               </div>
-              <div className="text-base leading-relaxed text-zinc-100">
+              <div className="text-base leading-relaxed text-zinc-100 selection:bg-amber-400/40 selection:text-amber-50">
                 {renderEnglishWithHighlights(s, vocabSet)}
               </div>
-              <div className="text-zinc-400 text-sm mt-0.5">
+              <div className="text-zinc-400 text-sm mt-0.5 selection:bg-amber-400/30 selection:text-amber-100">
                 {renderTranslationWithHighlights(s)}
               </div>
             </div>

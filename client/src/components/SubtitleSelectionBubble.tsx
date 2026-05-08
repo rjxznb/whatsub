@@ -49,7 +49,6 @@ export function SubtitleSelectionBubble({
   disabled,
 }: Props) {
   const [info, setInfo] = useState<SelectionInfo | null>(null);
-  const [expanded, setExpanded] = useState(false);
   const [meaningZh, setMeaningZh] = useState("");
   const [usage, setUsage] = useState("");
   const [lookup, setLookup] = useState<LookupState>({ kind: "idle" });
@@ -77,23 +76,20 @@ export function SubtitleSelectionBubble({
     const id = makeVocabId(info.expression);
     const existing = entries.find((e) => e.id === id);
     if (existing) {
-      // Already-saved: auto-expand with vocab values; debounce-upsert active.
+      // Already-saved: pre-fill from vocab; debounce-upsert active.
       setMeaningZh(existing.meaningZh);
       setUsage(existing.usage);
-      setExpanded(true);
       return;
     }
     const draft = loadDraft(info.expression);
     if (draft) {
       setMeaningZh(draft.meaningZh);
       setUsage(draft.usage);
-      setExpanded(true);
       return;
     }
-    // Fresh, no draft, no vocab — collapsed default.
+    // Fresh, no draft, no vocab — empty inputs.
     setMeaningZh("");
     setUsage("");
-    setExpanded(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info?.expression]);
 
@@ -217,7 +213,6 @@ export function SubtitleSelectionBubble({
     lookupAbortRef.current?.abort();
     const ctrl = new AbortController();
     lookupAbortRef.current = ctrl;
-    setExpanded(true);
     setLookup({ kind: "loading" });
     try {
       const provider = getProvider(settings);
@@ -297,7 +292,7 @@ export function SubtitleSelectionBubble({
 
   const top = Math.max(
     8,
-    info.rect.top - (expanded ? (suggestion ? 330 : 200) : 44),
+    info.rect.top - (suggestion ? 330 : 200),
   );
   const left = clampLeft(info.rect.left + info.rect.width / 2 - BUBBLE_WIDTH / 2);
 
@@ -347,7 +342,7 @@ export function SubtitleSelectionBubble({
           type="button"
           onClick={onLookup}
           disabled={!llmReady || lookup.kind === "loading"}
-          title={llmReady ? "LLM 查词" : "请先在设置里配置 AI 翻译服务"}
+          title={llmReady ? "AI 查词" : "请先在设置里配置 AI 翻译服务"}
           className="flex h-7 items-center gap-1 rounded px-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {lookup.kind === "loading" ? (
@@ -355,7 +350,7 @@ export function SubtitleSelectionBubble({
           ) : (
             <Search className="h-3.5 w-3.5" />
           )}
-          {expanded ? "重新查" : "查词"}
+          {(meaningZh || usage).trim() ? "重新查" : "查词"}
         </button>
         <button
           type="button"
@@ -372,103 +367,101 @@ export function SubtitleSelectionBubble({
         </button>
       </div>
 
-      {/* Inputs (expanded) */}
-      {expanded && (
-        <div className="flex flex-col gap-2 px-3 py-2">
-          {lookup.kind === "error" && (
-            <div className="flex items-center gap-2 rounded bg-red-900/30 px-2 py-1 text-xs text-red-300">
-              <AlertCircle className="h-3.5 w-3.5" />
-              <span className="flex-1 truncate">查询失败：{lookup.message}</span>
+      {/* Inputs (always visible) */}
+      <div className="flex flex-col gap-2 px-3 py-2">
+        {lookup.kind === "error" && (
+          <div className="flex items-center gap-2 rounded bg-red-900/30 px-2 py-1 text-xs text-red-300">
+            <AlertCircle className="h-3.5 w-3.5" />
+            <span className="flex-1 truncate">查询失败：{lookup.message}</span>
+            <button
+              type="button"
+              onClick={onLookup}
+              className="rounded px-2 py-0.5 hover:bg-red-900/40"
+            >
+              重试
+            </button>
+          </div>
+        )}
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">📖 中文释义</span>
+          <textarea
+            value={previewMeaning}
+            onChange={(e) => setMeaningZh(e.target.value)}
+            rows={2}
+            readOnly={showingPreview}
+            className={
+              "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
+              (showingPreview
+                ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
+                : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
+            }
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-zinc-500">💬 用法</span>
+          <textarea
+            value={previewUsage}
+            onChange={(e) => setUsage(e.target.value)}
+            rows={2}
+            readOnly={showingPreview}
+            className={
+              "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
+              (showingPreview
+                ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
+                : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
+            }
+          />
+        </label>
+        {suggestion && (
+          <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-950/20 p-2">
+            <div className="text-xs font-medium text-amber-300">AI 建议</div>
+            <div className="text-xs text-amber-100/80">
+              <div>📖 {suggestion.meaningZh || "（空）"}</div>
+              <div>💬 {suggestion.usage || "（空）"}</div>
+            </div>
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={onLookup}
-                className="rounded px-2 py-0.5 hover:bg-red-900/40"
+                onMouseEnter={() => setHoverPreview("replace")}
+                onMouseLeave={() => setHoverPreview(null)}
+                onClick={() => {
+                  setMeaningZh(suggestion.meaningZh);
+                  setUsage(suggestion.usage);
+                  setSuggestion(null);
+                  setHoverPreview(null);
+                }}
+                className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
               >
-                重试
+                替换
+              </button>
+              <button
+                type="button"
+                onMouseEnter={() => setHoverPreview("append")}
+                onMouseLeave={() => setHoverPreview(null)}
+                onClick={() => {
+                  setMeaningZh(joinWithBreak(meaningZh, suggestion.meaningZh));
+                  setUsage(joinWithBreak(usage, suggestion.usage));
+                  setSuggestion(null);
+                  setHoverPreview(null);
+                }}
+                className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
+              >
+                追加
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSuggestion(null);
+                  setHoverPreview(null);
+                }}
+                className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
+              >
+                忽略
               </button>
             </div>
-          )}
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-zinc-500">📖 中文释义</span>
-            <textarea
-              value={previewMeaning}
-              onChange={(e) => setMeaningZh(e.target.value)}
-              rows={2}
-              readOnly={showingPreview}
-              className={
-                "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
-                (showingPreview
-                  ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
-                  : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-zinc-500">💬 用法</span>
-            <textarea
-              value={previewUsage}
-              onChange={(e) => setUsage(e.target.value)}
-              rows={2}
-              readOnly={showingPreview}
-              className={
-                "w-full rounded border px-2 py-1 text-sm focus:outline-none resize-none " +
-                (showingPreview
-                  ? "border-amber-500/40 bg-amber-950/20 text-amber-100/80 italic"
-                  : "border-zinc-700 bg-zinc-950 text-zinc-100 focus:border-blue-400")
-              }
-            />
-          </label>
-          {suggestion && (
-            <div className="flex flex-col gap-2 rounded border border-amber-500/40 bg-amber-950/20 p-2">
-              <div className="text-xs font-medium text-amber-300">AI 建议</div>
-              <div className="text-xs text-amber-100/80">
-                <div>📖 {suggestion.meaningZh || "（空）"}</div>
-                <div>💬 {suggestion.usage || "（空）"}</div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onMouseEnter={() => setHoverPreview("replace")}
-                  onMouseLeave={() => setHoverPreview(null)}
-                  onClick={() => {
-                    setMeaningZh(suggestion.meaningZh);
-                    setUsage(suggestion.usage);
-                    setSuggestion(null);
-                    setHoverPreview(null);
-                  }}
-                  className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
-                >
-                  替换
-                </button>
-                <button
-                  type="button"
-                  onMouseEnter={() => setHoverPreview("append")}
-                  onMouseLeave={() => setHoverPreview(null)}
-                  onClick={() => {
-                    setMeaningZh(joinWithBreak(meaningZh, suggestion.meaningZh));
-                    setUsage(joinWithBreak(usage, suggestion.usage));
-                    setSuggestion(null);
-                    setHoverPreview(null);
-                  }}
-                  className="flex-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200 hover:bg-amber-500/20"
-                >
-                  追加
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSuggestion(null);
-                    setHoverPreview(null);
-                  }}
-                  className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
-                >
-                  忽略
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

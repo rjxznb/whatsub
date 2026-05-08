@@ -8,6 +8,7 @@ import { normalizeExpression } from "../utils/normalizeExpression";
 import { lookupExpression } from "../llm/lookupExpression";
 import { getProvider } from "../llm/providers";
 import { friendlyError } from "../utils/friendlyError";
+import { loadDraft, saveDraft, clearDraft, type VocabDraft } from "../store/vocabDraft";
 
 const BUBBLE_WIDTH = 400;
 
@@ -59,19 +60,38 @@ export function SubtitleSelectionBubble({
     null | "replace" | "append"
   >(null);
   const lookupAbortRef = useRef<AbortController | null>(null);
-  const { has, toggle, add } = useVocabulary();
+  const { entries, has, toggle, add } = useVocabulary();
   const { settings } = useSettings();
 
-  // Reset bubble state every time a new selection is made.
+  // On selection change: restore from vocab (top priority), then draft, else collapsed default.
   useEffect(() => {
     if (!info) return;
-    setExpanded(false);
-    setMeaningZh("");
-    setUsage("");
     setLookup({ kind: "idle" });
     setSuggestion(null);
     setHoverPreview(null);
     lookupAbortRef.current?.abort();
+
+    const id = info.expression.toLowerCase().trim();
+    const existing = entries.find((e) => e.id === id);
+    if (existing) {
+      // Already-saved: auto-expand with vocab values; debounce-upsert active.
+      setMeaningZh(existing.meaningZh);
+      setUsage(existing.usage);
+      setExpanded(true);
+      return;
+    }
+    const draft = loadDraft(info.expression);
+    if (draft) {
+      setMeaningZh(draft.meaningZh);
+      setUsage(draft.usage);
+      setExpanded(true);
+      return;
+    }
+    // Fresh, no draft, no vocab — collapsed default.
+    setMeaningZh("");
+    setUsage("");
+    setExpanded(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info?.expression]);
 
   // Detect selection (unchanged from Task 7).
@@ -86,20 +106,52 @@ export function SubtitleSelectionBubble({
     return () => list.removeEventListener("mouseup", onMouseUp);
   }, [listRef, subtitles, disabled]);
 
+  const saved = info ? has(info.expression) : false;
+
+  // Debounce-upsert when the user edits inputs while the entry is in vocab.
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!info) return;
+    if (!saved) return;            // only auto-update entries already in vocab
+    if (suggestion) return;        // user is mid-suggestion-decision; don't fire yet
+
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      void add({
+        id: info.expression.toLowerCase().trim(),
+        expression: info.expression,
+        meaningZh,
+        usage,
+        videoId,
+        videoTitle,
+        cueTime: info.cueTime,
+        cueText: info.cueText,
+        addedAt:
+          entries.find((e) => e.id === info.expression.toLowerCase().trim())
+            ?.addedAt ?? new Date().toISOString(),
+      });
+    }, 500);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meaningZh, usage, saved, info?.expression, suggestion]);
+
   // Hide on collapsed selection.
   useEffect(() => {
     if (!info) return;
     const onSelChange = () => {
       const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) setInfo(null);
+      if (!sel || sel.isCollapsed) closeBubble();
     };
     document.addEventListener("selectionchange", onSelChange);
     return () => document.removeEventListener("selectionchange", onSelChange);
-  }, [info]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, saved, meaningZh, usage]);
 
   if (!info) return null;
-
-  const saved = has(info.expression);
 
   const onLookup = async () => {
     lookupAbortRef.current?.abort();
@@ -133,8 +185,12 @@ export function SubtitleSelectionBubble({
 
   const onStar = async () => {
     lookupAbortRef.current?.abort();
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
     if (saved) {
-      // Toggle behavior — remove and stay open so user can re-edit + re-save.
+      // Cancel any pending upsert FIRST so it doesn't race with the remove.
       await toggle({
         expression: info.expression,
         meaningZh,
@@ -144,6 +200,7 @@ export function SubtitleSelectionBubble({
         cueTime: info.cueTime,
         cueText: info.cueText,
       });
+      // Stay open in expanded state (user might re-edit and re-save).
       return;
     }
     await add({
@@ -157,6 +214,7 @@ export function SubtitleSelectionBubble({
       cueText: info.cueText,
       addedAt: new Date().toISOString(),
     });
+    clearDraft(info.expression);
     setInfo(null);
     window.getSelection()?.removeAllRanges();
   };
@@ -184,6 +242,24 @@ export function SubtitleSelectionBubble({
   const left = clampLeft(info.rect.left + info.rect.width / 2 - BUBBLE_WIDTH / 2);
 
   const llmReady = isProviderReady(settings);
+
+  const closeBubble = () => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    if (info && !saved && (meaningZh.trim() || usage.trim())) {
+      const draft: VocabDraft = {
+        expression: info.expression,
+        meaningZh,
+        usage,
+        cueText: info.cueText,
+        cueTime: info.cueTime,
+        videoId,
+        videoTitle,
+        updatedAt: new Date().toISOString(),
+      };
+      saveDraft(draft);
+    }
+    setInfo(null);
+  };
 
   return (
     <div

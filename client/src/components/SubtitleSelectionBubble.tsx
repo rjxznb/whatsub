@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Star, Loader2, AlertCircle } from "lucide-react";
+import { Sparkles, Star, Loader2, AlertCircle } from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { useVocabulary } from "../store/vocab";
 import { makeVocabId } from "../types/vocab";
@@ -142,18 +142,23 @@ export function SubtitleSelectionBubble({
   useEffect(() => {
     if (!info) return;
     const onSelChange = () => {
-      // Don't dismiss while user is editing inside the bubble — focusing a
-      // textarea collapses the document selection in some browsers.
-      const active = document.activeElement;
-      if (
-        active &&
-        bubbleRef.current?.contains(active) &&
-        (active.tagName === "TEXTAREA" || active.tagName === "INPUT")
-      ) {
-        return;
-      }
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) closeBubble();
+      // Defer one macrotask so document.activeElement reflects post-click
+      // focus state. Without this defer, clicking into the bubble's textarea
+      // fires selectionchange BEFORE focus has settled — activeElement is
+      // still the previous element, the textarea-focus guard fails through,
+      // and the bubble dismisses itself mid-edit.
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (
+          active &&
+          bubbleRef.current?.contains(active) &&
+          (active.tagName === "TEXTAREA" || active.tagName === "INPUT")
+        ) {
+          return;
+        }
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) closeBubble();
+      }, 0);
     };
     document.addEventListener("selectionchange", onSelChange);
     return () => document.removeEventListener("selectionchange", onSelChange);
@@ -373,14 +378,14 @@ export function SubtitleSelectionBubble({
           onClick={onLookup}
           disabled={!llmReady || lookup.kind === "loading"}
           title={llmReady ? "AI 查词" : "请先在设置里配置 AI 翻译服务"}
-          className="flex h-7 items-center gap-1 rounded px-2 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex h-7 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-500 shadow-sm shadow-purple-500/30 hover:from-indigo-400 hover:to-purple-400 hover:shadow-purple-500/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-indigo-500 disabled:hover:to-purple-500"
         >
           {lookup.kind === "loading" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Search className="h-3.5 w-3.5" />
+            <Sparkles className="h-3.5 w-3.5" />
           )}
-          {(meaningZh || usage).trim() ? "重新查" : "查词"}
+          {(meaningZh || usage).trim() ? "AI 重新查" : "AI 查词"}
         </button>
         <button
           type="button"

@@ -478,6 +478,13 @@ export function renderEnglishWithHighlights(
   });
 }
 
+/**
+ * Wraps each non-overlapping case-insensitive match of `phrasesLowercased`
+ * inside `text` with a dashed-underline span. CALLER CONTRACT: phrases must
+ * already be lowercased — internal comparison is `text.toLowerCase().indexOf(phrase)`,
+ * so non-lowercased input silently misses case-mismatched entries. Sort happens
+ * here (longest first) so multi-word phrases pre-empt single-word components.
+ */
 function spliceVocabUnderlines(
   text: string,
   phrasesLowercased: string[],

@@ -75,4 +75,14 @@ describe("renderEnglishWithHighlights", () => {
     expect(dashed.length).toBe(1);
     expect(dashed[0].textContent).toBe("apparently");
   });
+
+  it("longest phrase wins when shorter phrase is a prefix (longest-first sort)", () => {
+    const c = cue({ text: "I catch up later" });
+    const { container } = render(
+      <div>{renderEnglishWithHighlights(c, new Set(["catch", "catch up"]))}</div>
+    );
+    const spans = container.querySelectorAll("[data-highlight=\"true\"]");
+    expect(spans.length).toBe(1);
+    expect(spans[0].textContent).toBe("catch up");
+  });
 });

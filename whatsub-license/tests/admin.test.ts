@@ -120,6 +120,41 @@ describe('GET /api/admin/licenses', () => {
   });
 });
 
+describe('GET /api/admin/licenses/:key', () => {
+  it('returns license + activations with redacted fingerprintTail', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'K-DETAIL', max_devices: 3, created_at: 1,
+      buyer_note: 'note', email: null,
+    });
+    await db.insertActivation({
+      license_key: 'K-DETAIL',
+      fingerprint: 'abcdef'.repeat(10) + 'abcd',
+      device_label: 'mac',
+      activated_at: 100, last_seen_at: 100, deactivated_at: null,
+    });
+    const res = await app.request('/api/admin/licenses/K-DETAIL', {
+      headers: authHeader(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      license: { key: string };
+      activations: Array<{ fingerprintTail: string }>;
+    };
+    expect(body.license.key).toBe('K-DETAIL');
+    expect(body.activations).toHaveLength(1);
+    expect(body.activations[0]!.fingerprintTail).toHaveLength(6);
+  });
+
+  it('returns 404 for unknown key', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/admin/licenses/NOPE', {
+      headers: authHeader(),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('GET /api/admin/whoami', () => {
   it('returns 401 without auth', async () => {
     const { app } = makeApp();

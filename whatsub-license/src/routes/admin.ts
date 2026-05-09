@@ -72,5 +72,19 @@ export function adminRoutes(db: Database, adminToken: string | undefined) {
     return c.json({ items, total, page, pageSize });
   });
 
+  app.get('/licenses/:key', async (c) => {
+    const key = c.req.param('key');
+    const license = await db.findLicense(key);
+    if (!license) return c.json({ error: 'not_found' }, 404);
+    const activations = await db.listAllActivations(key);
+    return c.json({
+      license,
+      activations: activations.map((a) => ({
+        ...a,
+        fingerprintTail: a.fingerprint.slice(-6),
+      })),
+    });
+  });
+
   return app;
 }

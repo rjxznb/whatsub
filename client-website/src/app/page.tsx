@@ -6,7 +6,6 @@ import { FeatureGrid } from '@/components/FeatureGrid';
 import { Download } from '@/components/Download';
 import { Pricing } from '@/components/Pricing';
 import { FAQ } from '@/components/FAQ';
-import { FinalCTA } from '@/components/FinalCTA';
 import { Footer } from '@/components/Footer';
 
 export default function HomePage() {
@@ -21,7 +20,6 @@ export default function HomePage() {
         <Download />
         <Pricing />
         <FAQ />
-        <FinalCTA />
       </main>
       <Footer />
     </>

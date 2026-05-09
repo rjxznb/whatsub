@@ -5,7 +5,12 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'PingFang SC', 'sans-serif'],
+        // System UI stack — gives the OS native sans-serif. On Windows
+        // resolves to Microsoft YaHei UI / Segoe UI; on macOS to PingFang
+        // SC / SF Pro; on Linux varies. Renders Chinese characters with
+        // the OS-default Chinese font, which has matching metrics with
+        // the Latin chars (no jarring fallback transition).
+        sans: ['system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', 'Arial', 'sans-serif'],
         mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
         display: ['Caveat', 'cursive'],
       },

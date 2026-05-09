@@ -7,31 +7,31 @@ import { useReveal } from '@/hooks/useReveal';
 const QUESTIONS: { q: string; a: string }[] = [
   {
     q: '激活授权码后多久能用?',
-    a: '立即可用。在线验证一次后软件完全离线运行,以后开机不再联网。一份授权码可在 3 台个人设备上同时使用,永久有效。',
+    a: '立即可用在线验证一次后软件完全离线运行,以后开机不再联网一份授权码可在 3 台个人设备上同时使用,永久有效',
   },
   {
     q: '国内能不能正常激活?',
-    a: '可以。激活服务器在国内(阿里云北京,eversay.cc 已备案),通常 200ms 内完成激活。激活成功后软件完全离线运行,不再联网。',
+    a: '可以激活服务器在国内(阿里云北京,eversay.cc 已备案),通常 200ms 内完成激活激活成功后软件完全离线运行,不再联网',
   },
   {
     q: '3 台设备用满了怎么办?',
-    a: '联系客服(小红书私信)免费释放任意一台旧设备的槽位,然后在新设备上重新激活即可。不限次数。',
+    a: '联系客服(小红书私信)免费释放任意一台旧设备的槽位,然后在新设备上重新激活即可不限次数',
   },
   {
     q: 'macOS 双击提示「已损坏」怎么办?',
-    a: '请把 .app 拖进「应用程序」文件夹再打开。直接从「下载」目录打开会触发 macOS App Translocation,导致首次启动报错。已通过 Apple Developer ID 签名 + 公证,放进 Applications 后无任何弹窗。',
+    a: '请把 .app 拖进「应用程序」文件夹再打开直接从「下载」目录打开会触发 macOS App Translocation,导致首次启动报错已通过 Apple Developer ID 签名 + 公证,放进 Applications 后无任何弹窗',
   },
   {
     q: '为什么需要 LLM API key?',
-    a: '翻译用你自己的 LLM 账号调,按 token 付费。DeepSeek 最便宜(约 ¥0.001/千 tokens),整片 22 分钟视频翻译通常几分钱。10 个预设(DeepSeek/OpenAI/Claude/Kimi/Gemini/智谱/Qwen/SiliconFlow/Ollama/自定义)切换零成本。',
+    a: '翻译用你自己的 LLM 账号调,按 token 付费DeepSeek 最便宜(约 ¥0.001/千 tokens),整片 22 分钟视频翻译通常几分钱10 个预设(DeepSeek/OpenAI/Claude/Kimi/Gemini/智谱/Qwen/SiliconFlow/Ollama/自定义)切换零成本',
   },
   {
     q: '视频会不会上传?',
-    a: '不会。Whisper 转录在你的 GPU 上跑,LLM 翻译只发送字幕文本(不发送音视频)。隐私敏感的可以用 Ollama 把 LLM 也跑本地,实现完全离线。',
+    a: '不会Whisper 转录在你的 GPU 上跑,LLM 翻译只发送字幕文本(不发送音视频)隐私敏感的可以用 Ollama 把 LLM 也跑本地,实现完全离线',
   },
   {
     q: '能不能退款?',
-    a: '不支持退款。数字商品售出不退,购买前可以下载试用免费档位,体验完所有核心功能后再决定。',
+    a: '不支持退款数字商品售出不退,购买前可以下载试用免费档位,体验完所有核心功能后再决定',
   },
 ];
 
@@ -50,7 +50,7 @@ export function FAQ() {
           className="reveal mb-14 font-display font-bold leading-[1.05] tracking-[-0.01em] text-ink"
           style={{ fontSize: 'clamp(40px, 6vw, 72px)' }}
         >
-          常见问题。
+          常见问题
         </h2>
         <div className="reveal reveal-delay-1 border-t border-[--hairline]">
           {QUESTIONS.map((qa, i) => {

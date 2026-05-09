@@ -7,22 +7,22 @@ const REASONS = [
   {
     Icon: Cpu,
     title: '本地转录',
-    body: 'Whisper 模型在本机 GPU 跑,视频和音频从不离开你的电脑。Win Vulkan / Mac Metal 双平台加速,无 GPU 自动 fallback CPU。',
+    body: 'Whisper 模型在本机 GPU 跑,视频和音频从不离开你的电脑Win Vulkan / Mac Metal 双平台加速,无 GPU 自动 fallback CPU',
   },
   {
     Icon: Sparkles,
     title: '任意 LLM',
-    body: 'DeepSeek / OpenAI / Claude / Kimi / Gemini 用自己的 API key。10 个预设 + 自定义。今天用 DeepSeek,明天换 Claude,不绑死任何厂商。',
+    body: 'DeepSeek / OpenAI / Claude / Kimi / Gemini 用自己的 API key10 个预设 + 自定义今天用 DeepSeek,明天换 Claude,不绑死任何厂商',
   },
   {
     Icon: Languages,
     title: '真正的双语字幕',
-    body: '不只是机翻挂底下。重点短语黄底高亮、IPA 音标、TTS 朗读,跟着字幕同步滚动。每一句都点得开、读得出来。',
+    body: '不只是机翻挂底下重点短语黄底高亮、IPA 音标、TTS 朗读,跟着字幕同步滚动每一句都点得开、读得出来',
   },
   {
     Icon: Star,
     title: '词汇本沉淀',
-    body: '看到生词 ⭐ 一下,跨视频汇总。CSV 导出,深链一键跳回原片对应字幕段。每段视频都给你留下一份资产。',
+    body: '看到生词 ⭐ 一下,跨视频汇总CSV 导出,深链一键跳回原片对应字幕段每段视频都给你留下一份资产',
   },
 ];
 

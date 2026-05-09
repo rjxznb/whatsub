@@ -46,7 +46,7 @@ export function Hero() {
 
         {/* tagline */}
         <p className="reveal reveal-delay-2 mx-auto mb-10 max-w-[640px] text-[clamp(16px,2vw,22px)] leading-[1.55] text-[--ink-soft]">
-          让一句字幕，慢慢成为你的英语。
+          让一句字幕，慢慢成为你的英语
         </p>
 
         {/* actions */}

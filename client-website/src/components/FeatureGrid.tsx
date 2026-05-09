@@ -5,25 +5,25 @@ import { useReveal } from '@/hooks/useReveal';
 const FEATURES = [
   {
     title: '词汇本',
-    body: '⭐ 收藏的生词跨视频汇总,CSV 导出,深链一键跳回原片对应字幕段。',
+    body: '⭐ 收藏的生词跨视频汇总,CSV 导出,深链一键跳回原片对应字幕段',
     img: '/screenshots/feature-vocab.svg',
     num: '01',
   },
   {
     title: '字幕导出',
-    body: '英文 / 中文 / 双语 SRT,或烧录进 mp4 三档画质。也支持都不勾字幕直接流复制原视频。',
+    body: '英文 / 中文 / 双语 SRT,或烧录进 mp4 三档画质也支持都不勾字幕直接流复制原视频',
     img: '/screenshots/feature-export.svg',
     num: '02',
   },
   {
     title: '字幕编辑',
-    body: '行内文本和时间戳直接改、拖拽重排、加行删行。修一处错就完事。',
+    body: '行内文本和时间戳直接改、拖拽重排、加行删行修一处错就完事',
     img: '/screenshots/feature-edit.svg',
     num: '03',
   },
   {
     title: '黄底高亮 + IPA',
-    body: '重点短语黄底标线、IPA 音标、TTS 一键朗读。每一句都能拆开学。',
+    body: '重点短语黄底标线、IPA 音标、TTS 一键朗读每一句都能拆开学',
     img: '/screenshots/feature-highlight.svg',
     num: '04',
   },
@@ -42,10 +42,10 @@ export function FeatureGrid() {
           className="reveal mb-4 max-w-[900px] font-display font-bold leading-[1.05] tracking-[-0.01em] text-ink"
           style={{ fontSize: 'clamp(40px, 6vw, 72px)' }}
         >
-          比<span className="text-accent">「字幕翻译工具」</span>多走了几步路。
+          比<span className="text-accent">「字幕翻译工具」</span>多走了几步路
         </h2>
         <p className="reveal reveal-delay-1 mb-12 max-w-[600px] text-base leading-[1.6] text-[--ink-soft]">
-          下面这些不是核心功能,是用了之后再也回不去的小事。
+          下面这些不是核心功能,是用了之后再也回不去的小事
         </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {FEATURES.map((f, i) => (

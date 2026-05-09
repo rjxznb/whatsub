@@ -17,7 +17,7 @@ export function Pricing() {
           className="reveal mb-14 max-w-[900px] font-display font-bold leading-[1.05] tracking-[-0.01em] text-ink"
           style={{ fontSize: 'clamp(40px, 6vw, 72px)' }}
         >
-          一份授权,<span className="text-accent">3 台设备</span>。
+          一份授权,<span className="text-accent">3 台设备</span>
         </h2>
 
         <div

@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Self-hosted Caveat — same files used by the desktop app's welcome intro.
+   Kept self-hosted (not Google Fonts) because Google Fonts is occasionally
+   throttled in mainland China and the desktop app already has these
+   binary files vetted. */
+@font-face {
+  font-family: 'Caveat';
+  src: url('/fonts/Caveat-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Caveat';
+  src: url('/fonts/Caveat-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-display: block;
+}
+
+:root {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-soft: #0a0a0c;
+  --bg-elev: #141418;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+  --ink: #ffffff;
+  --ink-soft: rgba(255, 255, 255, 0.72);
+  --ink-muted: rgba(255, 255, 255, 0.48);
+  --ink-faint: rgba(255, 255, 255, 0.30);
+  --accent: #3B9BFF;
+  --accent-glow: rgba(59, 155, 255, 0.35);
+  --amber: #FCD34D;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse at center top, rgba(40, 40, 50, 0.35) 0%, rgba(0, 0, 0, 1) 70%),
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0);
+  background-size: auto, 32px 32px;
+  background-attachment: fixed, fixed;
+  min-height: 100vh;
+}
+
+/* Scroll-reveal — opacity + translateY on .reveal, removed by useReveal hook. */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 600ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal-delay-1 { transition-delay: 80ms; }
+.reveal-delay-2 { transition-delay: 160ms; }
+.reveal-delay-3 { transition-delay: 240ms; }
+.reveal-delay-4 { transition-delay: 320ms; }
+
+/* Smooth-scroll for in-page anchors. */
+html { scroll-behavior: smooth; }
+
+/* Selection color matches accent. */
+::selection {
+  background: var(--accent);
+  color: #000;
+}

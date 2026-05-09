@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import pg from 'pg';
@@ -15,6 +16,22 @@ import { downloadRoutes, latestRoute } from './routes/download.js';
  */
 export function buildApp(db: Database, adminToken: string | undefined) {
   const app = new Hono();
+
+  // CORS on every /api/* route. The Tauri client's webview uses
+  // http://localhost:1420 in dev (Vite) and a `tauri://` scheme in
+  // prod, both of which trigger browser CORS preflights for the cross-
+  // origin POST to whatsub.eversay.cc/api/license/activate. The website
+  // also fetches /api/license/latest. Auth is the license key itself or
+  // a bearer token, not the origin — so a wildcard `*` is fine.
+  app.use(
+    '/api/*',
+    cors({
+      origin: '*',
+      allowMethods: ['GET', 'POST', 'OPTIONS'],
+      allowHeaders: ['Content-Type', 'Authorization'],
+      maxAge: 86400,
+    }),
+  );
 
   // / → /admin/ for the convenience case (admin opens the bare URL)
   app.get('/', (c) => c.redirect('/admin/', 302));

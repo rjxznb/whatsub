@@ -56,4 +56,34 @@ describe('buildApp routing', () => {
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toMatch(/\/admin\/?$/);
   });
+
+  it('handles CORS preflight on /api/activate', async () => {
+    // Browser sends OPTIONS preflight before cross-origin POST. The
+    // Tauri dev webview at http://localhost:1420 hits this path; the
+    // backend MUST return Access-Control-Allow-Origin or fetch fails.
+    const app = makeApp();
+    const res = await app.request('/api/activate', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:1420',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type',
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    expect(res.headers.get('access-control-allow-methods')).toMatch(/POST/);
+  });
+
+  it('attaches CORS header on the actual POST response', async () => {
+    const app = makeApp();
+    const res = await app.request('/api/activate', {
+      method: 'POST',
+      headers: { Origin: 'http://localhost:1420', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    // 400 (bad_request — body missing fields), with CORS header
+    expect(res.status).toBe(400);
+    expect(res.headers.get('access-control-allow-origin')).toBe('*');
+  });
 });

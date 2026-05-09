@@ -142,9 +142,13 @@ Shared with enghub via:
 
 - **`apk add tini` fails on `--no-cache` builds from mainland China** because Alpine's default mirror (`dl-cdn.alpinelinux.org`) is intermittently unreachable. Workaround: edit Dockerfile to use Aliyun's mirror: `RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories && apk add --no-cache tini`. We haven't applied this in the source — only do so if you need `--no-cache` builds.
 
+- **`docker.io` itself is intermittently blocked from mainland China.** If you do `docker builder prune -af` (which deletes cached base images) and your next build can't fetch `node:20-alpine`, pull through a mirror first: `docker pull docker.m.daocloud.io/library/node:20-alpine && docker tag docker.m.daocloud.io/library/node:20-alpine node:20-alpine`. Then build normally. **Lesson**: don't prune build cache without first ensuring you can re-fetch base images.
+
 - **Hot-patch via `docker cp`**: if you need to push a static-file change without rebuilding the image (e.g., admin SPA tweak): `scp file root@server:/tmp/ && ssh root@server "docker cp /tmp/file whatsub-license:/app/public/admin/index.html"`. Lost on next `docker compose up`, so **also** rebuild + commit the image properly.
 
 - **`pnpm-lock.yaml` lockfile-version 9.0** requires pnpm v9+. The Dockerfile installs `pnpm@9` explicitly via npm + Taobao registry; do NOT switch to corepack (corepack tries to resolve pnpm version from npmjs at build time, which is GFW-throttled).
+
+- **`pg` returns BIGINT as STRING by default.** Caused NaN dates in the admin SPA. Fixed once globally in `src/lib/db.ts` via `pg.types.setTypeParser(20, (val) => Number(val))` — covers every BIGINT column (timestamps + BIGSERIAL ids). Safe because none of our BIGINTs approach 2^53.
 
 - **`pg-mem 3.x` does NOT enforce FK constraints** even when the schema declares them. UNIQUE works. Tests should not assume FK enforcement; rely on real Postgres in deploy.
 

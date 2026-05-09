@@ -1,6 +1,8 @@
 # whatSub Marketing Landing Page — Implementation Plan
 
-> **Status (2026-05-09): IN PROGRESS.** Plan A (license backend → Aliyun) finished + deployed; this Plan B builds the marketing site that lives at `https://whatsub.eversay.cc/` (currently a 1-section placeholder).
+> **Status (2026-05-09): EXECUTED + LIVE.** All 5 tasks (PB1-PB5) shipped. Site at `https://whatsub.eversay.cc/` renders 9-section Next.js page. SHAs in feat/whatsub-marketing-landing: 276704b (PB1) → aac1016 (PB2) → bd1401c (PB3) → 521eb4d (PB4) → deploy.
+
+> **Deploy gotcha discovered (fix the plan for next time):** the documented atomic-mv-rename approach breaks the docker bind mount. enghub's nginx container has `/data/whatsub-web` bind-mounted at startup; `mv /data/whatsub-web /data/whatsub-web.old` redirects the host path but the container kernel keeps pointing at the old inode → nginx serves stale files. **Fix**: either (a) extract files in-place (`rm -rf /data/whatsub-web/*; tar xzf $tar -C /data/whatsub-web/`) which keeps the inode stable, OR (b) do the mv-rename then `docker compose -f /opt/enghub/docker-compose.yml restart nginx` to force the container to re-resolve the bind mount. Approach (a) is preferred — no nginx downtime, no restart needed. This plan file's §5 procedure should be updated with (a) before any next deploy.
 
 **Goal:** Build the 9-section Next.js 14 static-export marketing site spec'd in `docs/superpowers/specs/2026-05-09-whatsub-landing-page-design.md` §3-§5, deploy it to `/data/whatsub-web/` on the Eversay Aliyun ECS, replacing the temporary placeholder hero.
 

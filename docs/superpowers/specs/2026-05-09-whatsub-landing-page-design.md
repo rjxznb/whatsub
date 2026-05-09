@@ -5,7 +5,11 @@
 - **Status**: Draft → awaiting review (revised after Aliyun infra context)
 - **Scope**: Marketing/download website for the whatSub desktop app **AND** consolidation of the existing CF-Workers license backend onto the same domain. Both deploy to the existing Eversay Aliyun ECS at `47.93.87.206`, exposed at `https://whatsub.eversay.cc`.
 
-> **Note (post-implementation, 2026-05-09):** the license-backend half of this spec has been built and deployed. The code now lives in a separate repo at **[`github.com/rjxznb/whatsub-license`](https://github.com/rjxznb/whatsub-license)** — references in this doc to `whatsub-license/` paths are historical (during implementation those files lived in this repo on the `feat/whatsub-license-aliyun-migration` branch; they were extracted to the standalone repo via `git subtree split` to keep concerns isolated). The marketing-landing-page half (sections 4 + 5) is still Plan B / not yet built.
+> **Note (post-implementation, 2026-05-09):** BOTH halves of this spec have been built, deployed, and extracted to standalone repos:
+> - License backend: **[`github.com/rjxznb/whatsub-license`](https://github.com/rjxznb/whatsub-license)** (private)
+> - Marketing landing page: **[`github.com/rjxznb/whatsub-website`](https://github.com/rjxznb/whatsub-website)** (public)
+>
+> References in this doc to `whatsub-license/` and `client-website/` paths are historical — those directories were extracted via `git subtree split` and removed from this repo. Future work on either codebase happens in its standalone repo.
 
 ---
 

@@ -4,7 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React + Typescript</title>
+    <title>whatsub</title>
+    <!-- Paint the document body black BEFORE the bundle loads, so the
+         brief moment between HTML parse and React first-paint isn't
+         flash-white. Both LicenseGate and WelcomeIntro paint over this
+         with their own dark backgrounds, so the user sees continuous
+         black through the entire launch sequence. -->
+    <style>
+      html, body { background: #000; margin: 0; }
+      #root { min-height: 100vh; }
+    </style>
   </head>
 
   <body>

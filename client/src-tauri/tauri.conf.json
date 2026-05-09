@@ -15,7 +15,8 @@
       {
         "title": "whatsub",
         "width": 1280,
-        "height": 800
+        "height": 800,
+        "backgroundColor": "#000000"
       }
     ],
     "security": {

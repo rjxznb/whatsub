@@ -72,12 +72,14 @@ export function LicenseGate({ children }: { children: ReactNode }) {
  * literally don't mount until onDone fires):
  *
  *   t=0       overlay mounts on pure black
- *   t=200    ring stroke starts drawing clockwise (800ms)
- *   t=1000   ring complete, halo pulse + check stroke starts (450ms)
+ *   t=200    ring stroke starts drawing clockwise (800ms);
+ *            activate.mp3 chime fires here (synced with the ring's
+ *            visible onset rather than t=0 where the ring is still
+ *            invisible — chime felt "ahead" of the visual otherwise)
+ *   t=1000   ring complete, check stroke starts (450ms)
  *   t=1450   check complete
  *   t=1500   "已激活" text fades up (650ms)
- *   t=2150   "ACTIVATED" subtitle fades up (650ms, staggered)
- *   t=2800   settle/hold (full composition visible)
+ *   t=2150   settle/hold (full composition visible)
  *   t=2800   content begins fading out (750ms)
  *   t=3550   onDone() → overlay unmounts → WelcomeIntro mounts
  *
@@ -97,9 +99,31 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
   const [stage, setStage] = useState<'in' | 'out'>('in');
 
   useEffect(() => {
+    // Background audio for the seal ceremony. Constructed at mount but
+    // play() is delayed ~200ms so the chime starts at the same beat the
+    // ring stroke visibly begins drawing (ring has a 200ms CSS delay too)
+    // — firing immediately at t=0 made the chime feel "ahead" of the
+    // visual since the ring is still invisible for the first ~200ms.
+    // catch() swallows browser autoplay rejections (rare in Tauri's
+    // WebView2 / WKWebView for local content; we'd see it in dev console
+    // if it happened).
+    const audio = new Audio('/audio/activate.mp3');
+    audio.preload = 'auto';
+    const tPlay = setTimeout(() => {
+      void audio.play().catch((err) => {
+        console.warn('CelebrationOverlay activate audio play blocked:', err);
+      });
+    }, 200);
+
     const tFade = setTimeout(() => setStage('out'), 2800);
     const tDone = setTimeout(onDone, 3550);
     return () => {
+      // Stop the chime if the overlay unmounts mid-play (e.g. dev-mode
+      // remount under StrictMode), otherwise it'd keep ringing as an
+      // orphaned element.
+      clearTimeout(tPlay);
+      audio.pause();
+      audio.currentTime = 0;
       clearTimeout(tFade);
       clearTimeout(tDone);
     };
@@ -178,17 +202,6 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
         >
           已激活
         </h1>
-
-        {/* "ACTIVATED" — smaller, more spaced, deeper amber/40 — the
-            kind of micro-label you'd see stamped under a notary seal.
-            The serif italic of system-ui is intentional: pairs the
-            blocky Chinese above with a typographic accent below. */}
-        <div
-          className="mt-3 text-[11px] font-serif italic text-amber-200/35 seal-sub"
-          style={{ letterSpacing: '0.5em', paddingLeft: '0.5em' }}
-        >
-          ACTIVATED
-        </div>
       </div>
 
       {/* All keyframes inline — no Tailwind config thrash for a one-shot
@@ -214,10 +227,6 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
         .seal-title {
           opacity: 0;
           animation: seal-fade-up 650ms 1500ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-        .seal-sub {
-          opacity: 0;
-          animation: seal-fade-up 650ms 2150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
       `}</style>
     </div>

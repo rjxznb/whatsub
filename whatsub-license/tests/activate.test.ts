@@ -54,3 +54,28 @@ describe('POST /api/activate — happy path', () => {
     expect(a?.deactivated_at).toBeNull();
   });
 });
+
+describe('POST /api/activate — idempotency', () => {
+  it('same key+fingerprint twice does NOT consume a 2nd slot', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'WHATSUB-BBBB-BBBB-BBBB-BBBB',
+      max_devices: 1, // tight: only 1 slot
+      created_at: 1, buyer_note: null, email: null,
+    });
+
+    const r1 = await activate(app, {
+      key: 'WHATSUB-BBBB-BBBB-BBBB-BBBB', fingerprint: FP, deviceLabel: 'first',
+    });
+    expect(r1.status).toBe(200);
+
+    const r2 = await activate(app, {
+      key: 'WHATSUB-BBBB-BBBB-BBBB-BBBB', fingerprint: FP, deviceLabel: 'reinstalled',
+    });
+    expect(r2.status).toBe(200);
+    expect(((await r2.json()) as any).status).toBe('active');
+
+    const active = await db.listActiveActivations('WHATSUB-BBBB-BBBB-BBBB-BBBB');
+    expect(active).toHaveLength(1); // not 2 — same fingerprint
+  });
+});

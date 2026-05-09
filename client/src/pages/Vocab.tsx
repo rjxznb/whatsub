@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check } from "lucide-react";
 import { NoteBubble } from "../components/NoteBubble";
 import { NoteBadge } from "../components/NoteBadge";
+import { VocabTour } from "../components/VocabTour";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useVocabulary } from "../store/vocab";
@@ -93,6 +94,54 @@ export function Vocab() {
     window.localStorage.setItem("vocabSort", sort);
   }, [sort]);
 
+  // First-visit tour: two-step guided onboarding.
+  //   "card"   — dim + highlight first card, "双击我试试 ✨"
+  //   "bubble" — dim + highlight the note bubble that just opened,
+  //              "点击气泡开始记笔记 ✏️"
+  //   null     — tour off (already-seen-it state, persisted in
+  //              localStorage)
+  // Even when entries.length === 0 we still run the tour by dropping a
+  // demo card into the empty-state slot, so a fresh user can experience
+  // the note interaction before saving anything real.
+  type TourStep = "card" | "bubble" | null;
+  const [tourStep, setTourStep] = useState<TourStep>(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("vocabTourSeen") ? null : "card";
+  });
+  function dismissTour() {
+    setTourStep(null);
+    window.localStorage.setItem("vocabTourSeen", "1");
+  }
+  function advanceTour() {
+    setTourStep("bubble");
+  }
+
+  // Demo card's open-editor state. Mirrors the real VocabCard's editing
+  // pattern (capturing the rect at open time so the fold-back animation
+  // has a stable target) but the on-save callback is a no-op — we don't
+  // want the demo's content to land in the user's actual vocab.json.
+  const [demoEditing, setDemoEditing] = useState<{
+    rect: { left: number; top: number; width: number; height: number };
+  } | null>(null);
+
+  // Demo-card dismissal: once the user clicks 🗑 on the demo card we
+  // remember it across sessions and revert to the plain empty-state
+  // text. Without this flag, removing the demo card would only hide
+  // it for the current visit and it would re-spawn on the next launch
+  // — feels like a bug rather than the user's intent.
+  const [demoDismissed, setDemoDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return !!window.localStorage.getItem("vocabDemoDismissed");
+  });
+  function dismissDemo() {
+    setDemoDismissed(true);
+    window.localStorage.setItem("vocabDemoDismissed", "1");
+    // If the tour was anchored on the now-gone demo card, end it too.
+    // Otherwise its cutout would freeze on a stale rect over an empty
+    // page — looks broken.
+    if (tourStep) dismissTour();
+  }
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return entries;
@@ -122,14 +171,39 @@ export function Vocab() {
 
   let body: ReactNode;
   if (entries.length === 0) {
-    body = (
-      <div className="text-center text-zinc-500 mt-32 text-sm leading-relaxed px-6">
-        <Star className="mx-auto h-10 w-10 text-zinc-700 mb-3" />
-        还没收藏任何短语。
-        <br />
-        打开任意视频的「重点短语」标签，点击 ⭐ 即可保存到这里。
-      </div>
-    );
+    if (!demoDismissed) {
+      // Demo card persists across the whole empty state (not just the
+      // tour) so the tour dismissing mid-bubble doesn't yank the card
+      // out from under an open bubble. The card behaves like a real
+      // VocabCard — including the 🗑 button — so users who don't want
+      // it can remove it at any point.
+      body = (
+        <div className="p-6 pr-14">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-3">
+            <DemoCard
+              onDoubleClick={(rect) => {
+                setDemoEditing({ rect });
+              }}
+              onSpeak={() => speak("save you money")}
+              onRemove={dismissDemo}
+            />
+          </div>
+          <div className="text-center text-zinc-500 mt-12 text-xs leading-relaxed px-6">
+            <Star className="inline-block h-3.5 w-3.5 text-zinc-600 mr-1 mb-0.5" />
+            上面是一张演示卡片，可以双击试试笔记功能、或者点 🗑 移除。真正收藏短语时，打开任意视频的「重点短语」标签，点击 ⭐ 就会出现在这里。
+          </div>
+        </div>
+      );
+    } else {
+      body = (
+        <div className="text-center text-zinc-500 mt-32 text-sm leading-relaxed px-6">
+          <Star className="mx-auto h-10 w-10 text-zinc-700 mb-3" />
+          还没收藏任何短语。
+          <br />
+          打开任意视频的「重点短语」标签，点击 ⭐ 即可保存到这里。
+        </div>
+      );
+    }
   } else if (filtered.length === 0) {
     body = (
       <div className="text-center text-zinc-500 mt-32 text-sm">
@@ -281,6 +355,30 @@ export function Vocab() {
         </button>
       </header>
       {body}
+
+      {/* First-visit tour. With a demo card injected into the empty-
+          state slot, the tour can run regardless of entries.length. */}
+      {tourStep && (
+        <VocabTour
+          step={tourStep}
+          onAdvance={advanceTour}
+          onDismiss={dismissTour}
+        />
+      )}
+
+      {/* Demo bubble — opened only by a double-click on the demo card.
+          Renders even after the tour dismisses so the user can finish
+          the demo if they want; closes via Done/Cancel/backdrop like a
+          real bubble, but on close it just unmounts (no save to the
+          real store). */}
+      {demoEditing && (
+        <NoteBubble
+          initialNote=""
+          cardRect={demoEditing.rect}
+          onDone={() => setDemoEditing(null)}
+          onCancel={() => setDemoEditing(null)}
+        />
+      )}
     </div>
   );
 }
@@ -318,6 +416,9 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
   return (
     <div
       ref={cardRef}
+      // data-vocab-card: VocabTour queries this attribute to find the
+      // first card and anchor its dim-cutout + tooltip to it.
+      data-vocab-card="true"
       onDoubleClick={(ev) => {
         // Prevent double-click from selecting text in the card or
         // navigating via the <Link>'s text. Open the editor instead.
@@ -399,6 +500,86 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
           onCancel={() => setEditing(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Static demo card shown in the empty-state slot. Visually + behaviorally
+ *  identical to a real VocabCard so the tour's "double-click me" lesson
+ *  generalises and the user can practice all the same gestures (speak,
+ *  delete, double-click → notes) on hard-coded sample content. The
+ *  bubble's save callback discards rather than writes to vocab.json,
+ *  and the delete button just hides the card via a localStorage flag. */
+function DemoCard({
+  onDoubleClick,
+  onSpeak,
+  onRemove,
+}: {
+  onDoubleClick: (rect: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  }) => void;
+  onSpeak: () => void;
+  onRemove: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  function handleDoubleClick(ev: React.MouseEvent) {
+    ev.preventDefault();
+    if (!ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    onDoubleClick({
+      left: r.left,
+      top: r.top,
+      width: r.width,
+      height: r.height,
+    });
+  }
+  return (
+    <div
+      ref={ref}
+      data-vocab-card="true"
+      onDoubleClick={handleDoubleClick}
+      className={
+        "relative border border-zinc-800 rounded-md p-3 bg-zinc-900/40 group cursor-default " +
+        "transition-all duration-150 ease-out " +
+        "hover:border-amber-400/40 hover:bg-zinc-900/70 " +
+        "hover:shadow-[0_0_28px_-6px_rgba(251,191,36,0.35)] " +
+        "active:scale-[0.98] active:bg-zinc-900/90 active:shadow-[0_0_18px_-8px_rgba(251,191,36,0.25)]"
+      }
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-amber-300 font-semibold text-sm">
+          save you money
+        </span>
+        <span className="font-ipa text-zinc-300 text-sm">
+          /seɪv juː ˈmʌni/
+        </span>
+        <button
+          type="button"
+          onClick={onSpeak}
+          title="朗读"
+          className="ml-auto flex h-6 w-6 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-blue-300 transition-colors"
+        >
+          <Volume2 className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          title="移除演示卡片"
+          className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-red-900/30 hover:text-red-300 transition-colors opacity-0 group-hover:opacity-100"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="text-zinc-100 text-xs mt-1.5">省钱</div>
+      <div className="text-zinc-400 text-xs mt-1 italic">
+        「Knowing your rights can save you money.」
+      </div>
+      <div className="text-zinc-500 text-[11px] mt-2 truncate">
+        来自：示例视频（演示卡片）
+      </div>
     </div>
   );
 }

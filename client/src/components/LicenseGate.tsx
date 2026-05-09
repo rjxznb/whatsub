@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import confetti from 'canvas-confetti';
-import { Loader2, HandHeart, ShieldAlert, Cloud } from 'lucide-react';
+import { Loader2, ShieldAlert, Cloud } from 'lucide-react';
 import { useLicense, type ActivateError } from '../store/license';
 
 /**
@@ -57,103 +56,172 @@ export function LicenseGate({ children }: { children: ReactNode }) {
 }
 
 /**
- * Full-screen overlay that fires confetti from both bottom corners,
- * shows a brief "激活成功" message, then auto-dismisses. Inspired by
- * Typora's license-activation celebration.
+ * Full-screen overlay that plays a restrained "seal of authenticity"
+ * animation when license activation succeeds, then dissolves to black so
+ * WelcomeIntro can take over with a clean handoff (no overlap, no visual
+ * seam since both sides paint pure #000).
  *
- * Timing:
- *   t=0ms     mount, fire first burst (left + right simultaneous)
- *   t=300ms   second burst (denser, more colors)
- *   t=900ms   third smaller burst (ride-out)
- *   t=2500ms  call onDone() → unmount, children render → WelcomeIntro
+ * The previous version fired multicolored confetti from both bottom
+ * corners — visually loud, "casino" tone, didn't match the rest of the
+ * app's understated aesthetic. The new version draws a thin warm-gold
+ * ring + checkmark like a wax seal, with letter-spaced typography below
+ * — reads as "your authenticity is verified" rather than "you won a
+ * sweepstakes".
  *
- * Why three bursts: a single fire-and-forget burst peaks for ~1s then
- * dies. Three staggered bursts give a sustained 2-second cascade that
- * matches the visual weight of "this is a meaningful moment".
+ * Timeline (single pass, no overlap with WelcomeIntro — children
+ * literally don't mount until onDone fires):
+ *
+ *   t=0       overlay mounts on pure black
+ *   t=200    ring stroke starts drawing clockwise (800ms)
+ *   t=1000   ring complete, halo pulse + check stroke starts (450ms)
+ *   t=1450   check complete
+ *   t=1500   "已激活" text fades up (650ms)
+ *   t=2150   "ACTIVATED" subtitle fades up (650ms, staggered)
+ *   t=2800   settle/hold (full composition visible)
+ *   t=2800   content begins fading out (750ms)
+ *   t=3550   onDone() → overlay unmounts → WelcomeIntro mounts
+ *
+ * Total ~3.55s. Premium pacing — long enough for the user to register
+ * "yes this worked", short enough that they don't drum fingers waiting.
+ *
+ * The 750ms content fade-out IS the transition the user asked for. The
+ * overlay's bg stays #000 throughout, and WelcomeIntro's bg is also
+ * #000, so the unmount/mount swap at t=3550ms is invisible — the user
+ * sees a held black screen, then the cursor of the brand intro appears.
  */
 function CelebrationOverlay({ onDone }: { onDone: () => void }) {
+  // Two-stage local state: "in" (drawing + holding the seal) → "out"
+  // (content opacity fading, bg still black). We toggle classes off this
+  // so React's render is the only thing driving the transition; CSS
+  // does the actual work.
+  const [stage, setStage] = useState<'in' | 'out'>('in');
+
   useEffect(() => {
-    fireConfetti();
-    const t1 = setTimeout(fireConfetti, 300);
-    const t2 = setTimeout(() => fireConfetti(0.7), 900);
-    const dismiss = setTimeout(onDone, 2500);
+    const tFade = setTimeout(() => setStage('out'), 2800);
+    const tDone = setTimeout(onDone, 3550);
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(dismiss);
+      clearTimeout(tFade);
+      clearTimeout(tDone);
     };
   }, [onDone]);
 
+  // Warm "champagne gold" — restrained, reads as authority/authenticity
+  // without the gaudy yellow of pure #FFD700. Slightly desaturated so it
+  // doesn't fight the matte-black background.
+  const GOLD = '#d6a55a';
+
   return (
-    <div className="fixed inset-0 z-[1000] bg-zinc-950 flex items-center justify-center overflow-hidden">
-      <div className="text-center animate-fade-in-scale">
-        <div className="text-6xl mb-4">🎉</div>
-        <h1 className="text-2xl font-semibold text-emerald-400 tracking-wide">
-          激活成功
-        </h1>
-        <p className="text-sm text-zinc-400 mt-3">
-          欢迎使用 whatsub
-        </p>
-      </div>
-      {/* tiny inline animation for the message — Tailwind doesn't ship
-          a "scale-fade-in" by default and we don't want to thread a
-          framer-motion dep just for one transition. */}
-      <style>{`
-        @keyframes fadeInScale {
-          from { opacity: 0; transform: scale(0.85); }
-          to   { opacity: 1; transform: scale(1); }
+    <div className="fixed inset-0 z-[1000] bg-black flex items-center justify-center overflow-hidden">
+      <div
+        className={
+          'text-center transition-opacity duration-[750ms] ease-out ' +
+          (stage === 'out' ? 'opacity-0' : 'opacity-100')
         }
-        .animate-fade-in-scale {
-          animation: fadeInScale 500ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      >
+        {/* Seal: thin gold ring + checkmark, drawn with stroke-dashoffset.
+            96px is large enough to read as a "stamp" without feeling
+            theatrical. The radial halo behind it is intentionally subtle
+            (15% alpha gold) so the eye registers warmth rather than
+            "glowing element". */}
+        <svg
+          className="mx-auto mb-7"
+          width="112"
+          height="112"
+          viewBox="0 0 112 112"
+        >
+          <defs>
+            <radialGradient id="seal-halo" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="rgba(214, 165, 90, 0.18)" />
+              <stop offset="60%" stopColor="rgba(214, 165, 90, 0.05)" />
+              <stop offset="100%" stopColor="rgba(214, 165, 90, 0)" />
+            </radialGradient>
+          </defs>
+          <circle cx="56" cy="56" r="54" fill="url(#seal-halo)" />
+          {/* Outer ring — circumference 2π·42 ≈ 263.9. We draw clockwise
+              from top by rotating the element so the dashoffset animation
+              starts at 12 o'clock (where the eye anchors). */}
+          <circle
+            cx="56"
+            cy="56"
+            r="42"
+            fill="none"
+            stroke={GOLD}
+            strokeWidth="1.25"
+            strokeDasharray="263.9"
+            strokeDashoffset="263.9"
+            transform="rotate(-90 56 56)"
+            className="seal-ring"
+          />
+          {/* Checkmark — three-point polyline, length ≈ 38. Drawn after
+              ring finishes. strokeLinecap=round so the tips look hand-
+              engraved rather than blocky. */}
+          <path
+            d="M 38 57 L 51 70 L 76 43"
+            fill="none"
+            stroke={GOLD}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="50"
+            strokeDashoffset="50"
+            className="seal-check"
+          />
+        </svg>
+
+        {/* "已激活" — large, wide letter-spacing for "engraved plate"
+            feel. font-medium (not bold) keeps it restrained. The opacity
+            animation starts at 1500ms so the text appears AFTER the
+            check completes — never compete for attention with the seal. */}
+        <h1
+          className="text-[26px] font-medium text-amber-200/85 seal-title"
+          style={{ letterSpacing: '0.45em', paddingLeft: '0.45em' }}
+        >
+          已激活
+        </h1>
+
+        {/* "ACTIVATED" — smaller, more spaced, deeper amber/40 — the
+            kind of micro-label you'd see stamped under a notary seal.
+            The serif italic of system-ui is intentional: pairs the
+            blocky Chinese above with a typographic accent below. */}
+        <div
+          className="mt-3 text-[11px] font-serif italic text-amber-200/35 seal-sub"
+          style={{ letterSpacing: '0.5em', paddingLeft: '0.5em' }}
+        >
+          ACTIVATED
+        </div>
+      </div>
+
+      {/* All keyframes inline — no Tailwind config thrash for a one-shot
+          component. ease-out for the strokes (decelerates into place),
+          ease-out for the text-fade so the translateY settles smoothly. */}
+      <style>{`
+        @keyframes seal-draw-ring {
+          to { stroke-dashoffset: 0; }
+        }
+        @keyframes seal-draw-check {
+          to { stroke-dashoffset: 0; }
+        }
+        @keyframes seal-fade-up {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        .seal-ring {
+          animation: seal-draw-ring 800ms 200ms cubic-bezier(0.32, 0.72, 0.32, 1) forwards;
+        }
+        .seal-check {
+          animation: seal-draw-check 450ms 1000ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+        .seal-title {
+          opacity: 0;
+          animation: seal-fade-up 650ms 1500ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        .seal-sub {
+          opacity: 0;
+          animation: seal-fade-up 650ms 2150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
         }
       `}</style>
     </div>
   );
-}
-
-/**
- * Fire two confetti volleys, one from each bottom corner, shooting
- * upward + inward. The `intensity` arg scales particle count for the
- * tail bursts (so the third burst is smaller than the first two).
- *
- * Color palette is intentionally festive — blue / emerald / amber /
- * rose / violet — matching the app's accent colors with extra warm
- * shades thrown in for the "fireworks" feel.
- */
-function fireConfetti(intensity = 1.0): void {
-  const colors = [
-    '#3b82f6', // blue
-    '#10b981', // emerald
-    '#f59e0b', // amber
-    '#ef4444', // rose
-    '#8b5cf6', // violet
-    '#ec4899', // pink
-    '#fbbf24', // gold
-  ];
-
-  // Left side: shooting up-right (angle 60° from horizontal)
-  confetti({
-    particleCount: Math.round(80 * intensity),
-    angle: 60,
-    spread: 70,
-    origin: { x: 0, y: 0.7 },
-    colors,
-    startVelocity: 55,
-    gravity: 1.0,
-    ticks: 200,
-  });
-
-  // Right side: mirror — shooting up-left (angle 120°)
-  confetti({
-    particleCount: Math.round(80 * intensity),
-    angle: 120,
-    spread: 70,
-    origin: { x: 1, y: 0.7 },
-    colors,
-    startVelocity: 55,
-    gravity: 1.0,
-    ticks: 200,
-  });
 }
 
 function ActivationScreen() {
@@ -169,13 +237,6 @@ function ActivationScreen() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          {/* HandHeart icon — a hand offering a heart, more serve-the-user-
-              warmly than the original lock-and-key glyph. Warm amber→rose
-              gradient bubble with a soft glow shadow, contrasting the rest
-              of the dark UI. */}
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-br from-amber-300/30 via-rose-400/20 to-pink-400/15 text-amber-300 mb-4 shadow-[0_0_30px_rgba(251,191,36,0.2)]">
-            <HandHeart className="w-7 h-7" />
-          </div>
           <p className="text-zinc-400 text-sm mb-1">嘿～欢迎来到</p>
           {/* Brand name in Caveat handwriting font (same as the welcome
               animation) — "what" white, "Sub" blue, matching the intro's
@@ -186,7 +247,7 @@ function ActivationScreen() {
             <span className="text-blue-400">Sub</span>
           </div>
           <p className="text-sm text-zinc-400">
-            贴一下你的授权码，咱们就正式认识啦 ✨
+            贴一下你的授权码，就可以使用啦 ~
           </p>
         </div>
 

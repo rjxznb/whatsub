@@ -127,6 +127,16 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
           "prose-note focus:outline-none min-h-[200px] max-h-[50vh] overflow-y-auto px-3 py-2",
       },
     },
+    // onUpdate fires whenever the doc actually changes (typed character,
+    // paste, formatting toggle — but not arrow keys or selection). We
+    // use it as the implicit "user committed to editing" signal so a
+    // user who just starts typing in the half-transparent peek bubble
+    // gets promoted to the fully-opaque edit state without having to
+    // click first. setMode is idempotent against non-peek states so
+    // subsequent keystrokes don't churn this.
+    onUpdate: () => {
+      setMode((m) => (m === "peek" ? "edit" : m));
+    },
     immediatelyRender: false,
   });
 
@@ -295,10 +305,11 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
 
           <EditorContent editor={editor} />
 
-          {/* Tiny hint text in peek mode telling the user to click. */}
+          {/* Tiny hint text in peek mode telling the user to click or
+              just start typing. */}
           {mode === "peek" && (
             <div className="text-[11px] text-zinc-500 italic px-3 py-1.5 border-t border-zinc-800">
-              点击此气泡开始编辑笔记，{MOD}Enter 保存，Esc 取消
+              点击气泡或直接输入开始编辑，{MOD}Enter 保存，Esc 取消
             </div>
           )}
         </div>

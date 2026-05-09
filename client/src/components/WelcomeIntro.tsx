@@ -37,12 +37,22 @@ const BG_GRADIENT =
   "radial-gradient(ellipse at center, rgba(40,40,50,0.35) 0%, rgba(0,0,0,1) 70%)";
 
 // ---- Timeline (frames @ 30fps) ----
+// Cursor appears 2 frames after the startup-chime click in the audio
+// (click is at 0–0.04s ≈ frame 1.2; +2f puts cursor at frame 3 ≈ 100ms).
+// Pre-frame-3, the screen is fully black so the click reads as "the app
+// turning on", then the cursor materializes — feels like cause→effect.
+const PHASE_CURSOR_APPEAR = 3;
 const PHASE_HEY_START = 53;
 const PHASE_HEY_END = 75;
 const PHASE_WHAT_START = 105;
 const PHASE_WHAT_END = 119;
-const PHASE_SUB_START = 119;
-const PHASE_SUB_END = 133;
+// Beat between "t" landing and "'" punching in — same rationale as the qmark
+// gap below: without a beat the apostrophe blurs into the "t" event and reads
+// as one keystroke. 6 frames (~200ms) lets the eye register "what" before
+// the apostrophe pops in to form the contraction "what'".
+const PHASE_APOS_APPEAR = PHASE_WHAT_END + 6;
+const PHASE_SUB_START = 131;
+const PHASE_SUB_END = 145;
 // Beat between "b" landing and "?" punching in. Without this gap the two
 // appear on the same frame (Sub finishes typing → qmark renders) which
 // reads as a single event and makes the cursor jump right by width("b") +
@@ -50,13 +60,13 @@ const PHASE_SUB_END = 133;
 // register "Sub" + blinking cursor before "?" pops in and the cursor
 // shifts one character right — the natural typewriter rhythm.
 const PHASE_QMARK_APPEAR = PHASE_SUB_END + 8;
-const PHASE_HOLD_END = 173;
+const PHASE_HOLD_END = 185;
 // Fly = 30 frames (1.0s). Drives BOTH whatSub's translate-up + scale-down
 // AND hey's linear opacity/width fade — shorten this and both speed up
 // proportionally. easeOutExpo already front-loads the motion so most of
 // whatSub's visible travel completes in the first ~10 frames; the rest is
 // the asymptotic tail. 30 frames feels snappy without clipping the tail.
-const PHASE_FLY_END = 203;
+const PHASE_FLY_END = 215;
 // "Welcome to" drops in immediately when whatSub lands — physically simulated
 // fall + 3 visibly distinct rebounds (each smaller than the last). Total
 // drop+bounce duration is ~1.5s so the initial drop reads as weighted (not
@@ -64,18 +74,23 @@ const PHASE_FLY_END = 203;
 // Width grows in step with the FIRST impact so whatSub finishes shifting
 // right by the time Welcome stops bouncing visibly.
 const PHASE_DROP_PAUSE_END = PHASE_FLY_END;
-const PHASE_DROP_END = 248;
+const PHASE_DROP_END = 260;
 // Cards rise as the bounce settles for one continuous motion — they
 // start just before the bounce visually finishes.
 const PHASE_CARDS_START = PHASE_DROP_END - 10;
-const PHASE_CARDS_END = 278;
-const PHASE_IDLE = 283;
+const PHASE_CARDS_END = 290;
+const PHASE_IDLE = 295;
 
 // ---- Audio cue ----
 // Single startup chime, fires at frame 0 the instant the intro mounts.
 // Source file lives in client/public/audio/ and is served from the static
 // root, so the path is "/audio/<file>" (relative URL, no host prefix).
 const AUDIO_STARTUP: string = "/audio/startup_audio.mp3";
+// Single keystroke "click" sample fired when the apostrophe snaps in. The
+// startup chime above bakes in the typing sounds for "hey, what" + "Sub" +
+// "?" but doesn't have a click for the apostrophe (it was added later), so
+// we layer this one extra keystroke on top at PHASE_APOS_APPEAR.
+const AUDIO_APOS_KEY: string = "/audio/key_apos.mp3";
 
 // Final headline position — referenced by the welcome span layout. Kept as
 // exports purely so a future caller could echo them; FirstRunGate no longer
@@ -117,6 +132,10 @@ function computeCardsMaxW(vw: number): number {
 
 const HEY_TEXT = "hey, ";
 const WHAT_TEXT = "what";
+// Typographic apostrophe (U+2019), not the straight ASCII '. Caveat is a
+// cursive font and the curly form blends with the handwritten letterforms;
+// it's also the proper Unicode for English contractions like "what's".
+const APOS_TEXT = "’";
 const SUB_TEXT = "Sub";
 const WELCOME_TEXT = "Welcome to ";
 
@@ -259,6 +278,13 @@ export function WelcomeIntro({ children }: Props) {
   const [heyGhost, setHeyGhost] = useState<Ghost | null>(null);
   const qmarkMeasureRef = useRef<HTMLSpanElement>(null);
   const [qmarkGhost, setQmarkGhost] = useState<Ghost | null>(null);
+  // Apostrophe gets the same fade-in-place treatment as the bookends — its
+  // slot collapses during fly so what + Sub close back together, and a
+  // fixed-position ghost held at its pre-fly screen coordinates fades out
+  // visually. Final title therefore reads "Welcome to whatSub" (without
+  // the apostrophe), matching the post-fly look the user wanted.
+  const aposMeasureRef = useRef<HTMLSpanElement>(null);
+  const [aposGhost, setAposGhost] = useState<Ghost | null>(null);
   useEffect(() => {
     // Measure as late in hold as possible — we MUST capture after PHASE_SUB_END
     // (so the inline-flex content is the full "hey, whatSub?" and hey's
@@ -281,7 +307,8 @@ export function WelcomeIntro({ children }: Props) {
     };
     if (!heyGhost && heyMeasureRef.current) setHeyGhost(snap(heyMeasureRef.current));
     if (!qmarkGhost && qmarkMeasureRef.current) setQmarkGhost(snap(qmarkMeasureRef.current));
-  }, [frame, heyGhost, qmarkGhost]);
+    if (!aposGhost && aposMeasureRef.current) setAposGhost(snap(aposMeasureRef.current));
+  }, [frame, heyGhost, qmarkGhost, aposGhost]);
 
   const centerY = vp.h / 2;
   // Pre-fly headline size scales with viewport height (so the giant
@@ -342,6 +369,29 @@ export function WelcomeIntro({ children }: Props) {
     };
   }, []);
 
+  // Keystroke for the apostrophe. Triggers exactly once when the frame
+  // counter crosses PHASE_APOS_APPEAR. We schedule it via setTimeout from
+  // mount (rather than watching the frame state) so the audio fires on the
+  // wall-clock at the right moment — the RAF frame counter can drift a few
+  // ms under load and we don't want the click to lag visibly behind the
+  // glyph appearing. apostrophePlayedRef guards against StrictMode's
+  // double-mount in dev so the click doesn't double-trigger.
+  const apostrophePlayedRef = useRef(false);
+  useEffect(() => {
+    if (!AUDIO_APOS_KEY) return;
+    if (apostrophePlayedRef.current) return;
+    const delayMs = (PHASE_APOS_APPEAR / 30) * 1000;
+    const timer = setTimeout(() => {
+      apostrophePlayedRef.current = true;
+      const a = new Audio(AUDIO_APOS_KEY);
+      a.preload = "auto";
+      void a.play().catch((err) => {
+        console.warn("WelcomeIntro apostrophe key audio play blocked:", err);
+      });
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, []);
+
   // ---- Typing progress ----
   const heyChars =
     clamp01((frame - PHASE_HEY_START) / (PHASE_HEY_END - PHASE_HEY_START)) * HEY_TEXT.length;
@@ -350,6 +400,11 @@ export function WelcomeIntro({ children }: Props) {
   const whatChars =
     clamp01((frame - PHASE_WHAT_START) / (PHASE_WHAT_END - PHASE_WHAT_START)) * WHAT_TEXT.length;
   const whatTyped = sliceTo(WHAT_TEXT, Math.floor(whatChars));
+
+  // Apostrophe between "what" and "Sub". Single character — snap-in like the
+  // "?" rather than a typing window, the typewriter rhythm comes from the
+  // 6-frame beat after "t" lands (PHASE_APOS_APPEAR).
+  const aposTyped = frame >= PHASE_APOS_APPEAR ? APOS_TEXT : "";
 
   const subChars =
     clamp01((frame - PHASE_SUB_START) / (PHASE_SUB_END - PHASE_SUB_START)) * SUB_TEXT.length;
@@ -387,6 +442,13 @@ export function WelcomeIntro({ children }: Props) {
   // line to the title slot. Previous easeOutExpo gave a "thrown object"
   // feel that front-loaded the motion; user wanted plainer/uniform.
   const flyT = clamp01((frame - PHASE_HOLD_END) / (PHASE_FLY_END - PHASE_HOLD_END));
+  // True only while Sub is geometrically transitioning between the giant
+  // centered headline and the static title slot — i.e. the fly window AND
+  // the bookend-fade window. Outside this window Sub sits still in either
+  // its pre-fly or post-fly position and is safe to hover. Using a frame
+  // window rather than `flyT > 0` because flyT clamps to 1 at fly end and
+  // never returns to 0, which would leave hover permanently disabled.
+  const isFlying = frame >= PHASE_HOLD_END && frame < PHASE_FLY_END;
   const animTop = lerp(centerY, TITLE_CENTER_TOP_PX, flyT);
   const animFontSize = lerp(headlinePx, finalTitlePx, flyT);
   const animCursorPx = lerp(cursorPx, Math.round(finalTitlePx * 0.85), flyT);
@@ -467,6 +529,7 @@ export function WelcomeIntro({ children }: Props) {
   const heySlotPx = heyGhost ? heyGhost.width : 0;
   const heySlotMarginPx = heyGhost ? 0.18 * heyGhost.fontSize : 0;
   const qmarkSlotPx = qmarkGhost ? qmarkGhost.width : 0;
+  const aposSlotPx = aposGhost ? aposGhost.width : 0;
 
   // Cursor fades out across fly. Past fly-end it's invisible regardless of
   // blink, so we don't keep the blink ticking once flying.
@@ -596,18 +659,20 @@ export function WelcomeIntro({ children }: Props) {
         )}
 
         {!hasStartedTyping ? (
-          <span
-            style={{
-              display: "inline-block",
-              width: Math.max(4, Math.round(animCursorPx * 0.05)),
-              height: animCursorPx,
-              marginLeft: 4,
-              marginBottom: -Math.round(animCursorPx * 0.12),
-              background: cursorColor,
-              opacity: blinkOpacity,
-              borderRadius: 2,
-            }}
-          />
+          frame >= PHASE_CURSOR_APPEAR && (
+            <span
+              style={{
+                display: "inline-block",
+                width: Math.max(4, Math.round(animCursorPx * 0.05)),
+                height: animCursorPx,
+                marginLeft: 4,
+                marginBottom: -Math.round(animCursorPx * 0.12),
+                background: cursorColor,
+                opacity: blinkOpacity,
+                borderRadius: 2,
+              }}
+            />
+          )
         ) : (
           <span
             style={{
@@ -674,6 +739,32 @@ export function WelcomeIntro({ children }: Props) {
               </span>
             )}
             <span>{whatTyped}</span>
+            {/* Apostrophe — sits between "what" and "Sub" as part of the
+                "what'Sub" contraction (INK / white so it reads as part of
+                "what's"). During fly we collapse the slot 1→0 in lockstep
+                with the bookends and hide the inline glyph; a fixed-position
+                ghost (rendered below) takes over the visible role and fades
+                in place. Final title therefore reads "Welcome to whatSub"
+                without the apostrophe — same disappearance pattern as
+                "hey," and "?". */}
+            {heyVisible && (
+              <span
+                ref={aposMeasureRef}
+                style={{
+                  color: INK,
+                  display: "inline-block",
+                  visibility: heyLayoutT > 0 ? "hidden" : "visible",
+                  width:
+                    heyLayoutT > 0 && aposGhost
+                      ? `${aposSlotPx * (1 - heyLayoutT)}px`
+                      : "auto",
+                  overflow: "visible",
+                  whiteSpace: "pre",
+                }}
+              >
+                {aposTyped}
+              </span>
+            )}
             {/* Hovering "Sub" pops it with a soft white halo — playful
                 affordance to invite a click without actually doing
                 anything. inline-block so transform applies; transform
@@ -686,14 +777,21 @@ export function WelcomeIntro({ children }: Props) {
                 animating transform causes glyph trail artifacts (the
                 compositor leaves stale glyph layers behind). Idle Sub
                 still gets the playful hover. */}
+            {/* Hover is enabled when Sub is visually parked — i.e. before
+                fly starts (typing/hold) AND after fly fully settles (idle).
+                The earlier `flyT > 0` gate disabled hover the moment fly
+                began but, since flyT clamps to 1 forever, never re-enabled
+                it post-idle, so the playful hover the comment promises was
+                effectively dead at the static title. We instead tie the
+                gate to whether a layout transition is in flight. */}
             <span
               style={{
                 color: ACCENT,
                 display: "inline-block",
-                pointerEvents: flyT > 0 ? "none" : "auto",
+                pointerEvents: isFlying ? "none" : "auto",
               }}
               className={
-                flyT > 0
+                isFlying
                   ? "cursor-default"
                   : "cursor-pointer transition-transform duration-300 ease-out hover:scale-125 hover:[text-shadow:0_0_24px_rgba(255,255,255,0.85),0_0_48px_rgba(255,255,255,0.4)]"
               }
@@ -809,6 +907,34 @@ export function WelcomeIntro({ children }: Props) {
           }}
         >
           ?
+        </span>
+      )}
+
+      {/* Apostrophe ghost — same fade-in-place treatment as hey/qmark.
+          Pinned at its pre-fly screen coordinates while the headline flies
+          up, so visually it stays put and dissolves rather than tagging
+          along with whatSub. */}
+      {heyT > 0 && aposGhost && (
+        <span
+          style={{
+            position: "fixed",
+            left: aposGhost.left,
+            top: aposGhost.top,
+            width: aposGhost.width,
+            height: aposGhost.height,
+            fontFamily: "Caveat, cursive",
+            fontSize: aposGhost.fontSize,
+            fontWeight: 700,
+            color: INK,
+            lineHeight: 1,
+            letterSpacing: "-0.01em",
+            whiteSpace: "pre",
+            opacity: heyOpacity,
+            pointerEvents: "none",
+            zIndex: 11,
+          }}
+        >
+          {APOS_TEXT}
         </span>
       )}
 

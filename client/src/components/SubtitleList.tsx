@@ -187,6 +187,100 @@ export function SubtitleList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Selection containment: drag-select must stay inside ONE cue's English
+  // text. CSS `user-select: contain` looked perfect on paper but Chromium
+  // silently ignores it (only WebKit ships it), so on Windows the user
+  // would see the selection visibly extend into other cues during the
+  // drag and snap back only on mouseup — a flicker.
+  //
+  // The fix that works in BOTH engines: on mousedown inside an English
+  // container, imperatively set `user-select: none` on every OTHER English
+  // container in the document. The browser's selection algorithm respects
+  // `user-select: none` natively (it's NOT the same gap as `contain`), so
+  // it physically cannot extend the focus into a locked sibling — the
+  // focus snaps to the nearest selectable text node, which is always
+  // inside our active root. No flicker, no clamp needed.
+  //
+  // mouseup restores the lock. The selectionchange clamp below is kept as
+  // defense-in-depth for edge cases (touch handles, shift+click, IME).
+  useEffect(() => {
+    let selectionRoot: HTMLElement | null = null;
+    let lockedSiblings: HTMLElement[] = [];
+
+    function lockSiblings(active: HTMLElement) {
+      const all = document.querySelectorAll<HTMLElement>("[data-english-cue]");
+      lockedSiblings = [];
+      all.forEach((el) => {
+        if (el === active) return;
+        // Stash any caller-set userSelect so unlock() restores cleanly.
+        // In practice ours is always "" since the active cue is the only
+        // one with an inline style and we leave its inline style alone.
+        el.style.userSelect = "none";
+        el.style.setProperty("-webkit-user-select", "none");
+        lockedSiblings.push(el);
+      });
+    }
+    function unlockSiblings() {
+      lockedSiblings.forEach((el) => {
+        el.style.userSelect = "";
+        el.style.removeProperty("-webkit-user-select");
+      });
+      lockedSiblings = [];
+    }
+
+    function onMouseDown(e: MouseEvent) {
+      const t = e.target as HTMLElement | null;
+      // closest() walks up through HighlightWord / VocabHighlight inner
+      // spans so a click landing on a yellow word still resolves to the
+      // outer English container.
+      const root = t?.closest?.("[data-english-cue]") as HTMLElement | null;
+      selectionRoot = root;
+      if (root) lockSiblings(root);
+    }
+    function onMouseUp() {
+      // Selection is final by mouseup; release the locks so other cues are
+      // selectable again next time around. We DON'T null out selectionRoot
+      // yet — selectionchange may still fire one more time as the browser
+      // settles, and we want the clamp to remain valid for that final tick.
+      unlockSiblings();
+    }
+    function onSelectionChange() {
+      const root = selectionRoot;
+      if (!root) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+        // Selection collapsed (click without drag, or programmatic clear).
+        // Drop the root so the next mousedown can pick a fresh one.
+        selectionRoot = null;
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const startInside =
+        range.startContainer === root || root.contains(range.startContainer);
+      const endInside =
+        range.endContainer === root || root.contains(range.endContainer);
+      if (startInside && endInside) return;
+      const next = range.cloneRange();
+      if (!startInside) next.setStart(root, 0);
+      if (!endInside) next.setEnd(root, root.childNodes.length);
+      sel.removeAllRanges();
+      sel.addRange(next);
+    }
+    // Capture-phase mousedown so we record the root BEFORE any child handler
+    // can stop propagation and prevent us from seeing it. mouseup also in
+    // capture so we always unlock even if a child stopped propagation.
+    document.addEventListener("mousedown", onMouseDown, true);
+    document.addEventListener("mouseup", onMouseUp, true);
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown, true);
+      document.removeEventListener("mouseup", onMouseUp, true);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      // Belt-and-braces: if effect tears down mid-drag, release any locks.
+      unlockSiblings();
+    };
+  }, []);
+
   // Container always renders (even with 0 subtitles) so that listRef.current
   // is set on the very first mount. Otherwise, when SubtitleList mounts while
   // an LLM analysis is still streaming the first cue, the hover/scroll
@@ -220,7 +314,19 @@ export function SubtitleList({
             <div
               key={i}
               data-idx={i}
-              onClick={() => onJump(s.time)}
+              onClick={() => {
+                // Drag-to-select inside the cue row finishes with a click
+                // event on mouseup (same element), which would otherwise
+                // jump the video the moment the user releases the mouse —
+                // before they get a chance to use the selection bubble.
+                // If a non-collapsed selection survives into the click
+                // handler, the user was selecting, not navigating.
+                const sel = window.getSelection();
+                if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) {
+                  return;
+                }
+                onJump(s.time);
+              }}
               className={
                 "px-3 py-2 border-b border-zinc-800 cursor-pointer hover:bg-zinc-800/50 " +
                 (i === currentIdx
@@ -228,13 +334,39 @@ export function SubtitleList({
                   : "")
               }
             >
-              <div className="text-zinc-500 text-[11px]">
+              <div className="text-zinc-500 text-[11px] select-none">
                 {formatTime(s.time)} → {formatTime(s.endTime)}
               </div>
-              <div className="text-base leading-relaxed text-zinc-100 selection:bg-amber-400/40 selection:text-amber-50">
+              {/* English text is the ONLY selectable region.
+                  - `userSelect: contain` keeps the selection from escaping
+                    this element once it starts inside (so dragging down past
+                    the Chinese / into the next cue's English doesn't extend
+                    the selection — the selection bubble stays anchored to a
+                    single cue's English).
+                  - WebkitUserSelect mirrored for WKWebView on macOS.
+                  Chromium implements `contain` standalone; WebKit needs the
+                  -webkit prefix to recognize the `contain` keyword. */}
+              <div
+                data-english-cue={i}
+                className="text-base leading-relaxed text-zinc-100 selection:bg-amber-400/40 selection:text-amber-50"
+                // `contain` is recognized by WebKit (Mac WKWebView) but
+                // Chromium silently ignores it despite the keyword being
+                // documented — see the selection-clamp useEffect above for
+                // the JS fallback that catches the Windows case. Keep the
+                // CSS as defense-in-depth for Mac (saves the JS round-trip
+                // for the common drag-down-out-of-the-cue gesture).
+                style={{ userSelect: "contain", WebkitUserSelect: "contain" } as unknown as React.CSSProperties}
+              >
                 {renderEnglishWithHighlights(s, vocabMap)}
               </div>
-              <div className="text-zinc-400 text-sm mt-0.5 selection:bg-amber-400/30 selection:text-amber-100">
+              {/* Chinese translation: not selectable. The vocab-save flow
+                  (selection bubble) operates on English source words only,
+                  so allowing Chinese to be selected was both useless and
+                  responsible for the user's complaint about selections
+                  bleeding past the English line. select-none also means a
+                  click on Chinese cleanly fires onClick → onJump without
+                  fighting a mid-drag-select gesture. */}
+              <div className="text-zinc-400 text-sm mt-0.5 select-none">
                 {renderTranslationWithHighlights(s)}
               </div>
             </div>

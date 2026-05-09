@@ -595,16 +595,15 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
         })}
             </div>
 
-            {/* Trade-off axes — three vertical "number-line" arrows showing
-                how each metric changes as you go down the tier list.
-                Memory + accuracy GROW (more demanding model = more RAM,
-                more accurate); speed SHRINKS. Replaces the per-tier
-                paragraph descriptions which were redundant once the
-                violet bg-darkness gradient already conveyed model weight. */}
+            {/* Trade-off axes — vertical "number-line" arrows showing how
+                each metric changes as you go down the tier list. Accuracy
+                GROWS, speed SHRINKS. Disk-usage axis was dropped because
+                the per-tier "约 N MB" label on each row already conveys
+                the same information; keeping it as a third axis just
+                duplicated info the user reads inline. */}
             <div className="shrink-0 flex gap-2 text-[10px] text-zinc-400 self-stretch">
-              <TradeoffAxis label="占用" topText="少" bottomText="多" />
-              <TradeoffAxis label="精度" topText="低" bottomText="高" />
-              <TradeoffAxis label="速度" topText="快" bottomText="慢" />
+              <TradeoffAxis label="识别准确度" topText="低" bottomText="高" />
+              <TradeoffAxis label="识别速度" topText="快" bottomText="慢" />
             </div>
           </div>
         </div>
@@ -747,16 +746,19 @@ function TradeoffAxis({
     <div className="flex flex-col items-center text-center min-w-[28px]">
       <span className="text-zinc-300 font-medium mb-1">{label}</span>
       <span className="text-zinc-500">{topText}</span>
-      <div className="relative flex-1 my-1 w-px bg-gradient-to-b from-zinc-600 to-violet-400/60 min-h-[64px]">
+      <div className="relative flex-1 my-1 w-0.5 bg-gradient-to-b from-zinc-600 to-violet-400/60 min-h-[64px] rounded-full">
         {/* Arrowhead at the bottom of the axis line, drawn as two CSS
-            borders on a rotated square — no extra SVG dependency. */}
+            borders on a rotated square — no extra SVG dependency. Sized
+            proportionally to the 2px line width so the tip stays visually
+            anchored to the axis (a 1px-line arrowhead would look detached
+            on a thicker line). */}
         <span
           className="absolute -bottom-px left-1/2 w-0 h-0"
           style={{
             transform: "translateX(-50%)",
-            borderLeft: "3px solid transparent",
-            borderRight: "3px solid transparent",
-            borderTop: "5px solid rgb(167 139 250 / 0.6)",
+            borderLeft: "4px solid transparent",
+            borderRight: "4px solid transparent",
+            borderTop: "6px solid rgb(167 139 250 / 0.6)",
           }}
         />
       </div>
@@ -779,7 +781,7 @@ function KeyHelpPanel({
   onClose: () => void;
 }) {
   return (
-    <div className="mt-2 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto">
+    <div className="mt-2 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-3 max-h-[60vh] overflow-y-auto">
       <div className="flex items-start justify-between gap-2 sticky top-0 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-zinc-800 border-b border-zinc-700">
         <div className="text-zinc-100 font-medium">{vendor.name} 密钥获取步骤</div>
         <button

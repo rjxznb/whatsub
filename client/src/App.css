@@ -223,3 +223,29 @@ body::-webkit-scrollbar-corner,
   will-change: clip-path;
 }
 
+/* Vocab first-visit tour: smooth fade-in for the dim overlay + tooltip
+   so the dim doesn't "snap" onto the page the moment the route mounts. */
+@keyframes vocab-tour-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-vocab-tour-fade-in {
+  animation: vocab-tour-fade-in 420ms ease-out forwards;
+}
+
+/* Pulsing ring around the highlighted card — draws the eye to the
+   cutout without being so loud the user feels nagged. */
+@keyframes vocab-tour-pulse {
+  0%, 100% {
+    stroke-opacity: 0.45;
+    stroke-width: 2;
+  }
+  50% {
+    stroke-opacity: 1;
+    stroke-width: 3;
+  }
+}
+.animate-vocab-tour-pulse {
+  animation: vocab-tour-pulse 1.6s ease-in-out infinite;
+}
+

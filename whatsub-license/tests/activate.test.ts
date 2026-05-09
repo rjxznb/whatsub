@@ -144,3 +144,44 @@ describe('POST /api/activate — device limit', () => {
     expect(res.status).toBe(409);
   });
 });
+
+describe('POST /api/activate — validation', () => {
+  it('returns 404 invalid_key for unknown key', async () => {
+    const { app } = makeApp();
+    const res = await activate(app, {
+      key: 'WHATSUB-XXXX-XXXX-XXXX-XXXX', fingerprint: FP,
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as any).status).toBe('invalid_key');
+  });
+
+  it('rejects malformed JSON body with 400 bad_request', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not json',
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as any;
+    expect(body.status).toBe('bad_request');
+    expect(body.detail).toBe('invalid_json');
+  });
+
+  it('rejects missing key/fingerprint with 400', async () => {
+    const { app } = makeApp();
+    const res = await activate(app, { key: '', fingerprint: '' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).detail).toBe('missing_key_or_fingerprint');
+  });
+
+  it('rejects fingerprint not 64 hex chars with 400', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'K', max_devices: 3, created_at: 1, buyer_note: null, email: null,
+    });
+    const res = await activate(app, { key: 'K', fingerprint: 'not-hex' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).detail).toBe('fingerprint_not_hex64');
+  });
+});

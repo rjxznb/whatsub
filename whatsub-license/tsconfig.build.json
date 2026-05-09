@@ -1,0 +1,10 @@
+{
+  // Build-only config used by `pnpm build`. Extends the base tsconfig and
+  // narrows scope to src/ — tests are excluded from the JS output, and
+  // rootDir keeps dist/ flat so dist/index.js matches package.json "main".
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src"
+  },
+  "include": ["src/**/*"]
+}

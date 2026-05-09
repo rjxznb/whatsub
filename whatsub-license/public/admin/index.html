@@ -257,6 +257,12 @@
 </div>
 
 <script>
+// Base path for the license API. The SPA is served at /admin/ on the
+// same origin (whatsub.eversay.cc), but the API lives under
+// /api/license/* (namespaced so the website + other apps under
+// whatsub.eversay.cc can also live at /api/<other-app>/...).
+const API_BASE = '/api/license';
+
 function adminApp() {
   return {
     /* ─── Auth ─── */
@@ -292,7 +298,7 @@ function adminApp() {
 
     async tryAuth() {
       try {
-        const res = await fetch('/api/admin/whoami', {
+        const res = await fetch(`${API_BASE}/admin/whoami`, {
           headers: { 'Authorization': `Bearer ${this.loginToken}` },
         });
         if (res.ok) {
@@ -314,7 +320,7 @@ function adminApp() {
         this.loginError = '请输入 token';
         return;
       }
-      const res = await fetch('/api/admin/whoami', {
+      const res = await fetch(`${API_BASE}/admin/whoami`, {
         headers: { 'Authorization': `Bearer ${this.loginToken}` },
       });
       if (res.ok) {
@@ -342,7 +348,7 @@ function adminApp() {
       this.issueError = '';
       this.issuing = true;
       try {
-        const res = await fetch('/api/admin/issue', {
+        const res = await fetch(`${API_BASE}/admin/issue`, {
           method: 'POST',
           headers: this.apiHeaders(),
           body: JSON.stringify({
@@ -371,7 +377,7 @@ function adminApp() {
       try {
         const params = new URLSearchParams({ page: String(this.page) });
         if (this.search) params.set('search', this.search);
-        const res = await fetch(`/api/admin/licenses?${params}`, {
+        const res = await fetch(`${API_BASE}/admin/licenses?${params}`, {
           headers: this.apiHeaders(),
         });
         if (res.ok) {
@@ -387,7 +393,7 @@ function adminApp() {
     async openDetail(key) {
       this.tab = 'detail';
       this.detail = null;
-      const res = await fetch(`/api/admin/licenses/${encodeURIComponent(key)}`, {
+      const res = await fetch(`${API_BASE}/admin/licenses/${encodeURIComponent(key)}`, {
         headers: this.apiHeaders(),
       });
       if (res.ok) {
@@ -400,7 +406,7 @@ function adminApp() {
 
     async deactivate(activationId) {
       if (!confirm('确定要释放这台设备的授权？\n该用户在这台设备上将无法继续使用，需要重新激活。')) return;
-      const res = await fetch(`/api/admin/activations/${activationId}/deactivate`, {
+      const res = await fetch(`${API_BASE}/admin/activations/${activationId}/deactivate`, {
         method: 'POST',
         headers: this.apiHeaders(),
       });

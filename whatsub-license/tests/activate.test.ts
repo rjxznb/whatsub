@@ -175,12 +175,23 @@ describe('POST /api/activate — validation', () => {
     expect(((await res.json()) as any).detail).toBe('missing_key_or_fingerprint');
   });
 
+  it('rejects malformed key with invalid_key_format 400', async () => {
+    const { app } = makeApp();
+    const res = await activate(app, { key: 'GARBAGE', fingerprint: FP });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as any).detail).toBe('invalid_key_format');
+  });
+
   it('rejects fingerprint not 64 hex chars with 400', async () => {
     const { app, db } = makeApp();
     await db.insertLicense({
-      key: 'K', max_devices: 3, created_at: 1, buyer_note: null, email: null,
+      key: 'WHATSUB-EEEE-EEEE-EEEE-EEEE',
+      max_devices: 3, created_at: 1, buyer_note: null, email: null,
     });
-    const res = await activate(app, { key: 'K', fingerprint: 'not-hex' });
+    const res = await activate(app, {
+      key: 'WHATSUB-EEEE-EEEE-EEEE-EEEE',
+      fingerprint: 'not-hex',
+    });
     expect(res.status).toBe(400);
     expect(((await res.json()) as any).detail).toBe('fingerprint_not_hex64');
   });

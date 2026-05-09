@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Database } from '../lib/db.js';
 import type { ActivationRow } from '../lib/types.js';
-import { normalizeKey } from '../lib/keygen.js';
+import { looksLikeKey, normalizeKey } from '../lib/keygen.js';
 
 interface ActivateRequest {
   key?: unknown;
@@ -30,6 +30,14 @@ export function activateRoute(db: Database) {
     if (!key || !fingerprint) {
       return c.json(
         { status: 'bad_request', detail: 'missing_key_or_fingerprint' },
+        400,
+      );
+    }
+    // Format-check the key BEFORE the DB lookup so callers can't probe
+    // arbitrary strings against the licenses table.
+    if (!looksLikeKey(key)) {
+      return c.json(
+        { status: 'bad_request', detail: 'invalid_key_format' },
         400,
       );
     }
@@ -62,12 +70,23 @@ export function activateRoute(db: Database) {
         }
         await db.reactivateActivation(existing.id, deviceLabel, now);
       } else {
+        // Idempotent re-hit. deviceLabel from the request is intentionally
+        // ignored — only last_seen_at bumps. To rename a device, the user
+        // must contact support to deactivate, then re-activate with the
+        // new label.
         await db.bumpActivationLastSeen(existing.id, now);
       }
       return c.json({ status: 'active' });
     }
 
-    // Path 2: brand-new device
+    // Path 2: brand-new device.
+    //
+    // NOTE: check-then-insert is not atomic. Safe today because Aliyun runs
+    // this container single-instance and the activation RPS is single-digit.
+    // If this ever scales out (multi-instance behind a load balancer), two
+    // concurrent activations on a key with 1 free slot could both pass the
+    // check and double-spend. Fix at that point: a DB-level UNIQUE+partial
+    // index, or wrap the count+insert in a SERIALIZABLE transaction.
     const active = await db.listActiveActivations(key);
     if (active.length >= license.max_devices) {
       return c.json(

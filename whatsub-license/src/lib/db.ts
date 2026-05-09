@@ -1,9 +1,20 @@
-import type { Pool } from 'pg';
+import pg, { type Pool } from 'pg';
 import type {
   ActivationRow,
   LicenseListItem,
   LicenseRow,
 } from './types.js';
+
+// Global type parser: return BIGINT (OID 20) as JS number instead of the
+// default string. We use BIGINT exclusively for unix-ms timestamps and
+// BIGSERIAL ids, neither of which will exceed Number.MAX_SAFE_INTEGER
+// (2^53 - 1 ≈ 9 quadrillion) for realistic licence-server scale.
+//
+// Without this, `created_at` came out of the DB as the string "1715244000000",
+// which the admin SPA fed into `new Date(...)` → Invalid Date → NaN-NaN-NaN
+// in the UI. Fixing once at the driver level covers every BIGINT column
+// across every route — cleaner than coercing at each use site.
+pg.types.setTypeParser(20, (val) => Number(val));
 
 /**
  * Thin typed wrapper around a pg Pool. One method per query the routes

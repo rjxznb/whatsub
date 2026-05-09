@@ -72,6 +72,16 @@ export function adminRoutes(db: Database, adminToken: string | undefined) {
     return c.json({ items, total, page, pageSize });
   });
 
+  app.post('/activations/:id/deactivate', async (c) => {
+    const idStr = c.req.param('id');
+    const id = parseInt(idStr, 10);
+    if (!Number.isFinite(id) || idStr !== String(id)) {
+      return c.json({ error: 'bad_id' }, 400);
+    }
+    await db.softDeactivate(id, Date.now());
+    return c.json({ ok: true });
+  });
+
   app.get('/licenses/:key', async (c) => {
     const key = c.req.param('key');
     const license = await db.findLicense(key);

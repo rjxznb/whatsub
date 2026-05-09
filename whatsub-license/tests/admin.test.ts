@@ -155,6 +155,36 @@ describe('GET /api/admin/licenses/:key', () => {
   });
 });
 
+describe('POST /api/admin/activations/:id/deactivate', () => {
+  it('soft-deactivates the slot', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'K-DA', max_devices: 3, created_at: 1, buyer_note: null, email: null,
+    });
+    await db.insertActivation({
+      license_key: 'K-DA', fingerprint: 'a'.repeat(64), device_label: 'old',
+      activated_at: 100, last_seen_at: 100, deactivated_at: null,
+    });
+    const a = await db.findActivation('K-DA', 'a'.repeat(64));
+    const res = await app.request(
+      `/api/admin/activations/${a!.id}/deactivate`,
+      { method: 'POST', headers: authHeader() },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    const active = await db.listActiveActivations('K-DA');
+    expect(active).toHaveLength(0);
+  });
+
+  it('returns 400 for non-numeric id', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/admin/activations/not-a-number/deactivate', {
+      method: 'POST', headers: authHeader(),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /api/admin/whoami', () => {
   it('returns 401 without auth', async () => {
     const { app } = makeApp();

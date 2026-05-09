@@ -62,5 +62,15 @@ export function adminRoutes(db: Database, adminToken: string | undefined) {
     return c.json({ keys });
   });
 
+  app.get('/licenses', async (c) => {
+    const search = c.req.query('search') ?? '';
+    const page = Math.max(1, parseInt(c.req.query('page') ?? '1', 10));
+    const pageSize = 50;
+    const { items, total } = await db.listLicenses({
+      search, limit: pageSize, offset: (page - 1) * pageSize,
+    });
+    return c.json({ items, total, page, pageSize });
+  });
+
   return app;
 }

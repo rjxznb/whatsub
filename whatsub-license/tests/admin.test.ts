@@ -80,6 +80,46 @@ describe('POST /api/admin/issue', () => {
   });
 });
 
+describe('GET /api/admin/licenses', () => {
+  it('returns paginated list with total + page metadata', async () => {
+    const { app, db } = makeApp();
+    for (let i = 0; i < 7; i++) {
+      await db.insertLicense({
+        key: `K-${i}`, max_devices: 3, created_at: i,
+        buyer_note: null, email: null,
+      });
+    }
+    const res = await app.request('/api/admin/licenses?page=1', { headers: authHeader() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      items: Array<{ key: string; active_devices: number }>;
+      total: number; page: number; pageSize: number;
+    };
+    expect(body.total).toBe(7);
+    expect(body.page).toBe(1);
+    expect(body.pageSize).toBe(50);
+    expect(body.items).toHaveLength(7);
+    // Sorted descending by created_at
+    expect(body.items[0]!.key).toBe('K-6');
+  });
+
+  it('search param filters by key or buyer_note', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'K-A', max_devices: 3, created_at: 1, buyer_note: 'xianyu', email: null,
+    });
+    await db.insertLicense({
+      key: 'K-B', max_devices: 3, created_at: 2, buyer_note: 'xhs', email: null,
+    });
+    const res = await app.request('/api/admin/licenses?search=xianyu', {
+      headers: authHeader(),
+    });
+    const body = (await res.json()) as { items: Array<{ key: string }>; total: number };
+    expect(body.total).toBe(1);
+    expect(body.items[0]!.key).toBe('K-A');
+  });
+});
+
 describe('GET /api/admin/whoami', () => {
   it('returns 401 without auth', async () => {
     const { app } = makeApp();

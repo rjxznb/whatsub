@@ -1,2 +1,433 @@
-<!doctype html>
-<html><body><p>Admin SPA — placeholder. Real content in Task 18.</p></body></html>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>whatsub license admin</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  /* Make Tailwind's hidden-until-Alpine-loads UI not flash */
+  [x-cloak] { display: none !important; }
+  /* Monospace for license keys so copy-paste is unambiguous */
+  .key { font-family: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace; }
+</style>
+</head>
+<body class="bg-zinc-900 text-zinc-100 min-h-screen">
+
+<div x-data="adminApp()" x-init="init()" x-cloak>
+
+  <!-- ─────────────────── Login screen ─────────────────── -->
+  <div x-show="!authed" class="min-h-screen flex items-center justify-center px-4">
+    <div class="w-full max-w-sm bg-zinc-800 rounded-lg p-6 shadow-lg border border-zinc-700">
+      <h1 class="text-xl font-semibold mb-1">whatsub license admin</h1>
+      <p class="text-xs text-zinc-400 mb-5">输入 ADMIN_TOKEN 登录</p>
+      <input type="password" x-model="loginToken" @keydown.enter="login()"
+             placeholder="ADMIN_TOKEN"
+             class="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-sm focus:outline-none focus:border-blue-500" />
+      <button @click="login()"
+              class="mt-3 w-full bg-blue-500 hover:bg-blue-400 text-black font-medium px-4 py-2 rounded text-sm">
+        登录
+      </button>
+      <p x-show="loginError" x-text="loginError" class="mt-3 text-xs text-red-400"></p>
+    </div>
+  </div>
+
+  <!-- ─────────────────── Main app (after login) ─────────────────── -->
+  <div x-show="authed">
+
+    <!-- Top nav -->
+    <header class="border-b border-zinc-800 bg-zinc-950">
+      <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+        <h1 class="text-lg font-semibold">whatsub license admin</h1>
+        <div class="flex items-center gap-2">
+          <button @click="tab = 'issue'"
+                  :class="tab === 'issue' ? 'bg-blue-500 text-black' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+                  class="px-3 py-1.5 text-sm rounded font-medium">
+            发卡
+          </button>
+          <button @click="tab = 'list'; loadList()"
+                  :class="tab === 'list' || tab === 'detail' ? 'bg-blue-500 text-black' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'"
+                  class="px-3 py-1.5 text-sm rounded font-medium">
+            授权码
+          </button>
+          <button @click="logout()"
+                  class="ml-2 text-zinc-500 hover:text-zinc-200 text-xs">
+            退出
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-6 py-8">
+
+      <!-- ============== Issue Tab ============== -->
+      <section x-show="tab === 'issue'">
+        <h2 class="text-base font-semibold mb-4">发新授权码</h2>
+
+        <div class="bg-zinc-800 rounded-lg p-5 border border-zinc-700 mb-6">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label class="block text-xs text-zinc-400 mb-1">数量（1-50）</label>
+              <input type="number" min="1" max="50" x-model.number="issueForm.count"
+                     class="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-400 mb-1">设备数（默认 3）</label>
+              <input type="number" min="1" max="20" x-model.number="issueForm.maxDevices"
+                     class="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm" />
+            </div>
+            <div></div>
+            <div class="md:col-span-2">
+              <label class="block text-xs text-zinc-400 mb-1">买家备注（可选 — 闲鱼订单号 / 备注）</label>
+              <input type="text" x-model="issueForm.buyerNote"
+                     placeholder="闲鱼 #2026-05-08-xxx"
+                     class="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-zinc-400 mb-1">买家邮箱（可选）</label>
+              <input type="email" x-model="issueForm.email"
+                     class="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm" />
+            </div>
+          </div>
+          <div class="mt-4 flex items-center gap-3">
+            <button @click="issueKeys()" :disabled="issuing"
+                    class="bg-blue-500 hover:bg-blue-400 text-black font-medium px-4 py-1.5 rounded text-sm disabled:opacity-50">
+              <span x-show="!issuing">生成</span>
+              <span x-show="issuing">生成中...</span>
+            </button>
+            <span x-show="issueError" x-text="issueError" class="text-sm text-red-400"></span>
+          </div>
+        </div>
+
+        <!-- Result list of generated keys -->
+        <div x-show="issuedKeys.length > 0" class="bg-zinc-800 rounded-lg p-5 border border-emerald-500/40">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-emerald-400">已生成 <span x-text="issuedKeys.length"></span> 张授权码</h3>
+            <button @click="copyAll()" class="text-xs text-blue-300 hover:text-blue-200">复制全部</button>
+          </div>
+          <div class="space-y-1.5">
+            <template x-for="(key, idx) in issuedKeys" :key="idx">
+              <div class="flex items-center gap-3 bg-zinc-900 rounded px-3 py-1.5">
+                <span class="key text-sm text-emerald-300 select-all flex-1" x-text="key"></span>
+                <button @click="copy(key)" class="text-xs text-zinc-400 hover:text-zinc-100">复制</button>
+              </div>
+            </template>
+          </div>
+          <p class="mt-3 text-[11px] text-zinc-500">⚠ 这些 key 只此一次显示完整列表（页面刷新后只能在「授权码」tab 里逐个查找）。复制完再继续。</p>
+        </div>
+      </section>
+
+      <!-- ============== List Tab ============== -->
+      <section x-show="tab === 'list'">
+        <h2 class="text-base font-semibold mb-4">授权码列表</h2>
+
+        <div class="flex items-center gap-3 mb-4">
+          <input type="text" x-model.debounce.300ms="search" @input="loadList()"
+                 placeholder="搜 key / 买家备注 / 邮箱"
+                 class="flex-1 max-w-md px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm" />
+          <span class="text-xs text-zinc-500" x-text="`共 ${total} 条`"></span>
+        </div>
+
+        <div x-show="listLoading" class="text-zinc-500 text-sm">加载中...</div>
+
+        <div x-show="!listLoading && licenses.length === 0" class="text-zinc-500 text-sm py-8 text-center">
+          没有匹配的授权码
+        </div>
+
+        <div x-show="!listLoading && licenses.length > 0"
+             class="bg-zinc-800 rounded-lg border border-zinc-700 overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-zinc-900 text-zinc-400 text-xs">
+              <tr>
+                <th class="text-left px-4 py-2 font-medium">授权码</th>
+                <th class="text-left px-4 py-2 font-medium">买家备注</th>
+                <th class="text-center px-4 py-2 font-medium">设备</th>
+                <th class="text-left px-4 py-2 font-medium">创建时间</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="lic in licenses" :key="lic.key">
+                <tr class="border-t border-zinc-700 hover:bg-zinc-700/30 cursor-pointer"
+                    @click="openDetail(lic.key)">
+                  <td class="px-4 py-2 key text-emerald-300" x-text="lic.key"></td>
+                  <td class="px-4 py-2 text-zinc-300" x-text="lic.buyer_note || '—'"></td>
+                  <td class="px-4 py-2 text-center text-zinc-300">
+                    <span x-text="`${lic.active_devices} / ${lic.max_devices}`"></span>
+                  </td>
+                  <td class="px-4 py-2 text-zinc-400" x-text="formatDate(lic.created_at)"></td>
+                  <td class="px-4 py-2 text-zinc-500 text-right">→</td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+
+        <div x-show="!listLoading && total > pageSize" class="flex items-center gap-2 mt-4">
+          <button @click="if (page > 1) { page--; loadList(); }"
+                  :disabled="page <= 1"
+                  class="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-sm disabled:opacity-50">上一页</button>
+          <span class="text-zinc-500 text-sm" x-text="`第 ${page} / ${Math.ceil(total / pageSize)} 页`"></span>
+          <button @click="if (page * pageSize < total) { page++; loadList(); }"
+                  :disabled="page * pageSize >= total"
+                  class="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-sm disabled:opacity-50">下一页</button>
+        </div>
+      </section>
+
+      <!-- ============== Detail Tab ============== -->
+      <section x-show="tab === 'detail'" x-cloak>
+        <button @click="tab = 'list'" class="text-blue-400 hover:text-blue-300 text-sm mb-4">← 返回列表</button>
+
+        <div x-show="detail">
+          <div class="bg-zinc-800 rounded-lg p-5 border border-zinc-700 mb-6">
+            <div class="flex items-center justify-between mb-3">
+              <span class="key text-lg text-emerald-300" x-text="detail?.license?.key"></span>
+              <button @click="copy(detail?.license?.key)"
+                      class="text-xs text-zinc-400 hover:text-zinc-100">复制</button>
+            </div>
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <div class="text-zinc-500 text-xs">创建时间</div>
+                <div x-text="formatDate(detail?.license?.created_at)"></div>
+              </div>
+              <div>
+                <div class="text-zinc-500 text-xs">设备上限</div>
+                <div x-text="detail?.license?.max_devices"></div>
+              </div>
+              <div>
+                <div class="text-zinc-500 text-xs">买家备注</div>
+                <div x-text="detail?.license?.buyer_note || '—'"></div>
+              </div>
+              <div>
+                <div class="text-zinc-500 text-xs">买家邮箱</div>
+                <div x-text="detail?.license?.email || '—'"></div>
+              </div>
+            </div>
+          </div>
+
+          <h3 class="text-sm font-semibold mb-2">激活设备</h3>
+          <div x-show="(detail?.activations?.length ?? 0) === 0"
+               class="text-zinc-500 text-sm py-4">该授权码尚未激活过任何设备</div>
+
+          <div x-show="(detail?.activations?.length ?? 0) > 0"
+               class="bg-zinc-800 rounded-lg border border-zinc-700 overflow-hidden">
+            <table class="w-full text-sm">
+              <thead class="bg-zinc-900 text-zinc-400 text-xs">
+                <tr>
+                  <th class="text-left px-4 py-2 font-medium">设备名</th>
+                  <th class="text-left px-4 py-2 font-medium">指纹尾段</th>
+                  <th class="text-left px-4 py-2 font-medium">激活时间</th>
+                  <th class="text-left px-4 py-2 font-medium">最近联机</th>
+                  <th class="text-left px-4 py-2 font-medium">状态</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="a in detail.activations" :key="a.id">
+                  <tr class="border-t border-zinc-700">
+                    <td class="px-4 py-2" x-text="a.device_label || '(无名)'"></td>
+                    <td class="px-4 py-2 key text-zinc-400" x-text="a.fingerprintTail"></td>
+                    <td class="px-4 py-2 text-zinc-300" x-text="formatDate(a.activated_at)"></td>
+                    <td class="px-4 py-2 text-zinc-400" x-text="formatDate(a.last_seen_at)"></td>
+                    <td class="px-4 py-2">
+                      <span x-show="a.deactivated_at === null" class="text-emerald-400 text-xs">使用中</span>
+                      <span x-show="a.deactivated_at !== null" class="text-zinc-500 text-xs"
+                            x-text="`已释放 (${formatDate(a.deactivated_at)})`"></span>
+                    </td>
+                    <td class="px-4 py-2 text-right">
+                      <button x-show="a.deactivated_at === null"
+                              @click="deactivate(a.id)"
+                              class="text-xs text-amber-400 hover:text-amber-300">
+                        释放
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+</div>
+
+<script>
+function adminApp() {
+  return {
+    /* ─── Auth ─── */
+    authed: false,
+    loginToken: '',
+    loginError: '',
+    /* ─── Tabs ─── */
+    tab: 'issue',
+    /* ─── Issue ─── */
+    issueForm: { count: 1, maxDevices: 3, buyerNote: '', email: '' },
+    issuing: false,
+    issueError: '',
+    issuedKeys: [],
+    /* ─── List ─── */
+    licenses: [],
+    search: '',
+    page: 1,
+    pageSize: 50,
+    total: 0,
+    listLoading: false,
+    /* ─── Detail ─── */
+    detail: null,
+
+    init() {
+      // Persist token in sessionStorage so refresh doesn't kick the admin
+      // back to login during a working session.
+      const saved = sessionStorage.getItem('whatsub_admin_token');
+      if (saved) {
+        this.loginToken = saved;
+        this.tryAuth();
+      }
+    },
+
+    async tryAuth() {
+      try {
+        const res = await fetch('/api/admin/whoami', {
+          headers: { 'Authorization': `Bearer ${this.loginToken}` },
+        });
+        if (res.ok) {
+          this.authed = true;
+          sessionStorage.setItem('whatsub_admin_token', this.loginToken);
+        } else {
+          // bad token, clear stored
+          sessionStorage.removeItem('whatsub_admin_token');
+          this.authed = false;
+        }
+      } catch (e) {
+        this.loginError = '连不上服务器：' + e.message;
+      }
+    },
+
+    async login() {
+      this.loginError = '';
+      if (!this.loginToken) {
+        this.loginError = '请输入 token';
+        return;
+      }
+      const res = await fetch('/api/admin/whoami', {
+        headers: { 'Authorization': `Bearer ${this.loginToken}` },
+      });
+      if (res.ok) {
+        this.authed = true;
+        sessionStorage.setItem('whatsub_admin_token', this.loginToken);
+      } else {
+        this.loginError = 'token 不对';
+      }
+    },
+
+    logout() {
+      sessionStorage.removeItem('whatsub_admin_token');
+      this.authed = false;
+      this.loginToken = '';
+    },
+
+    apiHeaders() {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.loginToken}`,
+      };
+    },
+
+    async issueKeys() {
+      this.issueError = '';
+      this.issuing = true;
+      try {
+        const res = await fetch('/api/admin/issue', {
+          method: 'POST',
+          headers: this.apiHeaders(),
+          body: JSON.stringify({
+            count: this.issueForm.count,
+            maxDevices: this.issueForm.maxDevices,
+            buyerNote: this.issueForm.buyerNote || undefined,
+            email: this.issueForm.email || undefined,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          this.issueError = '失败：' + (err.error || res.status);
+          return;
+        }
+        const data = await res.json();
+        this.issuedKeys = data.keys;
+      } catch (e) {
+        this.issueError = '网络错误：' + e.message;
+      } finally {
+        this.issuing = false;
+      }
+    },
+
+    async loadList() {
+      this.listLoading = true;
+      try {
+        const params = new URLSearchParams({ page: String(this.page) });
+        if (this.search) params.set('search', this.search);
+        const res = await fetch(`/api/admin/licenses?${params}`, {
+          headers: this.apiHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          this.licenses = data.items;
+          this.total = data.total;
+        }
+      } finally {
+        this.listLoading = false;
+      }
+    },
+
+    async openDetail(key) {
+      this.tab = 'detail';
+      this.detail = null;
+      const res = await fetch(`/api/admin/licenses/${encodeURIComponent(key)}`, {
+        headers: this.apiHeaders(),
+      });
+      if (res.ok) {
+        this.detail = await res.json();
+      } else {
+        alert('加载详情失败：' + res.status);
+        this.tab = 'list';
+      }
+    },
+
+    async deactivate(activationId) {
+      if (!confirm('确定要释放这台设备的授权？\n该用户在这台设备上将无法继续使用，需要重新激活。')) return;
+      const res = await fetch(`/api/admin/activations/${activationId}/deactivate`, {
+        method: 'POST',
+        headers: this.apiHeaders(),
+      });
+      if (res.ok) {
+        // Reload detail to reflect new state.
+        await this.openDetail(this.detail.license.key);
+      } else {
+        alert('释放失败：' + res.status);
+      }
+    },
+
+    copy(text) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    },
+
+    copyAll() {
+      this.copy(this.issuedKeys.join('\n'));
+    },
+
+    formatDate(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    },
+  };
+}
+</script>
+</body>
+</html>

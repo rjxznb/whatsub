@@ -79,3 +79,68 @@ describe('POST /api/activate — idempotency', () => {
     expect(active).toHaveLength(1); // not 2 — same fingerprint
   });
 });
+
+describe('POST /api/activate — device limit', () => {
+  it('rejects with 409 + device list when slots are full', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'WHATSUB-CCCC-CCCC-CCCC-CCCC',
+      max_devices: 2, created_at: 1, buyer_note: null, email: null,
+    });
+
+    // Pre-populate 2 active slots
+    for (let i = 0; i < 2; i++) {
+      await db.insertActivation({
+        license_key: 'WHATSUB-CCCC-CCCC-CCCC-CCCC',
+        fingerprint: String(i).padStart(64, '0'),
+        device_label: `device-${i}`,
+        activated_at: 100 + i, last_seen_at: 100 + i, deactivated_at: null,
+      });
+    }
+
+    const res = await activate(app, {
+      key: 'WHATSUB-CCCC-CCCC-CCCC-CCCC',
+      fingerprint: 'f'.repeat(64),
+      deviceLabel: 'third device',
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      status: string;
+      maxDevices: number;
+      devices: Array<{ deviceLabel: string; fingerprintTail: string }>;
+    };
+    expect(body.status).toBe('device_limit');
+    expect(body.maxDevices).toBe(2);
+    expect(body.devices).toHaveLength(2);
+    // Tail is last 6 of fingerprint — verify redaction
+    expect(body.devices[0]!.fingerprintTail).toHaveLength(6);
+    // Full fingerprint never returned
+    expect(JSON.stringify(body)).not.toContain('0'.repeat(64));
+  });
+
+  it('reactivating a previously-deactivated slot when others are full → 409', async () => {
+    const { app, db } = makeApp();
+    await db.insertLicense({
+      key: 'WHATSUB-DDDD-DDDD-DDDD-DDDD',
+      max_devices: 1, created_at: 1, buyer_note: null, email: null,
+    });
+    // Slot 1: deactivated; Slot 2: active. New activation of slot 1 must fail.
+    await db.insertActivation({
+      license_key: 'WHATSUB-DDDD-DDDD-DDDD-DDDD',
+      fingerprint: 'a'.repeat(64), device_label: 'old',
+      activated_at: 100, last_seen_at: 100, deactivated_at: 200,
+    });
+    await db.insertActivation({
+      license_key: 'WHATSUB-DDDD-DDDD-DDDD-DDDD',
+      fingerprint: 'b'.repeat(64), device_label: 'new active',
+      activated_at: 300, last_seen_at: 300, deactivated_at: null,
+    });
+
+    const res = await activate(app, {
+      key: 'WHATSUB-DDDD-DDDD-DDDD-DDDD',
+      fingerprint: 'a'.repeat(64), // re-claim
+      deviceLabel: 'old',
+    });
+    expect(res.status).toBe(409);
+  });
+});

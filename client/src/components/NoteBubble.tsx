@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import {
   useEditor,
   EditorContent,
-  type Editor,
   type Content,
 } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
@@ -15,24 +14,11 @@ import { Link } from "@tiptap/extension-link";
 import { TaskList } from "@tiptap/extension-task-list";
 import { TaskItem } from "@tiptap/extension-task-item";
 import { Placeholder } from "@tiptap/extension-placeholder";
-import {
-  Bold,
-  Italic,
-  Underline as UnderlineIcon,
-  Strikethrough,
-  Highlighter,
-  Type,
-  List,
-  ListOrdered,
-  ListTodo,
-  Quote,
-  Link2,
-  Heading,
-  ChevronDown,
-  Trash2,
-  Check,
-  X,
-} from "lucide-react";
+// Footer-only icons. The full TipTap toolbar (and its 14 icon imports)
+// was removed when the bubble shrank to a sticky-note size — keyboard
+// shortcuts (⌘B / ⌘I / etc) still work via StarterKit, and the format
+// surface will move to the system menu bar on macOS.
+import { Trash2, Check } from "lucide-react";
 
 /**
  * Note editor for vocab cards. Spawned by Vocab.tsx when the user double-
@@ -65,7 +51,23 @@ const IS_MAC =
   (/Mac|iPhone|iPad/i.test(navigator.platform) ||
     /Mac/i.test(navigator.userAgent));
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
-const SHIFT = IS_MAC ? "⇧" : "Shift+";
+
+// ── User-tunable layout / opacity knobs ─────────────────────────────────
+// Edit these to adjust the peek-mode look without touching the geometry
+// math below. PEEK_OPACITY controls how transparent the bubble is on
+// first appearance (before the user clicks to start editing); edit mode
+// always paints at full opacity regardless. OVERLAP_X / OVERLAP_Y control
+// how far the bubble's top-left corner sits INSIDE the card's bottom-
+// right area on a double-click: bigger numbers = more overlap.
+//
+// Common tweaks:
+//   - Want the peek bubble more visible? Bump PEEK_OPACITY toward 1.0.
+//   - Want the bubble fully off the card (no overlap)? Set both
+//     OVERLAP_* to 0 or even negative (negative pushes it FURTHER away).
+//   - Want it overlapping more? Increase the OVERLAP_* values.
+const PEEK_OPACITY = 0.7;
+const OVERLAP_X = 80; // bubble's left edge sits this many px inside card's right edge
+const OVERLAP_Y = 40; // bubble's top edge sits this many px inside card's bottom edge
 
 interface Props {
   /** TipTap JSON document serialized as a string. Empty string for new notes. */
@@ -87,7 +89,33 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
     save: boolean;
     deleted?: boolean;
   } | null>(null);
+  // `entering` is the inbound mirror of folding. On mount the bubble is
+  // painted at the same shrunken-into-corner position as the close
+  // animation's end state; after two RAFs we flip the flag and CSS
+  // transitions the bubble out to its natural peek-mode resting size.
+  // Result: the bubble looks like it's pulled OUT of the card's blue
+  // corner bracket, then sucked back in when the user finishes — Genie-
+  // style minimize/restore.
+  const [entering, setEntering] = useState(true);
   const bubbleRef = useRef<HTMLDivElement>(null);
+
+  // Two RAFs so the browser definitely paints the entering-state styles
+  // before we trigger the transition to peek. Single RAF can race in
+  // some browsers (Chromium especially under heavy load) — paint may
+  // not complete inside one rAF window, and then the transition
+  // attaches with both endpoints already at the final state, snapping
+  // visibly. Two rAFs guarantees a paint between mount and toggle.
+  useEffect(() => {
+    let id1 = 0;
+    let id2 = 0;
+    id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => setEntering(false));
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      cancelAnimationFrame(id2);
+    };
+  }, []);
 
   const editor = useEditor({
     extensions: [
@@ -120,11 +148,13 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
     content: parseInitialNote(initialNote),
     editorProps: {
       attributes: {
-        // min-h-[200px] gives the user noticeable initial canvas to work
-        // with; max-h-[50vh] caps growth so the bubble doesn't push past
-        // the screen on long notes (the editor scrolls inside instead).
+        // Editor fills whatever vertical space the resizable container
+        // gives it (handled by the flex layout in the bubble shell).
+        // h-full keeps the cursor reachable to the bottom edge so a
+        // user double-clicking on an empty line at the bottom of the
+        // bubble can land focus there rather than only the top.
         class:
-          "prose-note focus:outline-none min-h-[200px] max-h-[50vh] overflow-y-auto px-3 py-2",
+          "prose-note focus:outline-none h-full px-3 py-2",
       },
     },
     // onUpdate fires whenever the doc actually changes (typed character,
@@ -196,66 +226,147 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
   }, [mode]);
 
   // ── Bubble geometry ──────────────────────────────────────────────────
-  // Anchor: centered on the card horizontally, slightly above it.
-  // We position via `left/top` (window coords) so the portal works.
-  // The fold target is the card's top-right corner.
+  // Anchor: bottom-right of the source card, with the bubble's top-left
+  // corner sitting INSIDE the card by (OVERLAP_X, OVERLAP_Y) — produces
+  // the "card → expands diagonally into a note" feel from the user's
+  // sketch. The bubble extends down + right past the card. To tune the
+  // overlap amount edit OVERLAP_X / OVERLAP_Y at the top of this file.
   //
-  // Width is responsive with a 560px cap. The toolbar's natural width
-  // (heading dropdown + 4 format btns + 3 highlight btns + 5 list/link
-  // btns + ml-auto + 3 action btns + dividers + paddings) is ~470px;
-  // 560 gives the editor comfortable side margins on top of that. On
-  // viewports narrower than 592px we fall back to (viewport - 32) and
-  // the toolbar's flex-wrap kicks in so nothing gets clipped.
-  const bubbleW = Math.min(560, window.innerWidth - 32);
-  // Clamp the horizontal anchor so the wider bubble can't drift off the
-  // viewport edge on cards that sit near the screen's left/right.
-  const idealAnchorX = cardRect.left + cardRect.width / 2 - bubbleW / 2;
+  // Default shape is a small square sticky-note (~280×260px). The
+  // browser's `resize: both` handle (bottom-right corner) lets the user
+  // drag the bubble bigger when they need more room. Min/max bounds
+  // keep the bubble usable: too small loses the editor; too big runs
+  // off-screen.
+  const DEFAULT_W = 280;
+  const DEFAULT_H = 260;
+  const MIN_W = 220;
+  const MIN_H = 180;
+  const bubbleW = Math.min(DEFAULT_W, window.innerWidth - 32);
+  const bubbleH = DEFAULT_H;
+  const maxW = Math.max(MIN_W, window.innerWidth - 32);
+  const maxH = Math.max(MIN_H, window.innerHeight - 80);
+
+  // Horizontal: bubble's left edge sits OVERLAP_X px inside the card's
+  // right edge. Clamp to keep the wide bubble inside the viewport when
+  // the card is near the screen's right edge.
+  const idealAnchorX = cardRect.left + cardRect.width - OVERLAP_X;
   const bubbleAnchorX = Math.max(
     16,
     Math.min(idealAnchorX, window.innerWidth - bubbleW - 16),
   );
-  // Try to place above the card; if no room (top < 16), place below.
-  const placeAbove = cardRect.top > 320;
-  const bubbleAnchorY = placeAbove
-    ? cardRect.top - 16
-    : cardRect.top + cardRect.height + 16;
 
-  // Fold target: the card's top-right corner, where the badge will appear.
-  const foldX = cardRect.left + cardRect.width - 24 - bubbleAnchorX - bubbleW;
-  const foldY = cardRect.top - bubbleAnchorY;
+  // Vertical: default below-and-overlapping (top edge sits OVERLAP_Y px
+  // inside the card's bottom edge). If there's not enough room below
+  // (card near viewport bottom), flip so the bubble sits ABOVE with
+  // mirrored overlap on the card's top edge — same "diagonal expansion"
+  // shape, just reflected. ESTIMATED_BUBBLE_H is a heuristic since the
+  // bubble's actual height isn't known until after layout.
+  const ESTIMATED_BUBBLE_H = 280;
+  const placeBelow =
+    cardRect.top + cardRect.height + ESTIMATED_BUBBLE_H - OVERLAP_Y <
+    window.innerHeight - 16;
+  const bubbleAnchorY = placeBelow
+    ? cardRect.top + cardRect.height - OVERLAP_Y
+    : cardRect.top + OVERLAP_Y;
+  // When flipped above, translateY(-100%) pulls the bubble up by its own
+  // height so the "anchor" line ends up being the bubble's BOTTOM edge.
+  const transformY = placeBelow ? "none" : "translateY(-100%)";
 
+  // Fold target: the card's top-right corner, where the blue door-frame
+  // bracket sits. With transform-origin "top right" + scale 0.08, the
+  // bubble shrinks to a tiny blob centered on its own top-right point;
+  // we translate that point to the bracket's CENTER so the suction
+  // visually terminates inside the L-shape rather than next to it.
+  // Bracket geometry: positioned at right:-1, top:-1 with rest size 22,
+  // so center is ~(cardRect.right - 12, cardRect.top + 10). These two
+  // numbers are the only coupling between this file and NoteBadge.tsx —
+  // change them in lockstep if NoteBadge's geometry constants change.
+  const BRACKET_CENTER_X_OFFSET = 12;
+  const BRACKET_CENTER_Y_OFFSET = 10;
+  const foldX =
+    cardRect.left + cardRect.width - BRACKET_CENTER_X_OFFSET - bubbleAnchorX - bubbleW;
+  const foldY = cardRect.top + BRACKET_CENTER_Y_OFFSET - bubbleAnchorY;
+
+  // Container is the user-resizable shell (sticky-note feel: starts
+  // small, draggable larger). `resize: both` puts the standard browser
+  // resize handle at the bottom-right corner; `overflow: hidden` is
+  // required for the handle to render. The animated bubble sits inside
+  // and scales to fill 100% of whatever size the container becomes,
+  // so resize works at any animation state.
   const containerStyle: React.CSSProperties = {
     position: "fixed",
     left: bubbleAnchorX,
     top: bubbleAnchorY,
     width: bubbleW,
-    transform: placeAbove ? "translateY(-100%)" : "none",
+    height: bubbleH,
+    minWidth: MIN_W,
+    minHeight: MIN_H,
+    maxWidth: maxW,
+    maxHeight: maxH,
+    resize: "both",
+    overflow: "hidden",
+    transform: transformY,
     zIndex: 200,
   };
 
+  // Genie minimize/restore animation. Both directions share the same
+  // (foldX, foldY) shrink target — the card's top-right corner where
+  // the blue door-frame indicator sits — so closing looks like the
+  // bubble is being sucked into the corner, and opening is the exact
+  // reverse (bubble pulled out of the corner, expanding to full size).
+  //
+  // Easing: close uses a strong ease-IN (slow start, fast end) so the
+  // last frames of the shrink accelerate, mimicking the "vacuum pull"
+  // of macOS's Genie. Open uses the inverse — strong ease-OUT — so the
+  // bubble springs decisively out of the corner then settles.
+  // transformOrigin stays "top right" across all states so the scale
+  // anchors at the same corner point in every transition (no jump).
+  const GENIE_DURATION = 480;
+  const FOLD_TRANSFORM = `translate(${foldX}px, ${foldY}px) scale(0.08)`;
   const bubbleStyle: React.CSSProperties =
     mode === "folding"
       ? {
           opacity: 0,
-          transform: `translate(${foldX}px, ${foldY}px) scale(0.08)`,
+          transform: FOLD_TRANSFORM,
           transition:
-            "opacity 280ms ease-out, transform 380ms cubic-bezier(0.55, 0, 0.55, 0.2)",
+            `opacity 320ms cubic-bezier(0.32, 0, 0.67, 0), ` +
+            `transform ${GENIE_DURATION}ms cubic-bezier(0.32, 0, 0.67, 0)`,
           transformOrigin: "top right",
           pointerEvents: "none",
         }
-      : mode === "edit"
+      : entering
         ? {
-            opacity: 1,
-            transform: "scale(1)",
-            transition: "opacity 200ms ease-out, transform 200ms ease-out",
+            // Initial paint frame: bubble is positioned AT the corner
+            // bracket, scaled to a dot, fully transparent. transition is
+            // None so this state snaps in with no animation; after two
+            // RAFs we flip `entering` to false and the transitions on
+            // peek/edit below take over to tween out of this state.
+            opacity: 0,
+            transform: FOLD_TRANSFORM,
+            transformOrigin: "top right",
+            transition: "none",
+            pointerEvents: "none",
           }
-        : {
-            // peek: semi-transparent + slightly smaller, with a gentle
-            // breathing animation hinting "click me to start editing"
-            opacity: 0.55,
-            transform: "scale(0.96)",
-            transition: "opacity 200ms ease-out, transform 200ms ease-out",
-          };
+        : mode === "edit"
+          ? {
+              opacity: 1,
+              transform: "scale(1)",
+              transformOrigin: "top right",
+              transition:
+                `opacity 280ms ease-out, ` +
+                `transform ${GENIE_DURATION}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+            }
+          : {
+              // peek: semi-transparent, hinting "click me to start
+              // editing". Adjust transparency by editing PEEK_OPACITY
+              // at the top of this file (currently 0.55).
+              opacity: PEEK_OPACITY,
+              transform: "scale(1)",
+              transformOrigin: "top right",
+              transition:
+                `opacity 280ms ease-out, ` +
+                `transform ${GENIE_DURATION}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+            };
 
   return createPortal(
     <>
@@ -273,37 +384,64 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
         />
       )}
 
-      <div ref={bubbleRef} style={containerStyle}>
+      <div ref={bubbleRef} className="note-bubble-shell" style={containerStyle}>
         <div
           onClick={handleBubbleClick}
-          // data-bubble: lets the heading dropdown walk the DOM up to
-          // find this rect for positioning the carpet popup above the
-          // bubble. Decouples HeadingDropdown from needing a ref prop
-          // threaded through Toolbar.
+          // data-bubble: walked-up DOM target used by HeadingDropdown
+          // (kept for future re-introduction). Currently only used as
+          // a stable ref point.
           data-bubble="true"
-          className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden"
+          // Open + close animations are driven by the React-state
+          // transition in `bubbleStyle` (Genie-style suck into / pop out
+          // of the card's blue corner bracket). The inner div fills its
+          // resizable parent so dragging the parent's bottom-right
+          // resize handle reflows the editor + footer naturally.
+          className="bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden w-full h-full flex flex-col"
           style={bubbleStyle}
         >
-          {/* Toolbar — only visible in edit mode, slides down from top. */}
-          {mode === "edit" && editor && (
-            <Toolbar
-              editor={editor}
-              onDone={() => {
-                setMode("folding");
-                setPendingFold({ save: true });
-              }}
-              onCancel={() => {
-                setMode("folding");
-                setPendingFold({ save: false });
-              }}
-              onDelete={() => {
-                setMode("folding");
-                setPendingFold({ save: false, deleted: true });
-              }}
-            />
-          )}
+          {/* Editor body. flex-1 + min-h-0 lets it claim all space the
+              container can spare while still scrolling internally on
+              long content. The inline TipTap toolbar is intentionally
+              gone — keyboard shortcuts (⌘B / ⌘I / etc) still work
+              because StarterKit binds them, and we'll wire up format
+              actions to a Mac menu bar separately. */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <EditorContent editor={editor} />
+          </div>
 
-          <EditorContent editor={editor} />
+          {/* Footer: tiny action strip with Trash + Save. Cancel is
+              implicit (Esc / click backdrop), kept off the strip so
+              the layout stays balanced and the sticky-note feels
+              uncluttered. Only shown in edit mode — peek mode gets the
+              hint banner instead. */}
+          {mode === "edit" && (
+            <div className="flex items-center justify-end gap-1 px-2 py-1 border-t border-zinc-800 bg-zinc-950/60">
+              <button
+                type="button"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setMode("folding");
+                  setPendingFold({ save: false, deleted: true });
+                }}
+                title="删除整条笔记"
+                className="flex h-6 w-6 items-center justify-center rounded text-rose-400 hover:bg-rose-500/15 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setMode("folding");
+                  setPendingFold({ save: true });
+                }}
+                title={`保存并关闭 (${MOD}Enter)`}
+                className="flex h-6 w-6 items-center justify-center rounded text-emerald-400 hover:bg-emerald-500/15 transition-colors"
+              >
+                <Check className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Tiny hint text in peek mode telling the user to click or
               just start typing. */}
@@ -319,475 +457,6 @@ export function NoteBubble({ initialNote, cardRect, onDone, onCancel }: Props) {
   );
 }
 
-// ── Toolbar ────────────────────────────────────────────────────────────
-
-interface ToolbarProps {
-  editor: Editor;
-  onDone: () => void;
-  onCancel: () => void;
-  onDelete: () => void;
-}
-
-function Toolbar({ editor, onDone, onCancel, onDelete }: ToolbarProps) {
-  return (
-    <div className="flex flex-wrap items-center gap-0.5 px-2 py-1.5 border-b border-zinc-800 bg-zinc-950 animate-slide-down">
-      {/* Heading dropdown — combines H1/H2/H3 + paragraph into one menu
-          to free up toolbar space and group related options. */}
-      <HeadingDropdown editor={editor} />
-      <Divider />
-      <ToolBtn
-        icon={<Bold className="w-3.5 h-3.5" />}
-        active={editor.isActive("bold")}
-        onClick={() => editor.chain().focus().toggleBold().run()}
-        title={`粗体 (${MOD}B)`}
-      />
-      <ToolBtn
-        icon={<Italic className="w-3.5 h-3.5" />}
-        active={editor.isActive("italic")}
-        onClick={() => editor.chain().focus().toggleItalic().run()}
-        title={`斜体 (${MOD}I)`}
-      />
-      <ToolBtn
-        icon={<UnderlineIcon className="w-3.5 h-3.5" />}
-        active={editor.isActive("underline")}
-        onClick={() => editor.chain().focus().toggleUnderline().run()}
-        title={`下划线 (${MOD}U)`}
-      />
-      <ToolBtn
-        icon={<Strikethrough className="w-3.5 h-3.5" />}
-        active={editor.isActive("strike")}
-        onClick={() => editor.chain().focus().toggleStrike().run()}
-        title={`删除线 (${MOD}${SHIFT}X)`}
-      />
-      <Divider />
-      <ToolBtn
-        icon={<Highlighter className="w-3.5 h-3.5" />}
-        active={editor.isActive("highlight", { color: "#fde68a" })}
-        onClick={() =>
-          editor.chain().focus().toggleHighlight({ color: "#fde68a" }).run()
-        }
-        title="黄色高亮"
-      />
-      <ColorBtn
-        editor={editor}
-        color="#ef4444"
-        title="红色文字（重点标记）"
-      />
-      <ColorBtn
-        editor={editor}
-        color="#3b82f6"
-        title="蓝色文字"
-      />
-      <Divider />
-      <ToolBtn
-        icon={<List className="w-3.5 h-3.5" />}
-        active={editor.isActive("bulletList")}
-        onClick={() => editor.chain().focus().toggleBulletList().run()}
-        title="无序列表"
-      />
-      <ToolBtn
-        icon={<ListOrdered className="w-3.5 h-3.5" />}
-        active={editor.isActive("orderedList")}
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}
-        title="有序列表"
-      />
-      <ToolBtn
-        icon={<ListTodo className="w-3.5 h-3.5" />}
-        active={editor.isActive("taskList")}
-        onClick={() => editor.chain().focus().toggleTaskList().run()}
-        title="任务列表（带勾选框）"
-      />
-      <ToolBtn
-        icon={<Quote className="w-3.5 h-3.5" />}
-        active={editor.isActive("blockquote")}
-        onClick={() => editor.chain().focus().toggleBlockquote().run()}
-        title="引用块"
-      />
-      <ToolBtn
-        icon={<Link2 className="w-3.5 h-3.5" />}
-        active={editor.isActive("link")}
-        onClick={() => insertOrEditLink(editor)}
-        title="插入 / 编辑链接"
-      />
-
-      <div className="ml-auto flex items-center gap-1">
-        <ActionBtn
-          icon={<Trash2 className="w-3.5 h-3.5" />}
-          onClick={onDelete}
-          title="删除整条笔记"
-          className="text-rose-400 hover:bg-rose-500/15"
-        />
-        <ActionBtn
-          icon={<X className="w-3.5 h-3.5" />}
-          onClick={onCancel}
-          title="取消（不保存，Esc）"
-          className="text-zinc-400 hover:bg-zinc-800"
-        />
-        <ActionBtn
-          icon={<Check className="w-3.5 h-3.5" />}
-          onClick={onDone}
-          title={`保存并关闭 (${MOD}Enter)`}
-          className="text-emerald-400 hover:bg-emerald-500/15"
-        />
-      </div>
-
-      <style>{`
-        @keyframes slideDown {
-          from { transform: translateY(-100%); opacity: 0; }
-          to   { transform: translateY(0); opacity: 1; }
-        }
-        .animate-slide-down { animation: slideDown 200ms ease-out forwards; }
-      `}</style>
-    </div>
-  );
-}
-
-/** Heading-level "carpet" popup. The trigger sits in the toolbar; clicking
- *  it unrolls a horizontal pill ABOVE the bubble (rendered via portal so
- *  the bubble's overflow:hidden doesn't clip it). The pill expands left→
- *  right via clip-path animation — like rolling out a red carpet — and
- *  its 4 chips become visible in sequence as the clip retracts past them.
- *
- *  Why portal instead of inline absolute: the bubble has overflow:hidden
- *  for its rounded corners, which would clip any popup that extends past
- *  the bubble's bounds. Rendering at document.body level sidesteps that
- *  constraint.
- *
- *  Why above the bubble (vs the original below-the-toolbar dropdown):
- *  the dropdown overlapped the editor content underneath, and clicking
- *  options had no visible effect because clicks landed on the editor's
- *  ProseMirror DOM (which intercepts and then re-issues focus events,
- *  collapsing the trigger's selection in a way that made toggleHeading
- *  appear to do nothing). Above-the-bubble + portal eliminates both. */
-function HeadingDropdown({ editor }: { editor: Editor }) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
-  const [clickKey, setClickKey] = useState(0);
-
-  const currentLevel = ([1, 2, 3] as const).find((l) =>
-    editor.isActive("heading", { level: l }),
-  );
-
-  /** Walk up from the trigger to the bubble container (tagged with
-   *  data-bubble="true"). Returns its rect so we can anchor the popup
-   *  to the bubble's top edge + left edge for a clean banner look. */
-  function findBubbleRect(): DOMRect | null {
-    let el: HTMLElement | null = triggerRef.current;
-    while (el) {
-      if (el.dataset.bubble === "true") return el.getBoundingClientRect();
-      el = el.parentElement;
-    }
-    return null;
-  }
-
-  function toggleOpen() {
-    setClickKey((k) => k + 1);
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    const bubbleRect = findBubbleRect();
-    const triggerRect = triggerRef.current?.getBoundingClientRect();
-    if (!triggerRect) return;
-    const anchorTop = bubbleRect ? bubbleRect.top : triggerRect.top;
-    const anchorLeft = bubbleRect ? bubbleRect.left : triggerRect.left;
-    setPos({
-      left: anchorLeft,
-      // CSS `bottom` is measured from the viewport's bottom edge.
-      // 4px gap so the carpet sits almost flush against the bubble's
-      // top edge — visually reads as a single attached unit rather
-      // than two floating pieces.
-      bottom: window.innerHeight - anchorTop + 4,
-    });
-    setOpen(true);
-  }
-
-  // Outside-click handler. Must check both trigger AND popup since the
-  // popup is in a portal (separate DOM subtree) — a single ref check
-  // wouldn't cover both.
-  useEffect(() => {
-    if (!open) return;
-    function onMouseDown(e: MouseEvent) {
-      const t = e.target as Node;
-      if (triggerRef.current?.contains(t)) return;
-      if (popupRef.current?.contains(t)) return;
-      setOpen(false);
-    }
-    document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [open]);
-
-  function setLevel(level: 1 | 2 | 3 | null) {
-    if (level === null) {
-      editor.chain().focus().setParagraph().run();
-    } else {
-      editor.chain().focus().toggleHeading({ level }).run();
-    }
-    setOpen(false);
-  }
-
-  return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={toggleOpen}
-        title="标题级别（正文 / H1 / H2 / H3）"
-        className={
-          "p-1 rounded flex items-center gap-0.5 hover:bg-zinc-800 transition-colors " +
-          (currentLevel ? "bg-blue-500/20 text-blue-300" : "text-zinc-400 hover:text-zinc-100")
-        }
-      >
-        <span
-          key={clickKey}
-          className={
-            "inline-flex items-center gap-0.5 " +
-            (clickKey > 0 ? "animate-toolbar-pop" : "")
-          }
-        >
-          <Heading className="w-3.5 h-3.5" />
-          {currentLevel && (
-            <span className="text-[10px] font-bold leading-none">
-              {currentLevel}
-            </span>
-          )}
-          <ChevronDown
-            className={
-              "w-2.5 h-2.5 transition-transform " + (open ? "rotate-180" : "")
-            }
-          />
-        </span>
-      </button>
-
-      {open &&
-        pos &&
-        createPortal(
-          <div
-            ref={popupRef}
-            className="fixed z-[210] flex items-stretch gap-1 px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl animate-carpet-unroll"
-            style={{ left: pos.left, bottom: pos.bottom }}
-          >
-            <HeadingChip
-              label="正文"
-              sample="正文"
-              sampleClass="text-sm"
-              active={!currentLevel}
-              onClick={() => setLevel(null)}
-            />
-            <HeadingChip
-              label="标题 1"
-              sample="H1"
-              sampleClass="text-lg font-bold"
-              active={currentLevel === 1}
-              onClick={() => setLevel(1)}
-            />
-            <HeadingChip
-              label="标题 2"
-              sample="H2"
-              sampleClass="text-base font-bold"
-              active={currentLevel === 2}
-              onClick={() => setLevel(2)}
-            />
-            <HeadingChip
-              label="标题 3"
-              sample="H3"
-              sampleClass="text-sm font-semibold"
-              active={currentLevel === 3}
-              onClick={() => setLevel(3)}
-            />
-          </div>,
-          document.body,
-        )}
-    </>
-  );
-}
-
-/** One chip in the heading carpet. Stacks a sample (H1/H2/H3/正文) over
- *  a small label so users see both the visual style preview AND its
- *  name at a glance — matches the original dropdown's two-column layout
- *  but in vertical stack form for the horizontal chip. */
-function HeadingChip({
-  label,
-  sample,
-  sampleClass,
-  active,
-  onClick,
-}: {
-  label: string;
-  sample: string;
-  sampleClass?: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const [clickKey, setClickKey] = useState(0);
-  return (
-    <button
-      type="button"
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        setClickKey((k) => k + 1);
-        onClick();
-      }}
-      title={label}
-      className={
-        "px-3 py-1 rounded text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 transition-colors flex flex-col items-center justify-center gap-0.5 min-w-[56px] " +
-        (active ? "!bg-blue-500/20 !text-blue-300" : "")
-      }
-    >
-      <span
-        key={clickKey}
-        className={
-          "inline-flex flex-col items-center gap-0.5 " +
-          (clickKey > 0 ? "animate-toolbar-pop" : "")
-        }
-      >
-        <span className={"leading-none " + (sampleClass ?? "")}>{sample}</span>
-        <span className="text-[10px] text-zinc-500 leading-none">{label}</span>
-      </span>
-    </button>
-  );
-}
-
-function ToolBtn({
-  icon,
-  active,
-  onClick,
-  title,
-}: {
-  icon: React.ReactNode;
-  active: boolean;
-  onClick: () => void;
-  title: string;
-}) {
-  // Click counter drives a `key` re-mount of the icon-wrapping span on
-  // every click so the `animate-toolbar-pop` keyframe replays. Without
-  // this, repeated clicks of the same button (e.g. toggling bold on/off)
-  // wouldn't show any visible feedback when the button's `active` state
-  // is the only thing that changes — and in some cases (toggling a mark
-  // with no text selected) even that doesn't change.
-  const [clickKey, setClickKey] = useState(0);
-  return (
-    <button
-      type="button"
-      onMouseDown={(e) => {
-        // Don't blur the editor when clicking a toolbar button.
-        e.preventDefault();
-      }}
-      onClick={() => {
-        setClickKey((k) => k + 1);
-        onClick();
-      }}
-      title={title}
-      className={
-        "p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors " +
-        (active ? "!bg-blue-500/20 !text-blue-300" : "")
-      }
-    >
-      <span
-        key={clickKey}
-        className={clickKey > 0 ? "animate-toolbar-pop" : "inline-flex"}
-      >
-        {icon}
-      </span>
-    </button>
-  );
-}
-
-function ColorBtn({
-  editor,
-  color,
-  title,
-}: {
-  editor: Editor;
-  color: string;
-  title: string;
-}) {
-  const active = editor.isActive("textStyle", { color });
-  const [clickKey, setClickKey] = useState(0);
-  return (
-    <button
-      type="button"
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        setClickKey((k) => k + 1);
-        if (active) {
-          editor.chain().focus().unsetColor().run();
-        } else {
-          editor.chain().focus().setColor(color).run();
-        }
-      }}
-      title={title}
-      className={
-        "p-1 rounded hover:bg-zinc-800 transition-colors " +
-        (active ? "!bg-blue-500/20" : "")
-      }
-    >
-      <span
-        key={clickKey}
-        className={clickKey > 0 ? "animate-toolbar-pop" : "inline-flex"}
-      >
-        <Type className="w-3.5 h-3.5" style={{ color }} />
-      </span>
-    </button>
-  );
-}
-
-/** Small action button used for Trash / Cancel / Done at the right end
- *  of the toolbar. Same click-pop pattern as ToolBtn, but no `active`
- *  state — these are momentary actions, not toggles. */
-function ActionBtn({
-  icon,
-  onClick,
-  title,
-  className,
-}: {
-  icon: React.ReactNode;
-  onClick: () => void;
-  title: string;
-  className: string;
-}) {
-  const [clickKey, setClickKey] = useState(0);
-  return (
-    <button
-      type="button"
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        setClickKey((k) => k + 1);
-        onClick();
-      }}
-      title={title}
-      className={"p-1 rounded transition-colors " + className}
-    >
-      <span
-        key={clickKey}
-        className={clickKey > 0 ? "animate-toolbar-pop" : "inline-flex"}
-      >
-        {icon}
-      </span>
-    </button>
-  );
-}
-
-function Divider() {
-  return <div className="w-px h-4 bg-zinc-800 mx-0.5" />;
-}
-
-function insertOrEditLink(editor: Editor) {
-  const previousUrl = editor.getAttributes("link").href as string | undefined;
-  // Use a simple prompt — TipTap doesn't ship a link UI by default. For our
-  // scope (vocab notes) a prompt is fine; full inline UI would be over-
-  // engineering.
-  const url = window.prompt("链接 URL", previousUrl ?? "https://");
-  if (url === null) return;
-  if (url === "") {
-    editor.chain().focus().extendMarkRange("link").unsetLink().run();
-    return;
-  }
-  editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-}
 
 // ── Helpers ────────────────────────────────────────────────────────────
 

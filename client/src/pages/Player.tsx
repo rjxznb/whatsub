@@ -10,6 +10,8 @@ import { useAnalysis } from "../store/analysis";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { useVocabulary } from "../store/vocab";
+import { loadAllDrafts } from "../store/vocabDraft";
+import { makeVocabId } from "../types/vocab";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useVideoSync } from "../hooks/useVideoSync";
 import { VideoPlayer } from "../components/VideoPlayer";
@@ -407,11 +409,31 @@ export function Player() {
   // trimmed expression (= VocabEntry.id). Used by SubtitleList to render
   // thin-yellow vocab highlights with hover tooltips on already-saved words.
   // Recomputed when entries or videoId change.
+  //
+  // Drafts: also included with `saved: false` so the subtitle list shows
+  // a DASHED underline for phrases the user typed notes on but never
+  // explicitly saved. Drafts live in localStorage (vocabDraft store);
+  // we re-read on every entry-change so a fresh save promotes the
+  // dashed → solid underline immediately. The draft scan is O(n) over
+  // localStorage keys — fine for the typical < 100 drafts a user
+  // accumulates. If a phrase exists in BOTH the saved entries and the
+  // draft store (rare race), saved wins.
   const vocabMapForVideo = useMemo(() => {
-    const m = new Map<string, { meaningZh: string; usage: string }>();
+    const m = new Map<
+      string,
+      { meaningZh: string; usage: string; saved: boolean }
+    >();
+    for (const d of loadAllDrafts()) {
+      if (d.videoId !== videoId) continue;
+      m.set(makeVocabId(d.expression), {
+        meaningZh: d.meaningZh,
+        usage: d.usage,
+        saved: false,
+      });
+    }
     for (const e of vocab.entries) {
       if (e.videoId === videoId) {
-        m.set(e.id, { meaningZh: e.meaningZh, usage: e.usage });
+        m.set(e.id, { meaningZh: e.meaningZh, usage: e.usage, saved: true });
       }
     }
     return m;

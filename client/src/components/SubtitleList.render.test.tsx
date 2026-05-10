@@ -102,10 +102,10 @@ describe("renderEnglishWithHighlights", () => {
     const { container } = render(
       <div>{renderEnglishWithHighlights(cue(), m)}</div>
     );
-    // Tooltip element is conditionally rendered on hover — but VocabHighlight
-    // also sets title="已收藏" only when there's NO note. With a real meaning
-    // the title attribute should be omitted.
+    // VocabHighlight always sets a title now (the click-to-edit hint
+    // is the primary affordance — it differs only by wording when
+    // there's no saved note: "已收藏 · 点击编辑" vs "点击编辑").
     const span = container.querySelector("[data-highlight=\"true\"]");
-    expect(span?.getAttribute("title")).toBeNull();
+    expect(span?.getAttribute("title")).toBe("点击编辑");
   });
 });

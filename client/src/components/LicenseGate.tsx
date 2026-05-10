@@ -129,10 +129,11 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
     };
   }, [onDone]);
 
-  // Warm "champagne gold" — restrained, reads as authority/authenticity
-  // without the gaudy yellow of pure #FFD700. Slightly desaturated so it
-  // doesn't fight the matte-black background.
-  const GOLD = '#d6a55a';
+  // Brand accent blue — same hex WelcomeIntro uses for "Sub", so the
+  // activated-seal feels like a continuation of the brand identity
+  // rather than an unrelated celebration palette. Reads as trust /
+  // verification on a black background.
+  const SEAL_BLUE = '#3B9BFF';
 
   return (
     <div className="fixed inset-0 z-[1000] bg-black flex items-center justify-center overflow-hidden">
@@ -155,9 +156,12 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
         >
           <defs>
             <radialGradient id="seal-halo" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="rgba(214, 165, 90, 0.18)" />
-              <stop offset="60%" stopColor="rgba(214, 165, 90, 0.05)" />
-              <stop offset="100%" stopColor="rgba(214, 165, 90, 0)" />
+              {/* Halo rgb matches SEAL_BLUE (#3B9BFF = 59, 155, 255).
+                  Alpha steps unchanged from the original gold version
+                  — same falloff curve, different hue. */}
+              <stop offset="0%" stopColor="rgba(59, 155, 255, 0.18)" />
+              <stop offset="60%" stopColor="rgba(59, 155, 255, 0.05)" />
+              <stop offset="100%" stopColor="rgba(59, 155, 255, 0)" />
             </radialGradient>
           </defs>
           <circle cx="56" cy="56" r="54" fill="url(#seal-halo)" />
@@ -169,7 +173,7 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
             cy="56"
             r="42"
             fill="none"
-            stroke={GOLD}
+            stroke={SEAL_BLUE}
             strokeWidth="1.25"
             strokeDasharray="263.9"
             strokeDashoffset="263.9"
@@ -182,7 +186,7 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
           <path
             d="M 38 57 L 51 70 L 76 43"
             fill="none"
-            stroke={GOLD}
+            stroke={SEAL_BLUE}
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -197,7 +201,7 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
             animation starts at 1500ms so the text appears AFTER the
             check completes — never compete for attention with the seal. */}
         <h1
-          className="text-[26px] font-medium text-amber-200/85 seal-title"
+          className="text-[26px] font-medium text-blue-300/90 seal-title"
           style={{ letterSpacing: '0.45em', paddingLeft: '0.45em' }}
         >
           已激活

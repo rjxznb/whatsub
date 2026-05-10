@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Star, Loader2, AlertCircle, X } from "lucide-react";
+import {
+  Sparkles,
+  Star,
+  Loader2,
+  AlertCircle,
+  X,
+  Save,
+  Check,
+} from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { useVocabulary } from "../store/vocab";
 import { makeVocabId } from "../types/vocab";
@@ -29,6 +37,12 @@ interface Props {
   videoTitle: string;
   /** Disable the bubble entirely (e.g. in subtitle edit mode). */
   disabled: boolean;
+  /** Fires whenever the bubble opens or closes. SubtitleList uses this
+   *  to suspend its auto-scroll while a selection is being annotated:
+   *  open → freeze the scroll indefinitely; close → reset the standard
+   *  2 s wheel/touch grace timer so the user has a beat to keep
+   *  reading the cue they just edited before auto-scroll resumes. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -47,6 +61,7 @@ export function SubtitleSelectionBubble({
   videoId,
   videoTitle,
   disabled,
+  onOpenChange,
 }: Props) {
   const [info, setInfo] = useState<SelectionInfo | null>(null);
   const [meaningZh, setMeaningZh] = useState("");
@@ -57,10 +72,30 @@ export function SubtitleSelectionBubble({
     usage: string;
   } | null>(null);
   const [mounted, setMounted] = useState(false);
+  // Visual ack after the user clicks the explicit save button — Save
+  // icon flips into a green Check and STAYS that way until the user
+  // edits the inputs again (or selects a different word). That way
+  // the user has a persistent "yes it's saved" indicator while
+  // browsing, and as soon as they make a change the icon reverts to
+  // Save to signal "you have unsaved edits". `lastSavedValuesRef`
+  // snapshots the meaningZh/usage at save time; the watcher effect
+  // flips the flash off the moment those values diverge.
+  const [savedFlash, setSavedFlash] = useState(false);
+  const lastSavedValuesRef = useRef<{ meaningZh: string; usage: string } | null>(null);
   const lookupAbortRef = useRef<AbortController | null>(null);
   const bubbleRef = useRef<HTMLDivElement>(null);
   const { entries, has, toggle, add } = useVocabulary();
   const { settings } = useSettings();
+
+  // Notify the parent (SubtitleList) whenever the bubble's open state
+  // flips, so it can pause/resume auto-scroll. We fire on every change
+  // so close → bumpInteraction() runs even when the same expression is
+  // re-selected within the same render commit. The check that wraps
+  // the call avoids a no-op fire on the first render where info is
+  // null and onOpenChange's previous value was also null/undefined.
+  useEffect(() => {
+    onOpenChange?.(info !== null);
+  }, [info, onOpenChange]);
 
   // On selection change: restore from vocab (top priority), then draft, else collapsed default.
   useEffect(() => {
@@ -206,6 +241,89 @@ export function SubtitleSelectionBubble({
     return () => cancelAnimationFrame(id);
   }, [info?.expression]);
 
+  // Watcher: if savedFlash is on and the user has since changed the
+  // inputs (typed, AI lookup populated them, etc.), flip flash off
+  // so the icon reverts from green Check to Save — visual cue that
+  // there are now unsaved edits. Comparing against
+  // lastSavedValuesRef captures the snapshot taken at click-save
+  // time, so re-typing the EXACT same characters (rare) doesn't
+  // unflash spuriously.
+  useEffect(() => {
+    if (!savedFlash) return;
+    const snap = lastSavedValuesRef.current;
+    if (!snap) return;
+    if (snap.meaningZh !== meaningZh || snap.usage !== usage) {
+      setSavedFlash(false);
+    }
+  }, [meaningZh, usage, savedFlash]);
+
+  // Reset save state whenever the user selects a different word —
+  // the new word starts fresh, no carry-over green check.
+  useEffect(() => {
+    setSavedFlash(false);
+    lastSavedValuesRef.current = null;
+  }, [info?.expression]);
+
+  // ── Unmount safety net ──────────────────────────────────────────────
+  // closeBubble (× / Esc / outside-click) is the ONLY happy path that
+  // persists in-progress edits to disk. If the bubble unmounts via any
+  // OTHER path — user navigates back to library, switches videos,
+  // closes the app window — those pre-cleanup hooks don't run and the
+  // user's draft would be lost.
+  //
+  // We mirror the latest persist-on-exit closure into a ref every
+  // render so the [] -deps cleanup below can call the LATEST version
+  // (a closure captured in the [] -deps useEffect itself would freeze
+  // at the initial mount values, defeating the point). On unmount we
+  // run it once: drafts → localStorage, saved entries → vocab.json
+  // flush, empty inputs on an unsaved word → clearDraft so a stale
+  // draft doesn't ghost-restore on next selection.
+  const persistOnUnmountRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    persistOnUnmountRef.current = () => {
+      if (!info) return;
+      if (saved) {
+        // Saved entries: flush latest edits to vocab.json. Fire-and-
+        // forget — the cleanup chain can't await, and an IO error
+        // here mustn't crash the unmount.
+        void add({
+          id: makeVocabId(info.expression),
+          expression: info.expression,
+          meaningZh,
+          usage,
+          videoId,
+          videoTitle,
+          cueTime: info.cueTime,
+          cueText: info.cueText,
+          addedAt:
+            entries.find((e) => e.id === makeVocabId(info.expression))?.addedAt ??
+            new Date().toISOString(),
+        }).catch((e) => console.warn("unmount-time vocab flush failed", e));
+        return;
+      }
+      if (meaningZh.trim() || usage.trim()) {
+        saveDraft({
+          expression: info.expression,
+          meaningZh,
+          usage,
+          cueText: info.cueText,
+          cueTime: info.cueTime,
+          videoId,
+          videoTitle,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        // Empty inputs on an unsaved word — wipe any stale draft so
+        // it doesn't ghost-restore next time.
+        clearDraft(info.expression);
+      }
+    };
+  });
+  useEffect(() => {
+    return () => persistOnUnmountRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!info) return null;
 
   const onLookup = async () => {
@@ -235,6 +353,63 @@ export function SubtitleSelectionBubble({
       if (ctrl.signal.aborted) return;
       setLookup({ kind: "error", message: friendlyError(String(e), "analyzing").title });
     }
+  };
+
+  // Explicit "save progress" — persists the user's current draft
+  // WITHOUT committing the word to the vocab list. Distinct from ⭐
+  // (which adds/removes from vocab):
+  //   - Unsaved entry: write to localStorage draft store. Subtitle
+  //     gets a dashed underline; user can come back later and keep
+  //     editing, then ⭐ to commit.
+  //   - Already-saved entry: flush the current edits to vocab.json
+  //     (immediate version of the 500ms debounce). The entry stays
+  //     in vocab; this just makes the latest typed text durable.
+  // The button flashes a tick for 1.2s either way as a "yes that
+  // landed" cue, since the auto-save / draft-on-close behaviors are
+  // both invisible to the user without it.
+  const onSaveNow = async () => {
+    if (!info) return;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    try {
+      if (saved) {
+        await add({
+          id: makeVocabId(info.expression),
+          expression: info.expression,
+          meaningZh,
+          usage,
+          videoId,
+          videoTitle,
+          cueTime: info.cueTime,
+          cueText: info.cueText,
+          addedAt:
+            entries.find((e) => e.id === makeVocabId(info.expression))?.addedAt ??
+            new Date().toISOString(),
+        });
+      } else {
+        // Persist as draft only — don't add to vocab. Stash the same
+        // shape closeBubble would write on dismissal so a fresh open
+        // restores exactly what the user typed.
+        const draft: VocabDraft = {
+          expression: info.expression,
+          meaningZh,
+          usage,
+          cueText: info.cueText,
+          cueTime: info.cueTime,
+          videoId,
+          videoTitle,
+          updatedAt: new Date().toISOString(),
+        };
+        saveDraft(draft);
+      }
+    } catch (e) {
+      console.error("explicit save failed", e);
+      return;
+    }
+    lastSavedValuesRef.current = { meaningZh, usage };
+    setSavedFlash(true);
   };
 
   const onStar = async () => {
@@ -275,10 +450,41 @@ export function SubtitleSelectionBubble({
     // X close button, ESC, or by clicking outside.
   };
 
-  const top = Math.max(
-    8,
-    info.rect.top - (suggestion ? 330 : 200),
-  );
+  // Position the bubble so it never overlaps the selected phrase. We
+  // prefer "above the selection" — feels like the bubble is anchored
+  // to the words it describes — but if the selection is too close to
+  // the top of the viewport for the bubble to fit, we drop the bubble
+  // BELOW the selection instead. The hardcoded estimate matches the
+  // bubble's natural height in the two visible states (with /
+  // without the AI-suggestion strip); off-by-a-few-px is fine since
+  // the gap below absorbs it.
+  const ESTIMATED_HEIGHT = suggestion ? 330 : 200;
+  const VIEWPORT_PADDING = 8;
+  const SELECTION_GAP = 10;
+  const aboveTop = info.rect.top - ESTIMATED_HEIGHT - SELECTION_GAP;
+  const belowTop = info.rect.bottom + SELECTION_GAP;
+  let top: number;
+  if (aboveTop >= VIEWPORT_PADDING) {
+    // Room above — preferred placement.
+    top = aboveTop;
+  } else if (belowTop + ESTIMATED_HEIGHT <= window.innerHeight - VIEWPORT_PADDING) {
+    // Not enough room above; drop below the selection. The bubble's
+    // top edge is SELECTION_GAP px below the selection bottom so the
+    // selected phrase stays visible AND the bubble doesn't crowd it.
+    top = belowTop;
+  } else {
+    // Edge case: viewport too short for the bubble in either slot.
+    // Whichever side has more room wins, then clamp into the viewport.
+    const roomAbove = info.rect.top - VIEWPORT_PADDING;
+    const roomBelow = window.innerHeight - VIEWPORT_PADDING - info.rect.bottom;
+    top =
+      roomAbove >= roomBelow
+        ? Math.max(VIEWPORT_PADDING, info.rect.top - ESTIMATED_HEIGHT - SELECTION_GAP)
+        : Math.min(
+            window.innerHeight - ESTIMATED_HEIGHT - VIEWPORT_PADDING,
+            info.rect.bottom + SELECTION_GAP,
+          );
+  }
   const left = clampLeft(info.rect.left + info.rect.width / 2 - BUBBLE_WIDTH / 2);
 
   const llmReady = isProviderReady(settings);
@@ -337,12 +543,52 @@ export function SubtitleSelectionBubble({
     >
       {/* Header row */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800">
-        <span
-          className="flex-1 truncate text-sm text-zinc-100"
-          title={info.expression}
-        >
-          {info.expression}
-        </span>
+        {/* Expression + save button as a tight pair (gap-1 = 4px),
+            wrapped in their own flex group that takes the remaining
+            space. min-w-0 + flex-1 lets the expression text truncate
+            without pushing the save button off the row, and the
+            save sits flush against the title — eye-flow reads "this
+            is the word, save it" as one unit, with AI / ⭐ / × as
+            secondary actions on the right. */}
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <span
+            className="truncate text-sm text-zinc-100"
+            title={info.expression}
+          >
+            {info.expression}
+          </span>
+          <button
+            type="button"
+            onClick={onSaveNow}
+            title={
+              savedFlash
+                ? "已保存 ✓ — 继续编辑会变回保存"
+                : saved
+                  ? "保存当前修改"
+                  : "保存进度（不收藏，下次接着写）"
+            }
+            className={
+              // Compact 5×5 button (vs 7×7 elsewhere) so it sits next
+              // to the title text without dominating. Slight scale-up
+              // on hover for a friendly bounce; the saved state pops
+              // a 1.10× scale once and stays there until the user
+              // edits — a subtle "happy" cue that doesn't distract.
+              // Saved state has NO background fill so the green check
+              // reads as a clean inline glyph next to the word title,
+              // not a button-press chip.
+              "shrink-0 flex h-5 w-5 items-center justify-center rounded-md transition-all duration-200 " +
+              (savedFlash
+                ? "text-emerald-400 scale-110"
+                : "text-zinc-400 hover:bg-zinc-800 hover:text-emerald-300 hover:scale-110")
+            }
+          >
+            {savedFlash ? (
+              <Check className="h-3 w-3" strokeWidth={3} />
+            ) : (
+              <Save className="h-3 w-3" strokeWidth={2} />
+            )}
+          </button>
+        </div>
         <button
           type="button"
           onClick={onLookup}
@@ -396,7 +642,7 @@ export function SubtitleSelectionBubble({
           </div>
         )}
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-zinc-500">📖 中文释义</span>
+          <span className="text-xs text-zinc-500">中文释义</span>
           <textarea
             value={meaningZh}
             onChange={(e) => setMeaningZh(e.target.value)}
@@ -405,7 +651,7 @@ export function SubtitleSelectionBubble({
           />
         </label>
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-zinc-500">💬 用法</span>
+          <span className="text-xs text-zinc-500">用法</span>
           <textarea
             value={usage}
             onChange={(e) => setUsage(e.target.value)}

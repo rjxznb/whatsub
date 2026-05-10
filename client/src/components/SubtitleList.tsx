@@ -7,10 +7,15 @@ import { SubtitleSelectionBubble } from "./SubtitleSelectionBubble";
 import { formatTime, formatEditTime, parseEditTime } from "../utils/time";
 import { useAnalysis } from "../store/analysis";
 
-/** Per-vocab-entry data shown when the user hovers a thin-yellow vocab span. */
+/** Per-vocab-entry data shown when the user hovers a thin-yellow vocab
+ *  span. `saved` distinguishes a fully-committed vocab entry (solid
+ *  yellow underline) from a draft the user typed but never explicitly
+ *  saved (dashed underline). Optional: undefined is treated as "saved"
+ *  for back-compat with older callers / test fixtures. */
 export interface VocabHighlightInfo {
   meaningZh: string;
   usage: string;
+  saved?: boolean;
 }
 
 interface Props {
@@ -88,6 +93,14 @@ export function SubtitleList({
   const interactingRef = useRef(false);
   const [interacting, setInteracting] = useState(false);
   const interactingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Selection bubble (SubtitleSelectionBubble) open state. Treated like
+  // a third freeze signal alongside hoveringHighlight + interacting:
+  // while the bubble is open the auto-scroll effect skips the snap-to-
+  // current-cue, indefinitely. On close we bump the 2s timer so the
+  // user gets the same grace as a wheel scroll before auto-scroll
+  // resumes.
+  const [selectionBubbleOpen, setSelectionBubbleOpen] = useState(false);
+  const selectionBubbleOpenRef = useRef(false);
   // True while one of OUR scrollIntoView animations is in progress. The
   // 'scroll' listener consults this to avoid mistaking our own scroll for
   // user input.
@@ -112,8 +125,9 @@ export function SubtitleList({
   useEffect(() => {
     if (!autoScroll) return;
     if (editing) return;
-    if (hoveringHighlight) return;       // still reading a tooltip
-    if (interactingRef.current) return;  // within 2s grace from last interaction
+    if (hoveringHighlight) return;        // still reading a tooltip
+    if (interactingRef.current) return;   // within 2s grace from last interaction
+    if (selectionBubbleOpenRef.current) return; // selection bubble holds the lock indefinitely
     if (currentIdx < 0) return;
     const el = listRef.current?.querySelector(`[data-idx="${currentIdx}"]`);
     if (!el) return;
@@ -126,10 +140,11 @@ export function SubtitleList({
     programmaticTimerRef.current = setTimeout(() => {
       programmaticScrollRef.current = false;
     }, 800);
-    // `interacting` state is in the dep list (not just the ref) so when its
-    // timer flips false, the effect re-runs and snaps to current cue —
-    // important on a paused video where currentIdx isn't advancing.
-  }, [currentIdx, hoveringHighlight, interacting, autoScroll, editing]);
+    // `interacting` and `selectionBubbleOpen` are in the dep list (not
+    // just the refs) so when either flips false the effect re-runs and
+    // snaps to current cue — important on a paused video where
+    // currentIdx isn't advancing.
+  }, [currentIdx, hoveringHighlight, interacting, selectionBubbleOpen, autoScroll, editing]);
 
   // Highlight hover: enter freezes; exit DOES NOT immediately release —
   // instead it bumps the 2s interaction timer so the user can move away
@@ -451,6 +466,19 @@ export function SubtitleList({
         videoId={videoId}
         videoTitle={videoTitle}
         disabled={editing}
+        onOpenChange={(open) => {
+          // Pause/resume the auto-scroll alongside the bubble's life.
+          // Open: hold the freeze flag indefinitely; auto-scroll
+          // effect short-circuits as long as the ref is true.
+          // Close: clear the freeze + bump the 2 s grace timer so
+          // the user sees the same "you just interacted, hang on a
+          // sec before snapping" pause that a wheel scroll gives
+          // them — keeps the cue they were just editing visible
+          // while their attention is settling.
+          selectionBubbleOpenRef.current = open;
+          setSelectionBubbleOpen(open);
+          if (!open) bumpInteraction();
+        }}
       />
     </div>
   );
@@ -676,6 +704,7 @@ function spliceVocabUnderlines(
         word={text.slice(h.start, h.end)}
         meaningZh={info?.meaningZh}
         usage={info?.usage}
+        saved={info?.saved !== false}
       />
     );
     cursor = h.end;

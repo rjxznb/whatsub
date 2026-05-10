@@ -614,7 +614,11 @@ export function WelcomeIntro({ children }: Props) {
           // WKWebView doesn't). Padding is symmetric so translate(-50%,
           // -50%) re-centers the (now padded) box around viewport center
           // — the visible text position is unchanged.
-          padding: "0.3em 0.4em",
+          // Bumped from 0.4em → 0.8em horizontal because Caveat's "?"
+          // right curl extends ~0.5em past its advance box at the
+          // headline font size, and the previous 0.4em was still
+          // catching the tip on Mac at certain animation frames.
+          padding: "0.3em 0.8em",
           fontFamily: "Caveat, cursive",
           fontSize: animFontSize,
           fontWeight: 700,
@@ -885,7 +889,11 @@ export function WelcomeIntro({ children }: Props) {
 
       {/* "?" ghost — twin of the hey ghost above, captured at the same
           pre-fly frame and fading via the same heyOpacity timeline so the
-          two greeting bookends disappear in lockstep visually. */}
+          two greeting bookends disappear in lockstep visually.
+          paddingRight + overflow:visible give the WKWebView composite
+          layer extra room on the right so Caveat's "?" curl doesn't
+          get clipped at the layer edge — the explicit `width` here is
+          the glyph's advance box, which excludes ink overflow. */}
       {heyT > 0 && qmarkGhost && (
         <span
           style={{
@@ -894,6 +902,8 @@ export function WelcomeIntro({ children }: Props) {
             top: qmarkGhost.top,
             width: qmarkGhost.width,
             height: qmarkGhost.height,
+            paddingRight: "0.5em",
+            overflow: "visible",
             fontFamily: "Caveat, cursive",
             fontSize: qmarkGhost.fontSize,
             fontWeight: 700,

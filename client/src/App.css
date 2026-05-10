@@ -150,10 +150,12 @@ body::-webkit-scrollbar-corner,
   text-decoration-thickness: 1px;
   cursor: pointer;
 }
-/* Placeholder shown when the editor is empty */
+/* Placeholder shown when the editor is empty. Brand blue (#3b82f6 with
+   55% alpha) so it reads as a soft prompt rather than a permanent state
+   — matches the corner-bracket indicator + WelcomeIntro accent. */
 .prose-note p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  color: rgb(113 113 122); /* zinc-500 */
+  color: rgba(59, 130, 246, 0.55);
   pointer-events: none;
   float: left;
   height: 0;
@@ -247,5 +249,77 @@ body::-webkit-scrollbar-corner,
 }
 .animate-vocab-tour-pulse {
   animation: vocab-tour-pulse 1.6s ease-in-out infinite;
+}
+
+/* Note indicator: blue L-shaped corner bracket at the top-right of a
+   vocab card, present whenever the card has a saved note. Mounts with
+   scale-from-zero anchored at the top-right corner so the bracket
+   visibly "draws into" the corner when the note bubble's fold-out
+   finishes (rather than snapping in). */
+@keyframes note-indicator-enter {
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.animate-note-indicator-enter {
+  animation: note-indicator-enter 280ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  /* Anchor scale at the corner where the two legs meet, so the bracket
+     "grows out" of the card corner like a frame snapping into place. */
+  transform-origin: top right;
+}
+
+/* Note bubble enter: small + transparent → peek-state (handled inline)
+   over 280ms. Used when the bubble first mounts on double-click so the
+   open feels expansive rather than instantaneous. We deliberately don't
+   pin the to-frame to specific values — the inline style for peek/edit
+   mode takes over once the keyframe finishes, keeping a single source
+   of truth for the resting opacity/scale. */
+@keyframes note-bubble-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+.animate-note-bubble-enter {
+  animation: note-bubble-enter 280ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* Hide the browser's default resize handle (the small diagonal-line
+   triangle in the bottom-right) on the note bubble's outer shell. The
+   functional drag area stays — the user can still grab the corner —
+   but visually nothing is drawn, matching the sticky-note aesthetic.
+   Both WebView2 (Chromium) and WKWebView (Safari) honor
+   ::-webkit-resizer, so this works on Win + Mac. */
+.note-bubble-shell::-webkit-resizer {
+  background: transparent;
+  border: none;
+}
+
+/* Vocab draft underline — used by VocabHighlight when the entry is a
+   localStorage draft (user typed notes but never explicitly saved).
+   The native CSS `border-dashed` renders very short, dense dashes (~2px
+   solid + ~2px gap in Chromium) which made drafts hard to distinguish
+   from solid underlines at a glance. We draw our own dashes via a
+   linear-gradient repeating background — 8px solid + 6px gap — which
+   reads clearly as "in-progress" without dominating the line. */
+.vocab-draft-underline {
+  background-image: linear-gradient(
+    to right,
+    rgb(251 191 36 / 0.7) 0%,
+    rgb(251 191 36 / 0.7) 60%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: 14px 1.5px;
+  background-repeat: repeat-x;
+  background-position: 0 100%;
+  /* Push the dashes a hair below the text so they don't visually
+     touch descenders. */
+  padding-bottom: 1px;
 }
 

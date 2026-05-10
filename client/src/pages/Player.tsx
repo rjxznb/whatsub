@@ -10,7 +10,7 @@ import { useAnalysis } from "../store/analysis";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { useVocabulary } from "../store/vocab";
-import { loadAllDrafts } from "../store/vocabDraft";
+import { loadAllDrafts, subscribeDrafts } from "../store/vocabDraft";
 import { makeVocabId } from "../types/vocab";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useVideoSync } from "../hooks/useVideoSync";
@@ -408,16 +408,22 @@ export function Player() {
   // Map of vocab entries saved from the CURRENT video, keyed by lowercased+
   // trimmed expression (= VocabEntry.id). Used by SubtitleList to render
   // thin-yellow vocab highlights with hover tooltips on already-saved words.
-  // Recomputed when entries or videoId change.
+  // Recomputed when entries / videoId / draftVersion change.
   //
   // Drafts: also included with `saved: false` so the subtitle list shows
   // a DASHED underline for phrases the user typed notes on but never
   // explicitly saved. Drafts live in localStorage (vocabDraft store);
-  // we re-read on every entry-change so a fresh save promotes the
-  // dashed → solid underline immediately. The draft scan is O(n) over
-  // localStorage keys — fine for the typical < 100 drafts a user
-  // accumulates. If a phrase exists in BOTH the saved entries and the
-  // draft store (rare race), saved wins.
+  // localStorage doesn't fire change events for same-tab mutations, so
+  // we subscribe to the store's own pub/sub via `subscribeDrafts` and
+  // bump a `draftVersion` counter — that bump invalidates this useMemo
+  // and re-pulls the latest drafts. Without the subscription the dashed
+  // underline would never appear until the next render triggered by an
+  // unrelated state change. If a phrase exists in BOTH the saved
+  // entries and the draft store (rare race), saved wins.
+  const [draftVersion, setDraftVersion] = useState(0);
+  useEffect(() => {
+    return subscribeDrafts(() => setDraftVersion((v) => v + 1));
+  }, []);
   const vocabMapForVideo = useMemo(() => {
     const m = new Map<
       string,
@@ -437,7 +443,7 @@ export function Player() {
       }
     }
     return m;
-  }, [vocab.entries, videoId]);
+  }, [vocab.entries, videoId, draftVersion]);
 
   function jump(t: number) {
     if (videoRef.current) videoRef.current.currentTime = t;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
 import type { Subtitle } from "../llm/types";
 import { HighlightWord } from "./HighlightWord";
@@ -121,6 +121,29 @@ export function SubtitleList({
       setInteracting(false);
     }, USER_SCROLL_RESUME_MS);
   };
+
+  // Stable callback identity — without useCallback, every re-render of
+  // SubtitleList (which happens at minimum on every cue change) handed
+  // SubtitleSelectionBubble a brand-new function. Its
+  // useEffect([info, onOpenChange]) treated each new identity as a
+  // dependency change and re-fired with the unchanged `info` value,
+  // which on the closed-bubble path called bumpInteraction()
+  // continuously — pinning interactingRef true forever and freezing
+  // auto-scroll. useCallback([]) keeps the identity stable across
+  // SubtitleList re-renders so the bubble's effect only fires on
+  // actual open/close transitions.
+  const onSelectionBubbleOpenChange = useCallback((open: boolean) => {
+    // Pause/resume the auto-scroll alongside the bubble's life.
+    // Open: hold the freeze flag indefinitely; auto-scroll effect
+    // short-circuits as long as the ref is true.
+    // Close: clear the freeze + bump the 2 s grace timer so the user
+    // sees the same "you just interacted, hang on a sec before
+    // snapping" pause that a wheel scroll gives them.
+    selectionBubbleOpenRef.current = open;
+    setSelectionBubbleOpen(open);
+    if (!open) bumpInteraction();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!autoScroll) return;
@@ -466,19 +489,7 @@ export function SubtitleList({
         videoId={videoId}
         videoTitle={videoTitle}
         disabled={editing}
-        onOpenChange={(open) => {
-          // Pause/resume the auto-scroll alongside the bubble's life.
-          // Open: hold the freeze flag indefinitely; auto-scroll
-          // effect short-circuits as long as the ref is true.
-          // Close: clear the freeze + bump the 2 s grace timer so
-          // the user sees the same "you just interacted, hang on a
-          // sec before snapping" pause that a wheel scroll gives
-          // them — keeps the cue they were just editing visible
-          // while their attention is settling.
-          selectionBubbleOpenRef.current = open;
-          setSelectionBubbleOpen(open);
-          if (!open) bumpInteraction();
-        }}
+        onOpenChange={onSelectionBubbleOpenChange}
       />
     </div>
   );

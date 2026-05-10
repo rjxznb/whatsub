@@ -17,6 +17,34 @@ function key(expression: string): string {
   return PREFIX + makeVocabId(expression);
 }
 
+// ── Change notifications ────────────────────────────────────────────────
+// Components that derive UI from the draft layer (Player.tsx vocab map,
+// for the dashed-underline-on-cue-list rendering) need to re-render
+// when a draft is saved/cleared. localStorage doesn't fire any
+// in-process events for same-tab mutations, so we maintain our own
+// listener set and ping it from saveDraft/clearDraft. Subscribe via
+// `subscribeDrafts` and bump a version counter in your component to
+// trigger downstream re-renders / useMemo recomputes.
+type Listener = () => void;
+const listeners = new Set<Listener>();
+
+export function subscribeDrafts(fn: Listener): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+function notifyChange(): void {
+  for (const fn of listeners) {
+    try {
+      fn();
+    } catch (e) {
+      console.warn("vocabDraft listener threw", e);
+    }
+  }
+}
+
 export function loadDraft(expression: string): VocabDraft | null {
   try {
     const raw = window.localStorage.getItem(key(expression));
@@ -29,10 +57,12 @@ export function loadDraft(expression: string): VocabDraft | null {
 
 export function saveDraft(draft: VocabDraft): void {
   window.localStorage.setItem(key(draft.expression), JSON.stringify(draft));
+  notifyChange();
 }
 
 export function clearDraft(expression: string): void {
   window.localStorage.removeItem(key(expression));
+  notifyChange();
 }
 
 /** Enumerate every draft currently in localStorage. Used by the

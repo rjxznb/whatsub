@@ -88,13 +88,21 @@ export function SubtitleSelectionBubble({
   const { settings } = useSettings();
 
   // Notify the parent (SubtitleList) whenever the bubble's open state
-  // flips, so it can pause/resume auto-scroll. We fire on every change
-  // so close → bumpInteraction() runs even when the same expression is
-  // re-selected within the same render commit. The check that wraps
-  // the call avoids a no-op fire on the first render where info is
-  // null and onOpenChange's previous value was also null/undefined.
+  // flips, so it can pause/resume auto-scroll. Tracked via a ref of
+  // the previous open state so we ONLY fire on actual transitions —
+  // without this guard, a parent re-render that happens to give us a
+  // new `onOpenChange` identity would re-run this effect and re-fire
+  // the callback with the unchanged value, which on the closed path
+  // would bumpInteraction() spuriously and pin auto-scroll's freeze
+  // timer indefinitely. (We also stabilize onOpenChange's identity
+  // upstream via useCallback in SubtitleList; this guard is the
+  // belt-and-braces side.)
+  const prevOpenRef = useRef<boolean | null>(null);
   useEffect(() => {
-    onOpenChange?.(info !== null);
+    const open = info !== null;
+    if (prevOpenRef.current === open) return;
+    prevOpenRef.current = open;
+    onOpenChange?.(open);
   }, [info, onOpenChange]);
 
   // On selection change: restore from vocab (top priority), then draft, else collapsed default.

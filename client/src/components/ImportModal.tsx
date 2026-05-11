@@ -9,8 +9,21 @@ import { useAnalysis } from "../store/analysis";
 import { getTier } from "../llm/modelTiers";
 import type { WhisperModelSize } from "../types/settings";
 import { friendlyError } from "../utils/friendlyError";
-import { TRANSLATION_STYLE_LABELS } from "../llm/prompts";
 import type { TranslationStyle } from "../types/settings";
+
+// Slider positions, left → right. Anything outside this trio is a legacy
+// entry style that the slider snaps to the nearest position via indexOf.
+const STYLE_SLIDER_ORDER: TranslationStyle[] = ["formal", "neutral", "colloquial"];
+const STYLE_LABEL: Record<"formal" | "neutral" | "colloquial", string> = {
+  formal: "正式",
+  neutral: "中性",
+  colloquial: "口语",
+};
+function sliderIdx(style: TranslationStyle): number {
+  if (style === "formal" || style === "literary") return 0;
+  if (style === "colloquial" || style === "playful") return 2;
+  return 1;
+}
 
 interface Props {
   onClose: () => void;
@@ -95,10 +108,25 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   // / "best" (no cap). 720p default — subtitle learning doesn't benefit from
   // 1080p+ and 720p downloads in 1/3 the time on most connections.
   const [quality, setQuality] = useState<"low" | "standard" | "high" | "best">("standard");
-  // Translation register for AI analysis. Default 日常聊天; user picks per
-  // import. Persists onto the library entry's analysisStyle so the Player
-  // picks it up at analysis time.
-  const [analysisStyle, setAnalysisStyle] = useState<TranslationStyle>("colloquial");
+  // Translation register for AI analysis. Default 中性 — the natural
+  // middle of the slider; user can drag toward 正式 or 口语 per import.
+  // Persists onto the library entry's analysisStyle so the Player picks
+  // it up at analysis time. (Legacy entries without analysisStyle still
+  // fall back to "colloquial" via the buildSystemPrompt default.)
+  const [analysisStyle, setAnalysisStyle] = useState<TranslationStyle>("neutral");
+  // Continuous 0-100 drag position, decoupled from the committed style.
+  // With native range step=1 on a 0-100 axis the thumb moves pixel-by-
+  // pixel (smooth feel) — we then snap to the nearest of 3 anchors
+  // (0/50/100) on pointerup so the saved style stays discrete. Without
+  // this we used min=0 max=2 step=1 and the thumb hopped 1/3 of the
+  // track per pixel of cursor motion → felt jerky.
+  const [dragPercent, setDragPercent] = useState<number>(() => sliderIdx(analysisStyle) * 50);
+  const previewIdx: 0 | 1 | 2 = dragPercent < 25 ? 0 : dragPercent > 75 ? 2 : 1;
+  function commitStyle(idx: number) {
+    const clamped = Math.max(0, Math.min(2, idx)) as 0 | 1 | 2;
+    setDragPercent(clamped * 50);
+    setAnalysisStyle(STYLE_SLIDER_ORDER[clamped]);
+  }
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Error checklist dialog. Replaces the old "show raw stderr" pattern —
@@ -746,22 +774,79 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           </div>
         )}
 
-        {/* Translation style — applies to both URL and local imports.
-            Controls the LLM's translation register; saved on the library
-            entry so the Player picks the matching prompt at analysis time. */}
-        <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
-          <span className="shrink-0">翻译风格</span>
-          <select
-            value={analysisStyle}
-            onChange={(e) => setAnalysisStyle(e.target.value as TranslationStyle)}
-            className="flex-1 px-2 py-1.5 bg-zinc-800 text-zinc-100 rounded border border-zinc-700"
-          >
-            {(Object.keys(TRANSLATION_STYLE_LABELS) as TranslationStyle[]).map((s) => (
-              <option key={s} value={s}>
-                {TRANSLATION_STYLE_LABELS[s]}
-              </option>
+        {/* Translation style — 3-stop slider (正式 / 中性 / 口语). The
+            thumb position IS the active-state indicator; the labels
+            below are also clickable so users can tap instead of drag.
+            Saved on the library entry → Player picks the matching
+            system prompt at analysis time. */}
+        <div className="mt-4">
+          <div className="text-xs text-zinc-400 mb-3">翻译风格</div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={dragPercent}
+            onChange={(e) => setDragPercent(Number(e.target.value))}
+            onPointerUp={() => commitStyle(previewIdx)}
+            onPointerCancel={() => commitStyle(previewIdx)}
+            onTouchEnd={() => commitStyle(previewIdx)}
+            onBlur={() => commitStyle(previewIdx)}
+            onKeyDown={(e) => {
+              // Keyboard nav jumps between anchors instead of crawling
+              // by 1% — Arrow ← / → / ↑ / ↓ move one stop; Home/End
+              // jump to either end.
+              if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+                e.preventDefault();
+                commitStyle(previewIdx - 1);
+              } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+                e.preventDefault();
+                commitStyle(previewIdx + 1);
+              } else if (e.key === "Home") {
+                e.preventDefault();
+                commitStyle(0);
+              } else if (e.key === "End") {
+                e.preventDefault();
+                commitStyle(2);
+              }
+            }}
+            aria-label="翻译风格"
+            className="w-full appearance-none bg-transparent cursor-pointer outline-none
+                       [&::-webkit-slider-runnable-track]:h-2
+                       [&::-webkit-slider-runnable-track]:rounded-full
+                       [&::-webkit-slider-runnable-track]:bg-gradient-to-r
+                       [&::-webkit-slider-runnable-track]:from-zinc-700
+                       [&::-webkit-slider-runnable-track]:via-blue-500/40
+                       [&::-webkit-slider-runnable-track]:to-blue-400
+                       [&::-webkit-slider-thumb]:appearance-none
+                       [&::-webkit-slider-thumb]:w-5
+                       [&::-webkit-slider-thumb]:h-5
+                       [&::-webkit-slider-thumb]:rounded-full
+                       [&::-webkit-slider-thumb]:bg-blue-400
+                       [&::-webkit-slider-thumb]:shadow-[0_0_0_4px_rgba(96,165,250,0.25)]
+                       [&::-webkit-slider-thumb]:-mt-1.5
+                       [&::-webkit-slider-thumb]:cursor-grab
+                       [&::-webkit-slider-thumb]:active:cursor-grabbing
+                       [&::-webkit-slider-thumb]:transition-transform
+                       [&::-webkit-slider-thumb]:hover:scale-110"
+          />
+          <div className="flex justify-between mt-2.5 px-0.5 text-xs">
+            {(["formal", "neutral", "colloquial"] as const).map((s, i) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => commitStyle(i)}
+                className={
+                  "transition-colors " +
+                  (i === previewIdx
+                    ? "text-blue-400 font-medium"
+                    : "text-zinc-500 hover:text-zinc-300")
+                }
+              >
+                {STYLE_LABEL[s]}
+              </button>
             ))}
-          </select>
+          </div>
         </div>
 
         {/* Error display: replaces the old red stderr dump with a

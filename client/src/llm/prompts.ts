@@ -18,6 +18,16 @@ Hmm→嗯, You know→你懂的). Avoid 书面化措辞 like 因此/此外/然�
 the original is also formal. Idioms welcomed when they fit, but don't force
 them.`,
 
+  neutral: `Translation register: NEUTRAL EVERYDAY CHINESE — neither formal nor
+casual. Mostly complete sentences with standard punctuation. Plain spoken
+vocabulary: 但是/不过/而且/所以 are typical connectors (avoid heavier
+书面化 like 因此/然而/此外 unless the original is academic). No 啊/吧/呢/嘛
+particles. Drop most filler words (Uh / Hmm / You know) rather than
+transcribing them, but a single particle is OK if it carries real meaning.
+No internet slang, no 文言 flourishes, no movie-subtitle compression. Goal:
+a clear, natural read that sounds like how a thoughtful adult would phrase
+it talking to someone they don't know well.`,
+
   playful: `Translation register: VIVID AND EXPRESSIVE. Reach for punchy verbs and
 colorful adjectives over neutral ones (爽 over 开心, 拽 over 厉害, 整 over 做).
 Onomatopoeia and exclamations encouraged (wow→哇塞, oh no→糟了, ugh→啊这).
@@ -46,13 +56,18 @@ auteur cinema. NEVER cross into stiff archaism — the goal is *evocative*,
 not *museum-piece*.`,
 };
 
-/** UI labels for the style dropdown. Emoji + 中文 short label. */
+/** UI labels for the style slider. Plain Chinese, no emoji — the previous
+ *  emoji-tagged dropdown felt over-stylized; the slider now shows just
+ *  formal / neutral / colloquial as positions, with the labels below
+ *  serving as anchors rather than menu items. Legacy styles are mapped
+ *  to the nearest slider position for any UI that still needs a label. */
 export const TRANSLATION_STYLE_LABELS: Record<TranslationStyle, string> = {
-  colloquial: "💬 日常聊天",
-  playful: "✨ 俏皮活泼",
-  cinematic: "🎬 影视字幕",
-  formal: "📰 正式书面",
-  literary: "📖 文艺抒情",
+  formal: "正式",
+  neutral: "中性",
+  colloquial: "口语",
+  playful: "口语",
+  cinematic: "中性",
+  literary: "正式",
 };
 
 export function buildSystemPrompt(style: TranslationStyle = "colloquial"): string {

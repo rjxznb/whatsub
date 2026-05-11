@@ -1,7 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { exit } from "@tauri-apps/plugin-process";
 import { Command } from "@tauri-apps/plugin-shell";
+import { create } from "zustand";
 
 // Tauri's updater behaves differently per platform after install completes:
 //   - Windows: msiexec restarts the app for us — calling relaunch() would
@@ -38,40 +39,72 @@ export type UpdateStatus =
   | { type: "error"; message: string };
 
 /**
- * Wraps tauri-plugin-updater so both the auto-check banner and the
- * Settings page's manual "Check for updates" button can drive update
- * flows with the same shape.
+ * Module-level zustand store + singleton download promise. We deliberately
+ * hoist this state OUT of React's per-component useState so:
+ *
+ *  1. UpdateChecker (mounted at App root) and Settings → share the same
+ *     status. Without this they'd each have their own state and progress
+ *     percent shown in one wouldn't appear in the other.
+ *
+ *  2. Navigating away from Settings mid-download doesn't drop the state.
+ *     With useState, unmounting Settings destroyed `status`, the
+ *     downloadAndInstall promise's setStatus calls then no-op'd, and
+ *     re-entering Settings showed a fresh idle state — making the
+ *     "更新到 vX" button reappear. Clicking it called downloadAndInstall
+ *     again, which restarts the download from byte 0 because
+ *     plugin-updater has no disk cache. (See CLAUDE.md "踩过的坑".)
+ *
+ *  3. `runningDownload` is a module-level guard so even if two callers
+ *     somehow both trigger downloadAndInstall() before the status flips
+ *     to "downloading", only one actually drives the plugin-updater task.
  */
-export function useUpdater() {
-  const [status, setStatus] = useState<UpdateStatus>({ type: "idle" });
+interface UpdaterStore {
+  status: UpdateStatus;
+  set: (next: UpdateStatus | ((cur: UpdateStatus) => UpdateStatus)) => void;
+}
+const useUpdaterStore = create<UpdaterStore>((set) => ({
+  status: { type: "idle" },
+  set: (next) =>
+    set((state) => ({
+      status: typeof next === "function" ? (next as (c: UpdateStatus) => UpdateStatus)(state.status) : next,
+    })),
+}));
 
-  const checkNow = useCallback(async () => {
-    setStatus({ type: "checking" });
-    try {
-      const update = await check();
-      if (update) {
-        setStatus({ type: "available", update });
-      } else {
-        setStatus({ type: "none" });
-      }
-    } catch (e) {
-      setStatus({ type: "error", message: String(e) });
-    }
-  }, []);
+let runningDownload: Promise<void> | null = null;
 
-  const downloadAndInstall = useCallback(async () => {
-    setStatus((cur) =>
-      cur.type === "available"
-        ? { type: "downloading", percent: 0 }
-        : cur
-    );
+async function runCheckNow(): Promise<void> {
+  const { set } = useUpdaterStore.getState();
+  // Don't clobber an in-progress download with a check.
+  const cur = useUpdaterStore.getState().status;
+  if (cur.type === "downloading" || cur.type === "installing") return;
+  set({ type: "checking" });
+  try {
+    const update = await check();
+    set(update ? { type: "available", update } : { type: "none" });
+  } catch (e) {
+    set({ type: "error", message: String(e) });
+  }
+}
+
+async function runDownloadAndInstall(): Promise<void> {
+  // Idempotent: a second click while one is already in flight is a
+  // no-op. Without this the user could navigate away, come back, and
+  // accidentally restart the download from byte 0 (plugin-updater
+  // has no disk cache so each invocation re-streams the installer).
+  if (runningDownload) return await runningDownload;
+  const { status } = useUpdaterStore.getState();
+  if (status.type === "downloading" || status.type === "installing") return;
+
+  const { set } = useUpdaterStore.getState();
+  set((cur) => (cur.type === "available" ? { type: "downloading", percent: 0 } : cur));
+
+  runningDownload = (async () => {
     try {
-      // Re-read latest because setStatus is async; pull from a local check call
-      // would race. Instead use the current closure value.
-      // (We rely on the caller to only invoke this when status.type === "available".)
+      // Re-read latest because the "available" Update object we
+      // stashed earlier may be stale by now. Cheap manifest re-fetch.
       const update = await check();
       if (!update) {
-        setStatus({ type: "none" });
+        set({ type: "none" });
         return;
       }
       let totalBytes = 0;
@@ -81,12 +114,12 @@ export function useUpdater() {
           totalBytes = event.data.contentLength ?? 0;
         } else if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
-          setStatus({
+          set({
             type: "downloading",
             percent: totalBytes > 0 ? (downloaded / totalBytes) * 100 : 0,
           });
         } else if (event.event === "Finished") {
-          setStatus({ type: "installing" });
+          set({ type: "installing" });
         }
       });
       // After this returns the platform-specific installer is running:
@@ -105,16 +138,30 @@ export function useUpdater() {
           await new Promise((r) => setTimeout(r, 500));
           await exit(0);
         } catch (e) {
-          setStatus({
+          set({
             type: "error",
             message: `更新已下载，但自动重启失败：${e}。请手动退出应用并重新打开，新版本下次启动时生效。`,
           });
         }
       }
     } catch (e) {
-      setStatus({ type: "error", message: String(e) });
+      set({ type: "error", message: String(e) });
+    } finally {
+      runningDownload = null;
     }
-  }, []);
+  })();
+  await runningDownload;
+}
 
-  return { status, setStatus, checkNow, downloadAndInstall };
+/**
+ * Wraps tauri-plugin-updater so both the auto-check banner and the
+ * Settings page's manual "Check for updates" button can drive update
+ * flows with the same shape. State is module-level (see above) so it
+ * survives navigation and is shared between every caller.
+ */
+export function useUpdater() {
+  const status = useUpdaterStore((s) => s.status);
+  const checkNow = useCallback(() => runCheckNow(), []);
+  const downloadAndInstall = useCallback(() => runDownloadAndInstall(), []);
+  return { status, checkNow, downloadAndInstall };
 }

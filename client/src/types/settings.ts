@@ -6,11 +6,14 @@ export type WhisperModelSize = "tiny" | "base" | "small" | "medium" | "large-v3"
  *  Selected per-import in ImportModal and stored on the library entry.
  *  Legacy entries without a stored choice fall back to "colloquial". */
 export type TranslationStyle =
-  | "colloquial"  // 日常聊天 — natural conversational Chinese (default)
-  | "playful"     // 俏皮活泼 — vivid, expressive, energetic
-  | "cinematic"   // 影视字幕 — short, dramatic, screen-friendly
-  | "formal"      // 正式书面 — newspaper / textbook register
-  | "literary";   // 文艺抒情 — poetic, refined, elegant
+  | "formal"      // 正式 — newspaper / textbook register (slider: left)
+  | "neutral"     // 中性 — between formal and casual (slider: middle)
+  | "colloquial"  // 口语 — natural conversational Chinese (slider: right)
+  // Legacy styles — no longer reachable from the slider UI, kept so that
+  // library entries written by older builds keep their LLM prompt mapping.
+  | "playful"
+  | "cinematic"
+  | "literary";
 
 export interface OpenAICompatibleConfig {
   baseUrl: string;

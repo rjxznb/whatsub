@@ -97,7 +97,14 @@ export function SubtitleSelectionBubble({
   // timer indefinitely. (We also stabilize onOpenChange's identity
   // upstream via useCallback in SubtitleList; this guard is the
   // belt-and-braces side.)
-  const prevOpenRef = useRef<boolean | null>(null);
+  // Initialize to `false` (not `null`) so the first mount with the
+  // bubble closed (info === null → open === false) short-circuits
+  // out of the effect — otherwise we'd fire onOpenChange(false) on
+  // every fresh Player mount, which the SubtitleList handler treats
+  // as a real "user just closed the bubble" event and bumps the 2s
+  // interaction freeze, breaking auto-scroll for the first 2s the
+  // user spends on a freshly-loaded video.
+  const prevOpenRef = useRef<boolean>(false);
   useEffect(() => {
     const open = info !== null;
     if (prevOpenRef.current === open) return;

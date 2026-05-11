@@ -15,6 +15,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(commands::analysis::ExportState::default())
         .manage(commands::models::ModelDownloadState::default())
+        .manage(commands::youtube_auth::LoginState::default())
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -48,6 +49,14 @@ pub fn run() {
             commands::license::license_get_device_info,
             commands::license::license_read_state,
             commands::license::license_save_state,
+            commands::youtube_auth::site_presets,
+            commands::youtube_auth::site_logins_list,
+            commands::youtube_auth::site_login_pending,
+            commands::youtube_auth::site_login_start,
+            commands::youtube_auth::site_login_finish,
+            commands::youtube_auth::site_login_cancel,
+            commands::youtube_auth::site_login_remove,
+            commands::youtube_auth::site_logins_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

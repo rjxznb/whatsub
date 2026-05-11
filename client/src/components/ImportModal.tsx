@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -32,8 +32,13 @@ type PipelineEventPayload =
 interface LogLine {
   source: string;
   text: string;
-  /** Monotonic key for React lists; lines are immutable so timestamp suffices. */
-  ts: number;
+  /** Monotonic per-mount counter — guaranteed unique even when multiple
+   *  log events fire in the same millisecond with the same text (which
+   *  ffmpeg routinely does, e.g. emitting "Metadata:" and
+   *  "handler_name    : ISO Media file produced by Google Inc." many
+   *  times during a single mp4 mux). Previously we used
+   *  `Date.now() + text` which broke React's key uniqueness contract. */
+  id: number;
 }
 const LOG_BUFFER_SIZE = 80;
 
@@ -96,10 +101,100 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   const [analysisStyle, setAnalysisStyle] = useState<TranslationStyle>("colloquial");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
-  // Error details open in a separate top-layer dialog so the long stderr
-  // doesn't push the parent modal's scroll past 90vh and dominate the screen.
+  // Error checklist dialog. Replaces the old "show raw stderr" pattern —
+  // when an import fails we don't want to surface yt-dlp's cryptic
+  // output at all; instead we auto-open a friendly help-style dialog
+  // listing common causes (no VPN / missing cookies / bad URL / etc.)
+  // with site-specific action buttons. Raw stderr stays available
+  // but tucked behind a collapsible "技术详情" expander inside the
+  // checklist so the cosmetic noise doesn't dominate the screen.
   const [showErrorDialog, setShowErrorDialog] = useState(false);
+  // Track the last error we auto-opened the dialog for so the dialog
+  // doesn't re-pop every render — only when a NEW error appears. If
+  // the user closes the dialog and the error hasn't changed, we
+  // respect their dismiss.
+  const lastShownErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (error && error !== lastShownErrorRef.current) {
+      lastShownErrorRef.current = error;
+      setShowErrorDialog(true);
+      // Always log raw error to console so developers / power users
+      // can still pull the stderr via Ctrl+Shift+I in any build. The
+      // checklist dialog itself stays clean: no walls of yt-dlp
+      // output for non-technical users to navigate.
+      console.error("[whatsub import error]", error);
+    } else if (!error) {
+      lastShownErrorRef.current = null;
+    }
+  }, [error]);
+
+  // ── In-modal site-login state ──────────────────────────────────────
+  //
+  // When the error checklist's "立即登录 X" button fires we DON'T
+  // navigate the user away to Settings — that breaks their mental
+  // context ("why am I on the settings page now?"). Instead we keep
+  // ImportModal open and swap its view for a focused "等待保存"
+  // panel: explanation + 保存 / 取消 buttons. Once cookies land
+  // (site-login-success event), we auto-retry the original import
+  // so the user gets a one-click path from "failed" → "logged in" →
+  // "succeeded" without leaving the modal.
+  const [pendingLogin, setPendingLogin] = useState<{
+    key: string;
+    label: string;
+  } | null>(null);
+  const [savingLogin, setSavingLogin] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // submit() is defined further down + captures form state via closure;
+  // we ref it so the site-login-success listener (mounted once with
+  // [] deps) always invokes the LATEST version, not a stale snapshot
+  // from the first render.
+  const submitRef = useRef<() => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    const unlistens: Array<() => void> = [];
+    void Promise.all([
+      listen("site-login-success", () => {
+        setPendingLogin(null);
+        setSavingLogin(false);
+        setLoginError(null);
+        setError(null);
+        // Auto-retry the original import. Cookies are now in the jar
+        // so yt-dlp will pick them up on the next invocation.
+        void submitRef.current();
+      }).then((un) => unlistens.push(un)),
+      listen("site-login-cancelled", () => {
+        setPendingLogin(null);
+        setSavingLogin(false);
+      }).then((un) => unlistens.push(un)),
+    ]);
+    return () => {
+      unlistens.forEach((u) => u());
+    };
+  }, []);
+
+  async function finishLogin() {
+    setLoginError(null);
+    setSavingLogin(true);
+    try {
+      await invoke("site_login_finish");
+      // success event will fire → handlers above clear state + retry
+    } catch (e) {
+      setLoginError(String(e));
+      setSavingLogin(false);
+    }
+  }
+
+  async function cancelLoginInModal() {
+    try {
+      await invoke("site_login_cancel");
+    } catch {
+      // ignore — even if cancel fails, we still want to clear UI state
+    }
+    setPendingLogin(null);
+    setSavingLogin(false);
+    setLoginError(null);
+  }
 
   // Esc dismisses overlays in priority order: error dialog → help panel →
   // close the whole modal. Each layer is internally scrollable, so we don't
@@ -109,15 +204,13 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
       if (e.key !== "Escape") return;
       if (showErrorDialog) {
         setShowErrorDialog(false);
-      } else if (showHelp) {
-        setShowHelp(false);
       } else {
         onClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showHelp, showErrorDialog, onClose]);
+  }, [showErrorDialog, onClose]);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
@@ -127,6 +220,9 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   const [dlEta, setDlEta] = useState<string | null>(null);
   const [dlTotal, setDlTotal] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
+  // Monotonic id source for log lines. Increments on every push so
+  // simultaneous log events get distinct React keys.
+  const logIdRef = useRef(0);
   const [showLog, setShowLog] = useState(false);
 
   // Subscribe to pipeline events while submitting so we can render live progress.
@@ -168,7 +264,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           setLogLines((prev) => {
             const next = [
               ...prev,
-              { source: ev.source, text: ev.line, ts: Date.now() },
+              { source: ev.source, text: ev.line, id: ++logIdRef.current },
             ];
             // Keep only the most recent N lines so the panel stays manageable.
             return next.length > LOG_BUFFER_SIZE
@@ -241,6 +337,10 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
       setSubmitting(false);
     }
   }
+  // Keep submitRef pointed at the latest submit() so the in-modal
+  // site-login flow's auto-retry (triggered from a `[]`-deps effect)
+  // doesn't fire a stale closure with outdated form state.
+  submitRef.current = submit;
 
   function reset() {
     setSubmitting(false);
@@ -251,6 +351,195 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     setDlTotal(null);
     setError(null);
     setLogLines([]);
+  }
+
+  // Error-checklist dialog. Rendered in BOTH the progress view and
+  // the form view (yt-dlp failures bounce submitting back to false,
+  // so the user sees the failure on the form view). Defining once
+  // here as a const keeps the JSX shared between the two return
+  // branches without duplication.
+  const errorChecklistDialog =
+    showErrorDialog && error
+      ? (() => {
+          // friendlyError is still useful for ONE thing in the new
+          // design: deciding which site's login button to surface
+          // (action.siteKey + label + URL + harvestDomains). We
+          // intentionally DON'T use its title/suggestion in the UI
+          // — the checklist below is generic and covers more ground
+          // than any single error pattern.
+          const fe = friendlyError(
+            error,
+            phase,
+            tab === "url" ? urlValue : undefined,
+          );
+          const act = fe.action;
+          const startLogin = async () => {
+            if (!act) return;
+            try {
+              await invoke("site_login_start", {
+                args: {
+                  key: act.siteKey,
+                  label: act.siteLabel,
+                  loginUrl: act.loginUrl,
+                  harvestDomains: act.harvestDomains,
+                },
+              });
+              // Switch the modal into the in-modal "waiting for save"
+              // view — better UX than navigating off to Settings,
+              // since the user keeps the import context AND we can
+              // auto-retry the download once cookies land.
+              setShowErrorDialog(false);
+              setPendingLogin({ key: act.siteKey, label: act.siteLabel });
+            } catch (e) {
+              alert(`登录窗口启动失败：${e}`);
+            }
+          };
+          return (
+            <div
+              className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]"
+              onClick={() => setShowErrorDialog(false)}
+            >
+              <div
+                className="bg-zinc-900 border border-zinc-700 rounded-lg w-[640px] max-w-[90vw] max-h-[85vh] flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-zinc-800">
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-zinc-100 mb-1">
+                      下载失败 — 排查清单
+                    </div>
+                    <div className="text-xs leading-relaxed text-zinc-400">
+                      逐条对照检查，按相关性排序。多数情况是前两条之一。
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowErrorDialog(false)}
+                    className="shrink-0 text-zinc-500 hover:text-zinc-200 text-xl leading-none px-1"
+                    title="关闭 (Esc)"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="px-5 py-4 flex-1 min-h-0 overflow-y-auto space-y-2.5">
+                  <ChecklistItem
+                    index="①"
+                    title="国际站点需要梯子"
+                    badge={{ text: "YouTube / Ins / X", color: "amber" }}
+                  >
+                    YouTube / Instagram / X / TikTok 等国外站点要开梯子才能访问。
+                  </ChecklistItem>
+
+                  <ChecklistItem
+                    index="②"
+                    title="登录目标网站抓 cookies"
+                    badge={{ text: "最常见", color: "rose" }}
+                  >
+                    <div className="text-[11px] text-zinc-400 mb-2 leading-relaxed">
+                      cookies 是浏览器里存的登录凭据。很多视频要求登录账号才能下载（YouTube
+                      反 bot、B 站会员、Instagram 等）—— 在 whatsub
+                      里登一次就自动保存，下次直接用。
+                    </div>
+                    {act ? (
+                      <button
+                        type="button"
+                        onClick={startLogin}
+                        className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-xs font-medium rounded"
+                      >
+                        立即登录 {act.siteLabel} →
+                      </button>
+                    ) : (
+                      <span className="text-[11px] text-zinc-500">
+                        进设置 →「网站 Cookies 来源」→「快速获取」选站点登录
+                      </span>
+                    )}
+                  </ChecklistItem>
+
+                  <ChecklistItem index="③" title="网络偶尔抽风">
+                    如果前两条都不是问题，那就重新点导入多试几次，或换个梯子节点试试。
+                  </ChecklistItem>
+
+                </div>
+
+                <div className="flex justify-end gap-2 px-5 py-3 border-t border-zinc-800">
+                  <button
+                    onClick={() => setShowErrorDialog(false)}
+                    className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-xs rounded font-medium"
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()
+      : null;
+
+  // ------- Pending-login view -------
+  // Active whenever the user clicked "立即登录 X" from the error
+  // checklist. Replaces both the form and progress views with a
+  // focused "等待保存" panel; once the user clicks 保存 cookies and
+  // the site-login-success event fires, the listener above auto-
+  // retries submit() and the modal returns to the progress view.
+  if (pendingLogin) {
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+        <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[480px] max-w-full">
+          <h2 className="text-lg font-semibold text-zinc-100 mb-3">
+            等待 {pendingLogin.label} 登录完成
+          </h2>
+          <div className="px-3 py-3 rounded border border-blue-500/40 bg-blue-500/5 mb-4">
+            <ol className="space-y-1.5 text-xs leading-relaxed text-zinc-300 list-none">
+              <li className="flex gap-2">
+                <span className="text-blue-300 font-medium shrink-0">1.</span>
+                <span>
+                  whatsub 已经在你电脑上打开了 {pendingLogin.label}{" "}
+                  的登录页（一个独立的浏览器窗口）
+                </span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-blue-300 font-medium shrink-0">2.</span>
+                <span>
+                  在浏览器里完成登录（Google / Apple / 手机号 / 扫码均可）
+                </span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-blue-300 font-medium shrink-0">3.</span>
+                <span>
+                  回到这里点{" "}
+                  <span className="text-blue-300 font-medium">「保存 cookies」</span>
+                  ，whatsub 会自动重新导入这个视频
+                </span>
+              </li>
+            </ol>
+          </div>
+          {loginError && (
+            <div className="mb-3 px-2.5 py-1.5 bg-rose-500/10 border border-rose-500/30 rounded text-[11px] text-rose-200">
+              {loginError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={cancelLoginInModal}
+              disabled={savingLogin}
+              className="px-3 py-1.5 text-sm text-zinc-300 disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={finishLogin}
+              disabled={savingLogin}
+              className="px-4 py-1.5 bg-blue-500 hover:bg-blue-400 disabled:opacity-60 text-black text-sm rounded font-medium"
+            >
+              {savingLogin ? "保存中..." : "保存 cookies"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   // ------- Progress view -------
@@ -317,21 +606,21 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             </div>
           )}
 
-          {error && (() => {
-            const fe = friendlyError(error, phase);
-            return (
-              <button
-                type="button"
-                onClick={() => setShowErrorDialog(true)}
-                title="点击查看详细错误"
-                className="mt-4 w-full flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 rounded text-sm text-red-200 hover:bg-red-900/50 transition-colors text-left"
-              >
-                <span className="shrink-0">⚠️</span>
-                <span className="font-medium truncate flex-1">{fe.title}</span>
-                <span className="shrink-0 text-[10px] text-red-300/70">点击查看详情 ▸</span>
-              </button>
-            );
-          })()}
+          {error && (
+            // The dialog auto-opens via useEffect; this button is the
+            // "re-open if I closed it" affordance. Intentionally
+            // generic — we don't surface yt-dlp's actual error text
+            // here, the user reads the checklist inside the dialog.
+            <button
+              type="button"
+              onClick={() => setShowErrorDialog(true)}
+              className="mt-4 w-full flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 rounded text-sm text-red-200 hover:bg-red-900/50 transition-colors text-left"
+            >
+              <span className="shrink-0">⚠️</span>
+              <span className="font-medium flex-1">下载失败 — 看排查清单</span>
+              <span className="shrink-0 text-[10px] text-red-300/70">▸</span>
+            </button>
+          )}
 
           {/* Live sub-process log — collapsible. Lets the user see exactly
               what step yt-dlp / ffmpeg / whisper-cli is on during the
@@ -354,7 +643,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                   <div className="text-zinc-600 italic">暂无输出...</div>
                 ) : (
                   logLines.map((l) => (
-                    <div key={l.ts + l.text} className="text-zinc-400">
+                    <div key={l.id} className="text-zinc-400">
                       <span className="text-blue-400">[{l.source}]</span>{" "}
                       <span className="break-all">{l.text}</span>
                     </div>
@@ -388,72 +677,9 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           </div>
         </div>
 
-        {/* Error-detail dialog. Layered above the progress modal at z-60.
-            The inner <pre> handles its own scroll so a 50+ line stderr
-            stays bounded — the parent modal underneath never touches it. */}
-        {showErrorDialog && error && (() => {
-          const fe = friendlyError(error, phase);
-          return (
-            <div
-              className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]"
-              onClick={() => setShowErrorDialog(false)}
-            >
-              <div
-                className="bg-zinc-900 border border-red-800 rounded-lg w-[640px] max-w-[90vw] max-h-[80vh] flex flex-col"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-zinc-800">
-                  <div className="min-w-0">
-                    <div className="text-base font-semibold text-red-300 mb-1">
-                      ⚠️ {fe.title}
-                    </div>
-                    {fe.suggestion && (
-                      <div className="text-xs leading-relaxed text-red-100/90">
-                        {fe.suggestion}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowErrorDialog(false)}
-                    className="shrink-0 text-zinc-500 hover:text-zinc-200 text-xl leading-none px-1"
-                    title="关闭"
-                  >
-                    ×
-                  </button>
-                </div>
-
-                {fe.details && (
-                  <div className="px-5 py-3 flex-1 min-h-0 flex flex-col">
-                    <div className="text-[11px] text-zinc-500 mb-1.5">
-                      技术详情（提报 bug 时贴这段）
-                    </div>
-                    <pre className="flex-1 min-h-0 p-3 bg-red-950/40 rounded text-[11px] text-red-300/80 whitespace-pre-wrap break-all font-mono overflow-y-auto">
-                      {fe.details}
-                    </pre>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 px-5 py-3 border-t border-zinc-800">
-                  <button
-                    onClick={() => {
-                      navigator.clipboard?.writeText(fe.details || error || "");
-                    }}
-                    className="px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 rounded"
-                  >
-                    复制详情
-                  </button>
-                  <button
-                    onClick={() => setShowErrorDialog(false)}
-                    className="px-4 py-1.5 bg-zinc-700 text-zinc-100 text-xs rounded font-medium"
-                  >
-                    关闭
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {/* Error-checklist dialog — shared between progress + form
+            views; defined as `errorChecklistDialog` const above. */}
+        {errorChecklistDialog}
       </div>
     );
   }
@@ -481,28 +707,13 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
 
         {tab === "url" ? (
           <>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={urlValue}
-                onChange={(e) => setUrlValue(e.target.value)}
-                placeholder="https://www.youtube.com/watch?v="
-                className="flex-1 px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border border-zinc-700"
-              />
-              <button
-                type="button"
-                onClick={() => setShowHelp((v) => !v)}
-                title="下载失败的常见原因"
-                className={
-                  "px-3 py-2 rounded text-sm font-bold w-10 " +
-                  (showHelp
-                    ? "bg-blue-500 text-black"
-                    : "bg-zinc-700 text-zinc-100 hover:bg-zinc-600")
-                }
-              >
-                ?
-              </button>
-            </div>
+            <input
+              type="text"
+              value={urlValue}
+              onChange={(e) => setUrlValue(e.target.value)}
+              placeholder="https://www.youtube.com/watch?v="
+              className="w-full px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border border-zinc-700"
+            />
             <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
               <span className="shrink-0">画质</span>
               <select
@@ -516,178 +727,6 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 <option value="best">原画 1080p（H.264 最高兼容）</option>
               </select>
             </div>
-            {showHelp && (
-              <div className="mt-3 p-3 bg-zinc-800/60 border border-zinc-700 rounded text-xs text-zinc-300 leading-relaxed space-y-2 max-h-[60vh] overflow-y-auto">
-                <div className="flex items-start justify-between gap-2 sticky top-0 -mx-3 -mt-3 px-3 pt-3 pb-2 bg-zinc-800 border-b border-zinc-700">
-                  <div className="text-zinc-100 font-medium">支持的平台 + 下载失败常见原因</div>
-                  <button
-                    type="button"
-                    onClick={() => setShowHelp(false)}
-                    className="text-zinc-500 hover:text-zinc-200 text-base leading-none px-1"
-                    title="关闭 (Esc)"
-                  >
-                    ×
-                  </button>
-                </div>
-
-                <div className="px-2 py-1.5 rounded border border-blue-500/30 bg-blue-500/5 text-blue-100 text-[11px] leading-relaxed">
-                  📺 <span className="font-semibold">支持 1800+ 站点</span>，常用的有：
-                  <span className="text-blue-200">YouTube · 哔哩哔哩 · 优酷 · 腾讯视频 · 爱奇艺 · 抖音 · 快手 · 微博 · TikTok · Vimeo · Twitter/X · Twitch 录播</span> 等。
-                  直接粘 URL 就行，每个站的处理都一样。
-                  <a
-                    href="https://github.com/yt-dlp/yt-dlp/blob/master/supported-sites.md"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="ml-1 text-blue-300 underline"
-                  >
-                    完整列表
-                  </a>
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-amber-300">①  没有梯子（仅国际平台）：</span>
-                  </div>
-                  <div className="mt-1">
-                    YouTube / TikTok / Vimeo / Twitter 等国际站需要梯子。**国内站（B 站、优酷、抖音等）国内裸网就能下，不需要梯子。** yt-dlp 走系统代理（不是浏览器代理），下国际站前请确认你的系统已配置 HTTP/SOCKS 代理或全局 VPN。
-                  </div>
-                  <div className="mt-1.5 px-2 py-1.5 rounded border border-rose-500/30 bg-rose-500/5 text-rose-200 text-[11px] leading-relaxed">
-                    ⚠️ <span className="font-semibold">不要只开浏览器梯子</span>（比如 SwitchyOmega、Chrome / Edge 自带的代理扩展）——这种只在浏览器内生效，本软件读不到。必须用系统级代理 / 全局模式 / TUN 模式（Clash、v2rayN、Surge 等都有这个开关），让 <span className="font-semibold">本软件和浏览器走的是同一个梯子</span>。
-                    <div className="mt-1 text-rose-300/80">
-                      验证方法：浏览器关掉所有代理扩展后还能打开 youtube.com，就说明系统代理已生效，本软件也能用。
-                    </div>
-                  </div>
-                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug">
-                    📋 报错示例：
-                    <code className="bg-zinc-900 px-1 rounded text-zinc-400 break-all">
-                      ERROR: Unable to download webpage: &lt;urlopen error [Errno 11001] getaddrinfo failed&gt;
-                    </code>
-                    {" "}/ <code className="bg-zinc-900 px-1 rounded text-zinc-400">connection timed out</code>
-                    ，或长时间卡在「准备阶段」无进度。
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-amber-300">②  需要登录信息（cookies）：</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-medium">
-                      🌟 最常见
-                    </span>
-                  </div>
-                  <div className="mt-1">
-                    很多站点会在「检测到代理流量 / 视频是 VIP / 大会员 / 18+ / 年龄受限」时要求登录验证。这是绝大多数下载失败的原因——按下面 ③ 导出 cookies 后基本能解决。
-                  </div>
-                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug space-y-0.5">
-                    <div>📋 报错关键词举例：</div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-rose-300">Sign in to confirm you're not a bot</code>
-                      {" "}— YouTube 反 bot 检查，看到这条 100% 是这个问题
-                    </div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-rose-300">需要登录账号</code>
-                      {" "}/ <code className="bg-zinc-900 px-1 rounded text-rose-300">need login</code>
-                      {" "}— B 站、抖音等国内站点的等价表达
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-amber-300">③  导出 cookies.txt：</span>
-                  <ol className="list-decimal list-inside mt-1 space-y-1 text-zinc-400">
-                    <li>
-                      Edge / Chrome 装扩展{" "}
-                      <a
-                        href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-300 underline"
-                      >
-                        Get cookies.txt LOCALLY
-                      </a>
-                    </li>
-                    <li>
-                      <span className="text-zinc-300 font-medium">登录所有你要下视频的网站</span>
-                      （YouTube / 哔哩哔哩 / 优酷 / 抖音 ...）。一次登好，下面那一份 cookies.txt 就对所有站点生效，不用每个站单独导
-                    </li>
-                    <li>
-                      浏览器**任意页面**点扩展按钮 →「Get cookies.txt LOCALLY」，弹窗里点
-                      <span className="font-medium"> Export All Cookies </span>
-                      保存为 .txt 文件（不是 Export Current Page，否则只导当前域名一个站的）
-                      <div className="mt-2 grid grid-cols-2 gap-2">
-                        <img
-                          src="/help/cookies-step3-extension.png"
-                          alt="点扩展按钮"
-                          className="rounded border border-zinc-700 w-full"
-                        />
-                        <img
-                          src="/help/cookies-step3-export.png"
-                          alt="Export All Cookies"
-                          className="rounded border border-zinc-700 w-full"
-                        />
-                      </div>
-                    </li>
-                    <li>
-                      回 app 设置页 → 「cookies.txt 路径」选这个 .txt
-                      <div className="mt-2">
-                        <img
-                          src="/help/cookies-step4-settings.png"
-                          alt="设置页选 cookies 文件"
-                          className="rounded border border-zinc-700 w-full"
-                        />
-                      </div>
-                    </li>
-                    <li>YouTube 反 bot cookies 通常 1-2 周失效；B 站等国内站的 cookies 一般几个月才失效。下载再失败就重新导出覆盖文件即可（**不用重启 app**，每次下载实时读）</li>
-                  </ol>
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-amber-300">④  视频本身限制：</span>
-                  </div>
-                  <div className="mt-1">
-                    付费 / 会员 / 大会员 / VIP / 18+ / 区域锁定 / 已删除 / 私密视频，部分能靠登录态 cookies 解决（如 B 站大会员、YouTube 18+），区域锁则要换梯子节点；私密 / 已删除的视频谁也下不了。
-                  </div>
-                  <div className="mt-1.5 text-zinc-500 text-[11px] leading-snug space-y-0.5">
-                    <div>📋 各家平台报错关键词举例：</div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">Members-only video</code>
-                      {" "}→ YouTube 频道会员专享
-                    </div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">Sign in to confirm your age</code>
-                      {" "}→ 18+ 年龄限制（需要已确认成年的账号 cookies）
-                    </div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">not made this video available in your country</code>
-                      {" "}→ 区域锁定（换梯子节点试试）
-                    </div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">大会员专享</code>
-                      {" "}/{" "}
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">付费观看</code>
-                      {" "}→ B 站 / 腾讯视频 / 爱奇艺 等付费内容（需对应账号 cookies）
-                    </div>
-                    <div>
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">This video is private</code>
-                      {" "}/{" "}
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">removed by the user</code>
-                      {" "}/{" "}
-                      <code className="bg-zinc-900 px-1 rounded text-zinc-400">视频不存在</code>
-                      {" "}→ 私密 / 已删除
-                    </div>
-                  </div>
-                </div>
-
-                <div className="text-zinc-500 text-[10px] pt-1">
-                  当前 cookies 状态：
-                  {settings.cookiesFile ? (
-                    <span className="text-green-400 ml-1">已配置（{settings.cookiesFile.split(/[\\/]/).pop()}）</span>
-                  ) : (
-                    <span className="text-zinc-500 ml-1">未配置</span>
-                  )}
-                </div>
-              </div>
-            )}
           </>
         ) : (
           <div className="flex gap-2">
@@ -725,7 +764,22 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           </select>
         </div>
 
-        {error && <div className="mt-3 text-sm text-red-400">{error}</div>}
+        {/* Error display: replaces the old red stderr dump with a
+            compact button that opens the troubleshooting checklist
+            dialog. The dialog also auto-opens on new errors via the
+            useEffect above, so this button is the "re-open after I
+            closed it" affordance. */}
+        {error && (
+          <button
+            type="button"
+            onClick={() => setShowErrorDialog(true)}
+            className="mt-3 w-full flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800 rounded text-sm text-red-200 hover:bg-red-900/50 transition-colors text-left"
+          >
+            <span className="shrink-0">⚠️</span>
+            <span className="font-medium flex-1">下载失败 — 看排查清单</span>
+            <span className="shrink-0 text-[10px] text-red-300/70">▸</span>
+          </button>
+        )}
 
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-300">
@@ -739,6 +793,9 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           </button>
         </div>
       </div>
+      {/* Same checklist dialog as the progress view — defined once
+          as `errorChecklistDialog` const at the top of the component. */}
+      {errorChecklistDialog}
     </div>
   );
 }
@@ -753,4 +810,42 @@ function phaseOrder(p: Phase): number {
     done: 4,
     error: 99,
   }[p];
+}
+
+/** One row in the import-failure troubleshooting checklist. Title +
+ *  optional badge + body; the body is free-form ReactNode so each
+ *  item can embed inline code samples, action buttons, links, etc. */
+function ChecklistItem({
+  index,
+  title,
+  badge,
+  children,
+}: {
+  index: string;
+  title: string;
+  badge?: { text: string; color: "rose" | "amber" };
+  children: React.ReactNode;
+}) {
+  const badgeClass =
+    badge?.color === "rose"
+      ? "bg-rose-500/20 text-rose-300"
+      : "bg-amber-500/20 text-amber-300";
+  return (
+    <div className="border border-zinc-800 rounded px-3 py-2.5 bg-zinc-950/40">
+      <div className="flex items-center gap-2 flex-wrap mb-1.5">
+        <span className="text-amber-300 font-semibold text-sm shrink-0">
+          {index}
+        </span>
+        <span className="text-sm text-zinc-100 font-medium">{title}</span>
+        {badge && (
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badgeClass}`}
+          >
+            {badge.text}
+          </span>
+        )}
+      </div>
+      <div className="text-xs text-zinc-300 leading-relaxed">{children}</div>
+    </div>
+  );
 }

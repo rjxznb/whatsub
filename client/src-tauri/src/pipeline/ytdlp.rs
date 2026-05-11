@@ -74,13 +74,50 @@ fn js_runtime_arg() -> Option<String> {
     None
 }
 
+/// Resolve the cookies file yt-dlp should use, honoring the user's
+/// `cookieSource` choice in settings.json:
+///
+///   - "in-app"  ⇒ `<app_data>/yt-cookies.txt`     (written by youtube_auth)
+///   - "file"    ⇒ user-picked `cookiesFile`        (legacy manual path)
+///   - "none"    ⇒ no cookies                       (multi-line: most videos)
+///   - missing   ⇒ legacy fallback: if `cookiesFile` is set + exists,
+///                 use it (preserves pre-cookieSource user behaviour);
+///                 otherwise treat as "none".
+///
+/// Returns None when the resolved file doesn't exist on disk — the
+/// caller treats that as "no cookies" and skips the `--cookies` flag
+/// entirely (yt-dlp would error if we passed a missing path).
 fn read_cookies_file() -> Option<String> {
     let path = crate::core::paths::settings_path().ok()?;
     if !path.exists() {
-        return None;
+        return resolve_legacy_cookies_file(None);
     }
     let raw = std::fs::read_to_string(&path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+
+    let source = v.get("cookieSource").and_then(|x| x.as_str());
+    match source {
+        Some("none") => None,
+        Some("in-app") => {
+            // Multi-site jar derives a Netscape cookies.txt at this
+            // path on every save. If the user never logged into any
+            // site (or wiped all logins), the file won't exist —
+            // we fall through to no-cookies rather than silently
+            // using a stale manual file.
+            let p = crate::core::paths::cookies_txt_path().ok()?;
+            if p.exists() {
+                Some(p.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        }
+        Some("file") | None => resolve_legacy_cookies_file(Some(&v)),
+        _ => None,
+    }
+}
+
+fn resolve_legacy_cookies_file(value: Option<&serde_json::Value>) -> Option<String> {
+    let v = value?;
     let f = v.get("cookiesFile")?.as_str()?.trim();
     if f.is_empty() || !std::path::Path::new(f).exists() {
         return None;
@@ -174,7 +211,15 @@ pub async fn download(
             );
         }
     };
-    let thumb_template = format!("thumbnail:{}", thumb_path.trim_end_matches(".jpg"));
+    // Thumbnail is NOT requested from yt-dlp anymore. The classic
+    // "--write-thumbnail" path hits a separate HTTPS connection to
+    // i.ytimg.com (or each site's CDN) which gets reset by GFW on a
+    // lot of Chinese networks — `EOF occurred in violation of
+    // protocol (_ssl.c:1007)` after 10 retries → yt-dlp exits 1 even
+    // when the video itself downloaded fine. Cosmetic file that just
+    // happens to fail the whole import. After yt-dlp returns we
+    // extract a frame from the local video via ffmpeg below; no
+    // network involved, can't fail for this reason.
 
     let cookies = read_cookies_file();
     let mut args: Vec<String> = Vec::new();
@@ -232,11 +277,6 @@ pub async fn download(
         "Merger:-c:v copy -c:a aac -b:a 192k".into(),
         "-o".into(),
         video_path.clone(),
-        "--write-thumbnail".into(),
-        "--convert-thumbnails".into(),
-        "jpg".into(),
-        "-o".into(),
-        thumb_template.clone(),
         // No `-o "infojson:..."` — let yt-dlp default to writing the JSON
         // next to the video file (out_dir/source.info.json).
         "--write-info-json".into(),
@@ -270,6 +310,28 @@ pub async fn download(
         },
     )
     .await?;
+
+    // Extract thumbnail from the just-downloaded local video via
+    // ffmpeg. Bypasses yt-dlp's network-based thumbnail fetch (which
+    // is what triggered the original SSL EOF spam on flaky networks).
+    // Best-effort: if it fails we just don't have a thumbnail file,
+    // which the UI handles gracefully — the import shouldn't fail
+    // over a missing cosmetic asset.
+    let video_pathbuf = std::path::PathBuf::from(&video_path);
+    let thumb_pathbuf = std::path::PathBuf::from(&thumb_path);
+    // `id` was moved into the run_sidecar closure above, so use the
+    // original `video_id` arg (which is &str — copyable) for the
+    // ffmpeg log emitter's video_id field.
+    if let Err(e) = crate::pipeline::ffmpeg::extract_thumbnail(
+        app,
+        &video_pathbuf,
+        &thumb_pathbuf,
+        video_id,
+    )
+    .await
+    {
+        eprintln!("warn: ffmpeg thumbnail extraction failed: {e}");
+    }
 
     // info.json may not exist if yt-dlp failed but we caught a soft failure;
     // gracefully fall back to a stub if missing.

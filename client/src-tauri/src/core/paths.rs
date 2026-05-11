@@ -22,6 +22,24 @@ pub fn license_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("license.json"))
 }
 
+/// Multi-site cookie jar (JSON, source of truth). Holds per-site
+/// buckets keyed by site_key. Always re-derive cookies.txt from this.
+pub fn cookies_jar_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("cookies.json"))
+}
+
+/// Netscape cookies.txt (derived from the jar). yt-dlp reads this via
+/// `--cookies <path>` when `settings.cookieSource === "in-app"`.
+pub fn cookies_txt_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("cookies.txt"))
+}
+
+/// Pre-multi-site path. Used only during the one-time migration in
+/// cookie_jar::load(). Don't reference outside that flow.
+pub fn legacy_youtube_cookies_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("yt-cookies.txt"))
+}
+
 /// Custom library dir from settings, or `<app_data_dir>/library` by default.
 pub fn library_dir() -> Result<PathBuf, String> {
     if let Some(custom) = read_settings_string("libraryDir") {

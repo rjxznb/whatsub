@@ -41,9 +41,21 @@ export interface Settings {
   whisperModel: WhisperModelSize;
   /** Custom directory for video + analysis files. Empty string = use default (%APPDATA%/whatsub/library). */
   libraryDir: string;
-  /** Path to a Netscape-format cookies.txt file. When set, yt-dlp uses --cookies <file>
-   *  to bypass age/login walls and bot-detection prompts. Empty = no cookies. */
+  /** How yt-dlp should source YouTube cookies. The legacy default was
+   *  always-file (read from `cookiesFile`); now we also support an
+   *  in-app login flow that opens a Tauri WebviewWindow, has the user
+   *  log into YouTube, and persists the cookies to <app_data>/yt-cookies.txt.
+   *
+   *  - "none"    no cookies (default; works for most non-flagged videos)
+   *  - "in-app"  use cookies extracted from the in-app login window
+   *  - "file"    use the user-provided file at `cookiesFile` (legacy) */
+  cookieSource?: "none" | "in-app" | "file";
+  /** Path to a Netscape-format cookies.txt file. Only consulted when
+   *  cookieSource === "file". Empty when not set. */
   cookiesFile: string;
+  /** Unix epoch ms of the last successful in-app YouTube login. Drives
+   *  the "上次登录: X 天前" status line in Settings. Undefined = never. */
+  inAppLoginAt?: number;
   /** Last detected whisper compute backend, persisted across launches.
    *  Format: "Vulkan / NVIDIA GeForce RTX 4090" | "CUDA / ..." | "CPU".
    *  Empty until the first transcribe completes. */
@@ -66,6 +78,7 @@ export const DEFAULT_SETTINGS: Settings = {
   gemini: { apiKey: "", model: "gemini-2.5-pro" },
   whisperModel: "small",
   libraryDir: "",
+  cookieSource: "none",
   cookiesFile: "",
   whisperBackend: "",
   vendorKeys: {},

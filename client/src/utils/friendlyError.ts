@@ -13,15 +13,188 @@ export interface FriendlyError {
   suggestion: string;
   /** Original raw error text (preserved for the collapsible "技术详情" expander). */
   details: string;
+  /** Optional login-site action attached to the error. */
+  action?: SiteLoginAction;
+  /** Visual prominence of the action button:
+   *  - "primary"   = the cause is almost certainly auth-related
+   *                  (specific pattern matched OR site is one where
+   *                  ~every download needs cookies). UI replaces the
+   *                  red error card with an amber action card.
+   *  - "secondary" = the cause is something else (network / format /
+   *                  unknown), but cookies MIGHT help and the site
+   *                  supports our login flow. UI keeps the red
+   *                  error card and shows a smaller "🔑 试试登录"
+   *                  link below it.
+   *  Defaults to "primary" when `action` is set without an explicit
+   *  tier — matches the pre-tier behaviour. */
+  actionTier?: "primary" | "secondary";
+}
+
+export interface SiteLoginAction {
+  kind: "login-site";
+  /** Stable id matching backend's `site_presets()` (e.g. "youtube",
+   *  "instagram", "bilibili"). */
+  siteKey: string;
+  /** Display name shown in the button: "立即登录 <siteLabel>". */
+  siteLabel: string;
+  /** URL the browser should open. */
+  loginUrl: string;
+  /** Domains the cookie harvest should filter to. */
+  harvestDomains: string[];
+}
+
+/** Preset args for the in-app login flow, indexed by site_key.
+ *  Source of truth is `site_presets()` in Rust, but we keep a small
+ *  copy here so friendlyError can build SiteLoginAction without
+ *  needing an async fetch at error-render time. */
+const LOGIN_PRESETS: Record<
+  string,
+  { label: string; loginUrl: string; harvestDomains: string[] }
+> = {
+  youtube: {
+    label: "YouTube",
+    loginUrl: "https://www.youtube.com/",
+    harvestDomains: ["youtube.com", "google.com", "googleusercontent.com"],
+  },
+  bilibili: {
+    label: "哔哩哔哩",
+    loginUrl: "https://www.bilibili.com/",
+    harvestDomains: ["bilibili.com", "hdslb.com"],
+  },
+  instagram: {
+    label: "Instagram",
+    loginUrl: "https://www.instagram.com/",
+    harvestDomains: ["instagram.com", "cdninstagram.com"],
+  },
+  x: {
+    label: "X (Twitter)",
+    loginUrl: "https://x.com/login",
+    harvestDomains: ["x.com", "twitter.com"],
+  },
+  tiktok: {
+    label: "TikTok",
+    loginUrl: "https://www.tiktok.com/login",
+    harvestDomains: ["tiktok.com"],
+  },
+};
+
+function loginAction(siteKey: string): SiteLoginAction | undefined {
+  const p = LOGIN_PRESETS[siteKey];
+  if (!p) return undefined;
+  return {
+    kind: "login-site",
+    siteKey,
+    siteLabel: p.label,
+    loginUrl: p.loginUrl,
+    harvestDomains: p.harvestDomains,
+  };
 }
 
 /**
- * @param raw   Whatever Tauri/Rust returned (already a string)
- * @param phase Optional pipeline phase context — disambiguates errors that
- *              could happen at different stages (e.g. a network error during
- *              "downloading" vs a model-load error during "transcribing").
+ * @param raw       Whatever Tauri/Rust returned (already a string)
+ * @param phase     Optional pipeline phase context — disambiguates errors
+ *                  that could happen at different stages (e.g. a network
+ *                  error during "downloading" vs a model-load error
+ *                  during "transcribing").
+ * @param sourceUrl Optional source URL (yt-dlp input). Used to attach a
+ *                  login action when we can identify the site as one
+ *                  where ~every download fails without cookies
+ *                  (Instagram / X / TikTok), even when the specific
+ *                  error pattern is something we don't recognize.
  */
 export function friendlyError(
+  raw: string,
+  phase?:
+    | "downloading"
+    | "extracting"
+    | "transcribing"
+    | "analyzing"
+    | string,
+  sourceUrl?: string,
+): FriendlyError {
+  const fe = classifyError(raw, phase);
+
+  // Pattern detector already attached an action → that means a
+  // strong keyword match (e.g. "sign in to confirm", "no csrf
+  // token"). Promote to primary tier so the UI replaces the error
+  // card with the action button.
+  if (fe.action && !fe.actionTier) {
+    return { ...fe, actionTier: "primary" };
+  }
+
+  // No specific match. If we know the source URL and it's a known
+  // site, attach an action — tier depends on how often that site's
+  // downloads actually need cookies.
+  if (!fe.action && sourceUrl) {
+    const site = detectKnownSite(sourceUrl);
+    if (site) {
+      return {
+        ...fe,
+        action: loginAction(site.siteKey),
+        actionTier: site.tier,
+      };
+    }
+  }
+  return fe;
+}
+
+/** Detect the source site + how prominent the login button should
+ *  be when an unrecognized error happens.
+ *
+ *  - "primary":   cookies are effectively mandatory for this site
+ *                 (Instagram / X / TikTok). UI replaces the error
+ *                 card with the action button.
+ *  - "secondary": cookies sometimes help but the error might be
+ *                 something else (YouTube / Bilibili). UI keeps the
+ *                 red error card and adds a small "🔑 也许试试登录"
+ *                 link below it.
+ */
+function detectKnownSite(
+  url: string,
+): { siteKey: string; tier: "primary" | "secondary" } | undefined {
+  let host: string;
+  try {
+    host = new URL(url.trim()).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  const stripped = host.replace(/^(www|m|mobile)\./, "");
+
+  // Strong: cookies essentially mandatory
+  if (stripped === "instagram.com" || stripped.endsWith(".instagram.com")) {
+    return { siteKey: "instagram", tier: "primary" };
+  }
+  if (
+    stripped === "x.com" ||
+    stripped.endsWith(".x.com") ||
+    stripped === "twitter.com" ||
+    stripped.endsWith(".twitter.com")
+  ) {
+    return { siteKey: "x", tier: "primary" };
+  }
+  if (stripped === "tiktok.com" || stripped.endsWith(".tiktok.com")) {
+    return { siteKey: "tiktok", tier: "primary" };
+  }
+
+  // Weak: cookies might help but error often has other causes
+  if (
+    stripped === "youtube.com" ||
+    stripped.endsWith(".youtube.com") ||
+    stripped === "youtu.be"
+  ) {
+    return { siteKey: "youtube", tier: "secondary" };
+  }
+  if (
+    stripped === "bilibili.com" ||
+    stripped.endsWith(".bilibili.com") ||
+    stripped === "b23.tv"
+  ) {
+    return { siteKey: "bilibili", tier: "secondary" };
+  }
+  return undefined;
+}
+
+function classifyError(
   raw: string,
   phase?:
     | "downloading"
@@ -36,10 +209,71 @@ export function friendlyError(
 
   if (txt.includes("sign in to confirm you're not a bot")) {
     return {
-      title: "YouTube 要求登录验证（cookies）",
+      title: "YouTube 要求登录验证",
       suggestion:
-        "这是最常见的下载失败原因。点 URL 输入框右边的「?」按钮，按里面教程导出 cookies.txt 后在设置页配上即可。",
+        "YouTube 在你这个 IP 触发了反机器人检测，需要登录一次。点下面的按钮直接走 whatsub 的快速登录流程 —— cookies 抓完之后回来再试。",
       details: raw,
+      action: loginAction("youtube"),
+    };
+  }
+
+  // ── Instagram: any combination of CSRF token / metadata extraction
+  //    failure / explicit login-required text. These almost always
+  //    boil down to "no logged-in session" — Instagram is strict
+  //    about anonymous access. Detect BEFORE the generic network
+  //    error fallback because the same yt-dlp run also produces
+  //    "Unable to download webpage" as a downstream symptom.
+  if (
+    txt.includes("[instagram]") &&
+    (txt.includes("no csrf token") ||
+      txt.includes("metadata extraction failed") ||
+      txt.includes("login required") ||
+      txt.includes("login is required") ||
+      txt.includes("requested content is not available") ||
+      txt.includes("rate-limit reached") ||
+      txt.includes("please log in"))
+  ) {
+    return {
+      title: "Instagram 需要登录后才能下载",
+      suggestion:
+        "Instagram 不允许匿名访问大多数视频。点下面的按钮一键登录，cookies 抓完之后回来再试。",
+      details: raw,
+      action: loginAction("instagram"),
+    };
+  }
+
+  // ── Bilibili: 需要登录的视频 / 大会员专享 / 充电视频
+  if (
+    (txt.includes("[bilibili]") || txt.includes("bilibili.com")) &&
+    (raw.includes("需要登录") ||
+      raw.includes("会员") ||
+      raw.includes("充电") ||
+      txt.includes("login required") ||
+      txt.includes("not available for guests"))
+  ) {
+    return {
+      title: "B 站这个视频需要登录账号",
+      suggestion:
+        "可能是大会员 / 充电专属 / 仅登录可见。点下面的按钮一键登录 B 站，cookies 抓完之后回来再试。",
+      details: raw,
+      action: loginAction("bilibili"),
+    };
+  }
+
+  // ── X (Twitter): NSFW / private / login-required
+  if (
+    (txt.includes("[twitter]") || txt.includes("x.com")) &&
+    (txt.includes("login required") ||
+      txt.includes("authorization") ||
+      txt.includes("not authorized") ||
+      txt.includes("nsfw_loggedout"))
+  ) {
+    return {
+      title: "X 这条推文需要登录",
+      suggestion:
+        "可能是限制级 / 私密推文 / 仅关注者可见。点下面的按钮一键登录 X，cookies 抓完之后回来再试。",
+      details: raw,
+      action: loginAction("x"),
     };
   }
 
@@ -49,12 +283,22 @@ export function friendlyError(
     txt.includes("unable to download webpage") ||
     txt.includes("connection timed out") ||
     txt.includes("connection refused") ||
-    txt.includes("network is unreachable")
+    txt.includes("network is unreachable") ||
+    // SSL handshake interrupted (common GFW-on-YouTube signature):
+    //   "EOF occurred in violation of protocol (_ssl.c:..)"
+    //   "ssl: certificate_verify_failed"
+    //   "ssl: wrong_version_number"
+    //   "ssl: unexpected eof while reading"
+    txt.includes("eof occurred in violation of protocol") ||
+    txt.includes("ssl:") ||
+    txt.includes("ssl error") ||
+    txt.includes("ssl_error") ||
+    txt.includes("certificate verify failed")
   ) {
     return {
       title: "无法访问视频网站",
       suggestion:
-        "可能是没挂代理（YouTube 在中国大陆需要梯子），也可能是网络不通。先在浏览器里试试能不能正常打开这个 URL。",
+        "可能是没挂代理（YouTube / Instagram / X 在中国大陆需要梯子），也可能是网络不通 / TLS 握手被中间网络阻断。先在浏览器里试试能不能正常打开这个 URL；如果浏览器能打开但 whatsub 不行，可能是 yt-dlp 的请求路径被防火墙特别针对。",
       details: raw,
     };
   }

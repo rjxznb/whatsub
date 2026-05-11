@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.29"
+version = "0.1.30"
 description = "A Tauri App"
 authors = ["jimmy"]
 edition = "2021"
@@ -54,4 +54,16 @@ machine-uid = "0.5"
 # Pretty device label for the admin UI ("renjx 的 MacBook" instead of a hash)
 # and OS hostname fallback. Small crate, no transitive heavies.
 whoami = "1.5"
+# Cookie struct + parser for the in-app YouTube login flow. Tauri's
+# WebviewWindow::cookies() returns Vec<cookie::Cookie<'static>>; we
+# also use this directly in the Netscape serializer + tests.
+cookie = "0.18"
+# URL parsing for navigation listeners + cookie-domain matching.
+url = "2"
+# WebSocket client for talking Chrome DevTools Protocol to the
+# user's system browser (launched with --remote-debugging-port).
+# default-features=false skips the TLS backend feature flags — we
+# only ever connect to ws://localhost:<port> (no TLS), so the
+# rustls / native-tls deps would just bloat the binary.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect"] }
 

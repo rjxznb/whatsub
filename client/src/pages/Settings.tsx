@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, ChevronDown } from "lucide-react";
+import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, ChevronDown, LogIn, Trash2, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
 import type { Settings, WhisperModelSize } from "../types/settings";
@@ -10,6 +11,7 @@ import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import { useModelDownload } from "../store/modelDownload";
 import { useUpdater } from "../hooks/useUpdater";
 import { useLicense } from "../store/license";
+import { SiteIcon } from "../components/SiteIcon";
 import { getVersion } from "@tauri-apps/api/app";
 
 export function Settings() {
@@ -151,14 +153,7 @@ export function Settings() {
               defaultHint="默认：%APPDATA%/whatsub/library"
               onChange={(v) => setDraft({ ...draft, libraryDir: v })}
             />
-            <FileField
-              label="cookies.txt 路径（可选）"
-              value={draft.cookiesFile}
-              defaultHint="未设置（YouTube / B 站 / 腾讯视频 等需要登录或会员的视频要靠这个文件；按导入页的「?」按钮里的教程导出 cookies.txt 后选到这里）"
-              filterName="cookies.txt"
-              filterExt={["txt"]}
-              onChange={(v) => setDraft({ ...draft, cookiesFile: v })}
-            />
+            <CookieSourceSection draft={draft} setDraft={setDraft} />
             <p className="text-[10px] text-zinc-500 leading-relaxed">
               ⚠ 改了保存位置不会自动搬已有的视频文件，但已经在的视频不会丢，会留在原来的位置正常使用。要集中管理的话请手动把文件移到新路径。
             </p>
@@ -334,6 +329,571 @@ export function Settings() {
  *  fingerprint tail shown here is what they reference in that ticket
  *  ("please release device …XXXXXX") so support can pinpoint the row
  *  in admin without ambiguity. */
+/** Multi-site cookie source picker.
+ *
+ *  Mode selection (none / in-app / file) is unchanged. The "in-app"
+ *  panel now shows ALL sites the user has logged into via the
+ *  webview flow — multiple at once — with per-site re-login + remove
+ *  controls and a unified add-site form (preset shortcuts + custom
+ *  URL). Cookies merge across sites; logging into B 站 doesn't wipe
+ *  YouTube and vice versa.
+ *
+ *  Tauri events:
+ *    site-login-success    { siteKey, label, cookieCount, at }
+ *    site-login-cancelled  ()
+ */
+type SiteRecord = {
+  key: string;
+  label: string;
+  loginAt: number;
+  cookieCount: number;
+};
+type SitePreset = {
+  key: string;
+  label: string;
+  loginUrl: string;
+  harvestDomains: string[];
+};
+
+function CookieSourceSection({
+  draft,
+  setDraft,
+}: {
+  draft: Settings;
+  setDraft: (s: Settings) => void;
+}) {
+  const [logins, setLogins] = useState<SiteRecord[]>([]);
+  const [presets, setPresets] = useState<SitePreset[]>([]);
+  const [pending, setPending] = useState<{ key: string; label: string } | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [customUrl, setCustomUrl] = useState("");
+
+  async function reload() {
+    try {
+      const list = await invoke<SiteRecord[]>("site_logins_list");
+      setLogins(list);
+    } catch {
+      // ignore — empty list is fine to show
+    }
+  }
+
+  // Load presets + current logins on mount, plus check whether a
+  // login is already in flight (e.g. user navigated away from
+  // Settings with the login window still open).
+  useEffect(() => {
+    void Promise.all([
+      invoke<SitePreset[]>("site_presets")
+        .then(setPresets)
+        .catch(() => setPresets([])),
+      reload(),
+      invoke<{ siteKey: string; label: string } | null>("site_login_pending")
+        .then((p) => {
+          if (p) setPending({ key: p.siteKey, label: p.label });
+        })
+        .catch(() => {}),
+    ]);
+  }, []);
+
+  // Listen for outcome events from the Rust login flow. Both success
+  // and cancel clear the pending banner; success also bumps the
+  // local draft + reloads the list.
+  useEffect(() => {
+    const unlistens: Array<() => void> = [];
+    void Promise.all([
+      listen<{ siteKey: string; label: string; cookieCount: number; at: number }>(
+        "site-login-success",
+        (e) => {
+          setPending(null);
+          setError(null);
+          setDraft({
+            ...draft,
+            cookieSource: "in-app",
+            inAppLoginAt: e.payload.at,
+          });
+          void reload();
+        },
+      ).then((un) => unlistens.push(un)),
+      listen("site-login-cancelled", () => {
+        setPending(null);
+      }).then((un) => unlistens.push(un)),
+    ]);
+    return () => {
+      unlistens.forEach((u) => u());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Start a login. Caller passes either a preset's full descriptor
+   *  or a custom { siteKey, label, loginUrl, harvestDomains } built
+   *  from the user's URL input. */
+  async function startLogin(args: SitePreset) {
+    setError(null);
+    setPending({ key: args.key, label: args.label });
+    try {
+      await invoke("site_login_start", { args });
+    } catch (e) {
+      setPending(null);
+      setError(String(e));
+    }
+  }
+
+  async function startCustomLogin() {
+    const trimmed = customUrl.trim();
+    if (!trimmed) return;
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed.startsWith("http") ? trimmed : `https://${trimmed}`);
+    } catch {
+      setError("URL 格式无效");
+      return;
+    }
+    // Use the registrable-ish domain (stripped of "www.") as the
+    // site_key + label, so a custom www.weibo.com login lives at
+    // key "weibo.com" and harvests cookies from .weibo.com + subdomains.
+    const host = parsed.hostname.replace(/^www\./, "");
+    await startLogin({
+      key: host,
+      label: host,
+      loginUrl: parsed.toString(),
+      harvestDomains: [host],
+    });
+    setCustomUrl("");
+  }
+
+  async function finishLogin() {
+    setError(null);
+    try {
+      await invoke("site_login_finish");
+    } catch (e) {
+      // Don't clear pending — finish() puts it back so user can
+      // continue logging in. Show the error.
+      setError(String(e));
+    }
+  }
+
+  async function cancelLogin() {
+    try {
+      await invoke("site_login_cancel");
+    } catch {}
+    setPending(null);
+  }
+
+  async function reLogin(record: SiteRecord) {
+    const preset = presets.find((p) => p.key === record.key);
+    if (preset) {
+      await startLogin(preset);
+    } else {
+      // Custom site that's not a preset — reconstruct from stored
+      // domain (the key IS the domain for custom sites).
+      await startLogin({
+        key: record.key,
+        label: record.label,
+        loginUrl: `https://${record.key}/`,
+        harvestDomains: [record.key],
+      });
+    }
+  }
+
+  async function removeLogin(record: SiteRecord) {
+    try {
+      await invoke("site_login_remove", { args: { siteKey: record.key } });
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    void reload();
+  }
+
+  async function clearAll() {
+    if (!confirm("清除所有站点的登录？")) return;
+    try {
+      await invoke("site_logins_clear");
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    setDraft({ ...draft, inAppLoginAt: undefined });
+    void reload();
+  }
+
+  // Migration for legacy users: cookieSource didn't exist before this
+  // feature shipped, so settings.json from older versions has only
+  // cookiesFile. Default to "file" if there's a path; else "none".
+  const source =
+    draft.cookieSource ??
+    (draft.cookiesFile && draft.cookiesFile.trim() ? "file" : "none");
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="text-sm font-medium mb-1.5">网站 Cookies 来源</div>
+        <p className="text-[11px] text-zinc-500 leading-relaxed mb-2">
+          多数视频不需要 cookies 就能下载；仅在站点要求登录验证（如 YouTube
+          的 bot 检测、B 站会员视频、Instagram、X 等）时才用得上。快速获取支持任意站点，cookies 保存在本地，不上传。
+        </p>
+
+        {/* Single-card container: dropdown header + selected-mode body
+            share one rounded border so the relationship is visually
+            clear (clicking the header selects WHICH mode the body is
+            showing). The header has no bottom border; the body has
+            border-top to separate them while keeping the unified frame. */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 overflow-visible">
+          <CookieSourceDropdown
+            value={source}
+            onChange={(v) => setDraft({ ...draft, cookieSource: v })}
+          />
+
+          {source === "in-app" && (
+            <div className="border-t border-zinc-800 p-3 space-y-3">
+          {/* Pending login banner — shown while a login window is
+              open. The user logs in in the popup, then comes back
+              here to click "保存". */}
+          {pending && (
+            <div className="px-3 py-2.5 rounded border border-blue-500/40 bg-blue-500/5">
+              <div className="flex items-center gap-2.5 mb-2">
+                <Loader2 className="w-4 h-4 text-blue-300 animate-spin shrink-0" />
+                <div className="text-sm text-zinc-100">
+                  正在获取 <span className="font-medium">{pending.label}</span>{" "}
+                  的 cookies...
+                </div>
+              </div>
+              <div className="mb-2 px-2.5 py-2 bg-zinc-950/60 rounded text-[11px] leading-relaxed">
+                <div className="text-zinc-300 font-medium mb-1.5">接下来 3 步：</div>
+                <ol className="space-y-1 text-zinc-400 list-none">
+                  <li className="flex gap-2">
+                    <span className="text-blue-300 font-medium shrink-0">1.</span>
+                    <span>
+                      在刚才打开的浏览器窗口里登录{" "}
+                      <span className="text-zinc-200 font-medium">
+                        {pending.label}
+                      </span>
+                    </span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-blue-300 font-medium shrink-0">2.</span>
+                    <span>
+                      回到 whatsub，点下面的{" "}
+                      <span className="text-blue-300 font-medium">「保存」</span>
+                      按钮，自动抓 cookies
+                    </span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-zinc-500 font-medium shrink-0">3.</span>
+                    <span className="text-zinc-500">
+                      浏览器可以保持打开下次直接用，也可以随手关掉 —— cookies 保存好之后关不关都不影响
+                    </span>
+                  </li>
+                </ol>
+                <div className="mt-2 pt-1.5 border-t border-zinc-800/60 text-[10px] text-zinc-500">
+                  ⓘ 这是一个独立的 profile，不影响你日常浏览器、不加载任何扩展
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={finishLogin}
+                  className="flex-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black font-medium text-sm rounded"
+                >
+                  保存
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelLogin}
+                  className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm rounded"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Logged-in sites list */}
+          {logins.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-xs text-zinc-400">
+                  已获取的站点（{logins.length}）
+                </div>
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="text-[10px] text-zinc-500 hover:text-rose-300 transition-colors"
+                >
+                  全部清除
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {logins.map((rec) => (
+                  <div
+                    key={rec.key}
+                    className="flex items-center gap-2.5 px-2.5 py-1.5 rounded bg-zinc-900/60 border border-zinc-800"
+                  >
+                    {/* Brand glyph instead of a generic ✓ — gives each
+                        row immediate visual identity. Custom URLs fall
+                        through to a Globe in SiteIcon. */}
+                    <div className="flex h-7 w-7 items-center justify-center rounded shrink-0 text-zinc-200">
+                      <SiteIcon siteKey={rec.key} size={18} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-zinc-100 truncate">
+                        {rec.label}
+                      </div>
+                      <div className="text-[10px] text-zinc-500">
+                        {formatRelativeTime(rec.loginAt)} · {rec.cookieCount}{" "}
+                        条 cookies
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => reLogin(rec)}
+                      disabled={!!pending}
+                      title="重新获取 cookies"
+                      className="px-2 py-0.5 text-[11px] rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40"
+                    >
+                      重新获取
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeLogin(rec)}
+                      title="移除"
+                      className="p-1 rounded text-zinc-500 hover:bg-rose-900/30 hover:text-rose-300 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Add new site — disabled while a login is pending */}
+          <div className={pending ? "opacity-40 pointer-events-none" : ""}>
+            <div className="text-xs text-zinc-400 mb-1.5">
+              {logins.length > 0 ? "获取新站点的 cookies" : "获取第一个站点的 cookies"}
+            </div>
+            {presets.length > 0 && (
+              <div className="flex items-center flex-wrap gap-1.5 mb-2">
+                {presets.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => startLogin(p)}
+                    disabled={!!pending}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-zinc-700 bg-zinc-900/60 hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-40 text-zinc-200"
+                  >
+                    <SiteIcon siteKey={p.key} size={14} />
+                    <span>{p.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={customUrl}
+                onChange={(e) => setCustomUrl(e.target.value)}
+                placeholder="或输入自定义网址，比如 https://www.weibo.com/"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void startCustomLogin();
+                  }
+                }}
+                className="flex-1 px-2.5 py-1.5 text-sm bg-zinc-950 border border-zinc-700 rounded focus:outline-none focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={startCustomLogin}
+                disabled={!!pending || !customUrl.trim()}
+                className="px-3 py-1.5 text-sm rounded bg-blue-500 hover:bg-blue-400 disabled:opacity-50 text-black font-medium flex items-center gap-1.5"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                获取
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="px-2.5 py-1.5 bg-rose-500/10 border border-rose-500/30 rounded text-[11px] text-rose-200">
+              {error}
+            </div>
+          )}
+            </div>
+          )}
+
+          {source === "file" && (
+            <div className="border-t border-zinc-800 p-3">
+              <FileField
+                label="cookies.txt 路径"
+                value={draft.cookiesFile}
+                defaultHint="按导入页的「?」按钮里的教程导出 cookies.txt 后选到这里。"
+                filterName="cookies.txt"
+                filterExt={["txt"]}
+                onChange={(v) => setDraft({ ...draft, cookiesFile: v })}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Compact dropdown picker for the three cookie-source modes.
+ *  Replaces the always-visible 3-radio stack — collapses the full
+ *  list to a single row showing the current selection, with the
+ *  options revealed on click. Each option carries its own sublabel
+ *  inside the dropdown so users can compare modes at the moment of
+ *  decision; the sublabel disappears once the menu closes so the
+ *  layout stays tight.
+ *
+ *  Same animation as the Vocab page's SortDropdown
+ *  (`animate-sort-slide-down` from App.css) for visual consistency.
+ *  Outside-click closes; ChevronDown rotates 180° while open. */
+function CookieSourceDropdown({
+  value,
+  onChange,
+}: {
+  value: "in-app" | "file" | "none";
+  onChange: (v: "in-app" | "file" | "none") => void;
+}) {
+  const OPTIONS: Array<{
+    value: "in-app" | "file" | "none";
+    label: string;
+    sublabel: string;
+  }> = [
+    {
+      value: "in-app",
+      label: "快速获取（推荐）",
+      sublabel:
+        "用你系统装的 Edge / Chrome 打开登录页（独立 profile，不影响日常浏览，不加载扩展），登完点保存自动抓 cookies。OAuth / 扫码 / 验证码全部支持。",
+    },
+    {
+      value: "file",
+      label: "手动 cookies.txt 文件",
+      sublabel: "老方式——用 Chrome/Edge 插件「Get cookies.txt LOCALLY」导出后选到这里。",
+    },
+    {
+      value: "none",
+      label: "不使用 cookies",
+      sublabel: "多数视频可以直接下载；遇到验证身份的提示再切回上面任意一种。",
+    },
+  ];
+
+  const [open, setOpen] = useState(false);
+  const [menuWidth, setMenuWidth] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const selected = OPTIONS.find((o) => o.value === value) ?? OPTIONS[0];
+
+  // Close on outside-click. Listener only attached while open so we
+  // don't pay for it on every render.
+  useEffect(() => {
+    if (!open) return;
+    function onMouseDown(e: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [open]);
+
+  function toggleOpen() {
+    if (!open && triggerRef.current) {
+      setMenuWidth(triggerRef.current.offsetWidth);
+    }
+    setOpen((v) => !v);
+  }
+
+  function pick(v: "in-app" | "file" | "none") {
+    onChange(v);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={toggleOpen}
+        // No border on the trigger — the parent card carries it. We
+        // only need a hover/active background tweak here so the row
+        // reads as the card's header rather than as a separate input.
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-zinc-800/40 active:bg-zinc-800/60 transition-colors text-sm text-left"
+      >
+        <span className="truncate">{selected.label}</span>
+        <ChevronDown
+          className={
+            "w-4 h-4 text-zinc-400 transition-transform shrink-0 " +
+            (open ? "rotate-180" : "")
+          }
+        />
+      </button>
+
+      {open && (
+        <div
+          className="absolute left-0 top-full mt-1 z-30 bg-zinc-900 border border-zinc-700 rounded shadow-2xl py-1 overflow-hidden animate-sort-slide-down"
+          style={{
+            transformOrigin: "top center",
+            width: menuWidth ?? undefined,
+          }}
+        >
+          {OPTIONS.map((o) => {
+            const active = o.value === value;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => pick(o.value)}
+                className={
+                  "w-full px-3 py-2 text-left flex items-start gap-2 transition-colors " +
+                  (active
+                    ? "bg-blue-500/10 text-blue-200"
+                    : "text-zinc-200 hover:bg-zinc-800")
+                }
+              >
+                <div
+                  className={
+                    "mt-0.5 w-4 h-4 shrink-0 flex items-center justify-center "
+                  }
+                >
+                  {active && <Check className="w-3.5 h-3.5 text-blue-300" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm">{o.label}</div>
+                  <div className="text-[11px] text-zinc-500 leading-relaxed mt-0.5">
+                    {o.sublabel}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "5 分钟前" / "2 小时前" / "3 天前" / "2026-05-09" depending on age. */
+function formatRelativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return "登录于刚才";
+  if (min < 60) return `登录于 ${min} 分钟前`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `登录于 ${hr} 小时前`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `登录于 ${day} 天前`;
+  return `登录于 ${new Date(ts).toLocaleDateString()}`;
+}
+
 function LicenseSection() {
   const license = useLicense();
 

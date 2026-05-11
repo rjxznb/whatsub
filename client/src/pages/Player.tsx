@@ -349,8 +349,37 @@ export function Player() {
       cuesRef.current = cues;
       const cleanedCachedCues = cached ? dedupSubtitles(cached.subtitles) : [];
 
-      // ── Complete: cached has every cue. Use as-is. ──
-      if (cached && cleanedCachedCues.length >= cues.length) {
+      // Compare deduped-cached against DEDUPED cues. Whisper-transcribed
+      // SRTs occasionally contain cues that share (time, endTime, text)
+      // — typically back-to-back silence pads or repeated tokens like
+      // "..." / "[Music]". appendSubtitle dedupes those during the
+      // streaming analysis, so a fully-completed run is saved as
+      // `cleanedCachedCues.length === uniqueCueCount`, which is
+      // STRICTLY LESS than `cues.length` raw. Dedupe both sides with
+      // the same key formula so the counts line up.
+      const cueKey = (c: { time: number; endTime: number; text: string }) =>
+        `${c.time}|${c.endTime}|${c.text}`;
+      const uniqueCueCount = new Set(cues.map(cueKey)).size;
+
+      // Second completeness signal: the global summary (`keyPhrases`)
+      // is only generated in phase 2 of the analysis, AFTER every cue
+      // has been processed in phase 1. If the cache has a non-empty
+      // keyPhrases array, phase 2 definitely fired → analysis was
+      // complete, even if some cues didn't produce a Subtitle (LLM
+      // routinely skips empty / `[Music]` / pure-punctuation cues,
+      // which leaves cleanedCachedCues.length strictly less than
+      // uniqueCueCount despite the run being done). Without this
+      // fallback those analyses get stuck showing "继续解析" forever
+      // even on repeated re-clicks (each retry produces the same set
+      // of skipped cues, so the count never reaches uniqueCueCount).
+      const hasSummary =
+        !!cached?.keyPhrases && cached.keyPhrases.length > 0;
+
+      // ── Complete: every cue has a subtitle OR the summary exists. ──
+      if (
+        cached &&
+        (cleanedCachedCues.length >= uniqueCueCount || hasSummary)
+      ) {
         analysis.startFor(videoId);
         analysis.setSubtitles(cleanedCachedCues);
         const { subtitles: _drop, ...summary } = cached;

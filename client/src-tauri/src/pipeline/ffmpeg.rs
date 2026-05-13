@@ -3,6 +3,7 @@ use crate::error::AppResult;
 use crate::pipeline::spawn::run_sidecar;
 use std::path::Path;
 use tauri::AppHandle;
+use tokio_util::sync::CancellationToken;
 
 fn make_log_emitter(app: &AppHandle, video_id: &str) -> impl Fn(&str) {
     let app = app.clone();
@@ -49,6 +50,7 @@ pub async fn extract_audio_wav(
     video_path: &Path,
     out_path: &Path,
     video_id: &str,
+    cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
     let video_str = video_path.to_string_lossy().to_string();
     let out_str = out_path.to_string_lossy().to_string();
@@ -69,6 +71,7 @@ pub async fn extract_audio_wav(
             &out_str,
         ],
         log,
+        cancel,
     )
     .await?;
     Ok(())
@@ -80,6 +83,7 @@ pub async fn extract_thumbnail(
     video_path: &Path,
     out_path: &Path,
     video_id: &str,
+    cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
     let video_str = video_path.to_string_lossy().to_string();
     let out_str = out_path.to_string_lossy().to_string();
@@ -96,6 +100,7 @@ pub async fn extract_thumbnail(
             &out_str,
         ],
         log,
+        cancel,
     )
     .await?;
     Ok(())

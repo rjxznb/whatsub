@@ -28,6 +28,13 @@ export interface FriendlyError {
    *  Defaults to "primary" when `action` is set without an explicit
    *  tier — matches the pre-tier behaviour. */
   actionTier?: "primary" | "secondary";
+  /** True when re-running the same import has a real chance of
+   *  succeeding without user intervention — network / TLS / DNS /
+   *  CDN flakes, transient YouTube player-JS state. The UI surfaces
+   *  a 「重试」 button when true. False for deterministic errors
+   *  (video private / banned / cookies expired / age-gated) where a
+   *  retry would just hit the same wall. */
+  retryable?: boolean;
 }
 
 export interface SiteLoginAction {
@@ -298,8 +305,9 @@ function classifyError(
     return {
       title: "无法访问视频网站",
       suggestion:
-        "可能是没挂代理（YouTube / Instagram / X 在中国大陆需要梯子），也可能是网络不通 / TLS 握手被中间网络阻断。先在浏览器里试试能不能正常打开这个 URL；如果浏览器能打开但 whatsub 不行，可能是 yt-dlp 的请求路径被防火墙特别针对。",
+        "可能是没挂代理（YouTube / Instagram / X 在中国大陆需要梯子），也可能是网络瞬时抖动 / TLS 握手被中间网络阻断。可以直接「重试」一下——如果反复失败，多半得挂梯子，或者在浏览器里先确认这个 URL 能正常打开。",
       details: raw,
+      retryable: true,
     };
   }
 

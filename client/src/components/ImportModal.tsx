@@ -224,20 +224,25 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     setLoginError(null);
   }
 
-  // Esc dismisses overlays in priority order: error dialog → help panel →
-  // close the whole modal. Each layer is internally scrollable, so we don't
-  // want Esc to skip past the one the user is currently reading.
+  // Esc dismisses overlays in priority order: error dialog → close modal.
+  // Closing the modal during an in-flight foreground import ALSO cancels
+  // the backing Rust task (kills yt-dlp/ffmpeg/whisper, cleans partial
+  // files) — without this the download silently continued in the
+  // background after Esc, surfacing a "phantom" library entry minutes
+  // later.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (showErrorDialog) {
         setShowErrorDialog(false);
       } else {
+        void cancelInFlight();
         onClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showErrorDialog, onClose]);
 
   const [phase, setPhase] = useState<Phase>("idle");
@@ -248,6 +253,20 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   const [dlEta, setDlEta] = useState<string | null>(null);
   const [dlTotal, setDlTotal] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
+  // video_id of the in-flight import. Captured from the Started event so
+  // we can call cancel_import on Esc / ✕ / 取消 — Rust computes the id
+  // (sha256/youtube id/url hash) and we don't replicate that logic JS-side.
+  const currentVideoIdRef = useRef<string | null>(null);
+  async function cancelInFlight(): Promise<void> {
+    const id = currentVideoIdRef.current;
+    if (!id) return;
+    try {
+      await invoke("cancel_import", { videoId: id });
+    } catch (e) {
+      console.warn("cancel_import failed", e);
+    }
+    currentVideoIdRef.current = null;
+  }
   // Monotonic id source for log lines. Increments on every push so
   // simultaneous log events get distinct React keys.
   const logIdRef = useRef(0);
@@ -264,6 +283,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         case "Started":
           setPhase("started");
           setPercent(0);
+          currentVideoIdRef.current = ev.video_id;
           break;
         case "Downloading":
           setPhase("downloading");
@@ -319,7 +339,8 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     if (typeof result === "string") setFilePath(result);
   }
 
-  async function submit() {
+  async function submit(opts: { background?: boolean } = {}) {
+    const background = opts.background ?? false;
     setError(null);
     const sourceKind = tab;
     const sourceValue = tab === "url" ? urlValue : filePath;
@@ -329,6 +350,32 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     }
     if (!settings.whisperModel) {
       setError("Whisper 模型未配置（去设置页选一个并下载）");
+      return;
+    }
+
+    const req = {
+      sourceKind,
+      sourceValue,
+      whisperModel: settings.whisperModel,
+      quality,
+      analysisStyle,
+      background,
+    };
+
+    if (background) {
+      // Fire-and-forget. We don't await — the modal closes immediately
+      // and the Rust task keeps running. (Eventual progress visibility
+      // is delivered by the queue widget added in v0.1.36; for now the
+      // user sees the library entry appear once whisper completes.)
+      void (async () => {
+        try {
+          await invoke("import_video", { req });
+          await reload();
+        } catch (e) {
+          console.warn("background import failed", e);
+        }
+      })();
+      onClose();
       return;
     }
 
@@ -345,30 +392,34 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         videoId: string;
         srtPath: string;
         durationSec: number;
-      }>("import_video", {
-        req: {
-          sourceKind,
-          sourceValue,
-          whisperModel: settings.whisperModel,
-          quality,
-          analysisStyle,
-        },
-      });
+      }>("import_video", { req });
+      // Cleared early so a subsequent close doesn't try to cancel an
+      // already-completed import.
+      currentVideoIdRef.current = null;
       startFor(result.videoId);
       await reload();
       onClose();
       navigate(`/player/${result.videoId}?srt=${encodeURIComponent(result.srtPath)}`);
     } catch (e) {
+      const msg = String(e);
+      // "cancelled" comes from AppError::Cancelled when the user pressed
+      // Esc / ✕ — that's not a failure to show in the error dialog,
+      // just a quiet abort. The cancel path already calls onClose().
+      if (msg.includes("cancelled")) {
+        setSubmitting(false);
+        currentVideoIdRef.current = null;
+        return;
+      }
       console.error("import_video failed", e);
       setPhase("error");
-      setError(String(e));
+      setError(msg);
       setSubmitting(false);
     }
   }
   // Keep submitRef pointed at the latest submit() so the in-modal
   // site-login flow's auto-retry (triggered from a `[]`-deps effect)
   // doesn't fire a stale closure with outdated form state.
-  submitRef.current = submit;
+  submitRef.current = () => submit();
 
   function reset() {
     setSubmitting(false);
@@ -497,6 +548,25 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                   >
                     关闭
                   </button>
+                  {/* 重试 — only shown when friendlyError flagged the error
+                      as retryable (network / SSL / DNS / CDN flake). Other
+                      error classes (cookies expired / video private /
+                      banned) wouldn't benefit from a same-params retry,
+                      so we don't surface the button there. Closing the
+                      dialog + re-submitting kicks off a fresh foreground
+                      import. */}
+                  {fe.retryable && (
+                    <button
+                      onClick={() => {
+                        setShowErrorDialog(false);
+                        setError(null);
+                        void submit({ background: false });
+                      }}
+                      className="px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-xs rounded font-medium"
+                    >
+                      重试
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -581,7 +651,30 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[520px] max-w-full max-h-[90vh] overflow-y-auto">
-          <h2 className="text-lg font-semibold text-zinc-100 mb-4">解析进行中</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-zinc-100">解析进行中</h2>
+            {/* Cancel during import. Calls cancel_import which kills
+                yt-dlp/ffmpeg/whisper and wipes the partial files +
+                library entry on the Rust side, then closes the modal.
+                Esc has the same effect (handled in the keydown
+                listener above). */}
+            {(phase === "started" ||
+              phase === "downloading" ||
+              phase === "extracting" ||
+              phase === "transcribing") && (
+              <button
+                type="button"
+                onClick={() => {
+                  void cancelInFlight();
+                  onClose();
+                }}
+                className="text-zinc-500 hover:text-zinc-200 text-xl leading-none px-2 -mr-2"
+                title="取消下载 (Esc)"
+              >
+                ×
+              </button>
+            )}
+          </div>
 
           <div className="space-y-3">
             {visiblePhases.map((p) => {
@@ -866,13 +959,25 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           </button>
         )}
 
-        <div className="flex justify-end gap-2 mt-5">
+        <div className="flex justify-end items-center gap-2 mt-5">
           <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-300">
             取消
           </button>
+          {/* 后台下载 — fire-and-forget. Modal closes immediately; Rust
+              keeps running with a more patient retry budget (~3 min vs.
+              foreground's ~10s). The user trades real-time progress for
+              not being blocked, which is the right trade-off when the
+              network is flaky enough that 前台 fails fast. */}
           <button
-            onClick={submit}
-            className="px-4 py-1.5 bg-blue-500 text-black text-sm rounded font-medium"
+            onClick={() => void submit({ background: true })}
+            className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded"
+            title="放到后台继续下载，关闭弹窗。后台模式 yt-dlp 会重试更长时间"
+          >
+            后台下载
+          </button>
+          <button
+            onClick={() => void submit({ background: false })}
+            className="px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm rounded font-medium"
           >
             开始解析
           </button>

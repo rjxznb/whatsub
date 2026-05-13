@@ -5,6 +5,7 @@ use crate::pipeline::spawn::run_sidecar;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
+use tokio_util::sync::CancellationToken;
 
 /// String used in `AppError::Other` when a download is interrupted by the
 /// user pressing pause. The frontend matches on this so it knows to show
@@ -293,6 +294,7 @@ pub async fn transcribe(
     out_dir: &Path,
     model_size: &str,
     video_id: &str,
+    cancel: Option<&CancellationToken>,
 ) -> AppResult<std::path::PathBuf> {
     let model = model_path(model_size)?;
     if !model.exists() {
@@ -385,6 +387,7 @@ pub async fn transcribe(
                 }
             }
         },
+        cancel,
     )
     .await?;
     // If whisper-cli ran without ever printing a Vulkan device line, it fell

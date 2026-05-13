@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.34"
+version = "0.1.35"
 description = "A Tauri App"
 authors = ["jimmy"]
 edition = "2021"
@@ -66,4 +66,9 @@ url = "2"
 # only ever connect to ws://localhost:<port> (no TLS), so the
 # rustls / native-tls deps would just bloat the binary.
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect"] }
+# CancellationToken for the per-import cancel signal. Threaded through
+# run_sidecar so that ✕ in the UI translates to killing yt-dlp / ffmpeg /
+# whisper child processes mid-flight instead of letting them finish
+# silently in the background.
+tokio-util = "0.7"
 

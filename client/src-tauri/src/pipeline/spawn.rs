@@ -2,16 +2,23 @@ use crate::error::{AppError, AppResult};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tokio_util::sync::CancellationToken;
 
 /// Run a sidecar to completion, capturing stdout. Streams stderr to a callback
 /// for progress parsing AND retains a tail buffer that gets included in the
 /// error message on non-zero exit, so users see yt-dlp/ffmpeg/whisper's actual
 /// failure reason rather than a bare "exit 1".
+///
+/// `cancel`: optional cancellation token. When triggered, the child process
+/// is killed and `AppError::Cancelled` is returned. Pass `None` for uncancellable
+/// invocations (e.g. retranscribe_video, which doesn't register an
+/// ImportState entry).
 pub async fn run_sidecar<F>(
     app: &AppHandle,
     bin_name: &str,
     args: &[&str],
     mut on_stderr_line: F,
+    cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
     F: FnMut(&str),
@@ -40,7 +47,7 @@ where
         }
     }
 
-    let (mut rx, _child) = cmd
+    let (mut rx, mut child) = cmd
         .spawn()
         .map_err(|e| AppError::Subprocess(format!("spawn {bin_name}: {e}")))?;
 
@@ -48,31 +55,46 @@ where
     let mut stderr_tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     const TAIL_LINES: usize = 20;
     let mut exit_code: Option<i32> = None;
+    let mut cancelled = false;
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            CommandEvent::Stdout(bytes) => {
-                stdout.push_str(&String::from_utf8_lossy(&bytes));
-            }
-            CommandEvent::Stderr(bytes) => {
-                let chunk = String::from_utf8_lossy(&bytes).to_string();
-                on_stderr_line(&chunk);
-                for line in chunk.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
+    // Main event loop. Watch both child output AND the cancel token so a
+    // ✕ click in the UI kills the child immediately rather than waiting
+    // for the next stdio chunk to come through.
+    loop {
+        if let Some(token) = cancel {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => {
+                    // Best-effort kill — the child may already have exited.
+                    let _ = child.kill();
+                    cancelled = true;
+                    break;
+                }
+                ev = rx.recv() => {
+                    match ev {
+                        Some(event) => {
+                            if handle_event(event, &mut stdout, &mut stderr_tail, TAIL_LINES, &mut on_stderr_line, &mut exit_code) {
+                                break;
+                            }
+                        }
+                        None => break,
                     }
-                    if stderr_tail.len() >= TAIL_LINES {
-                        stderr_tail.pop_front();
-                    }
-                    stderr_tail.push_back(trimmed.to_string());
                 }
             }
-            CommandEvent::Terminated(payload) => {
-                exit_code = payload.code;
+        } else {
+            match rx.recv().await {
+                Some(event) => {
+                    if handle_event(event, &mut stdout, &mut stderr_tail, TAIL_LINES, &mut on_stderr_line, &mut exit_code) {
+                        break;
+                    }
+                }
+                None => break,
             }
-            _ => {}
         }
+    }
+
+    if cancelled {
+        return Err(AppError::Cancelled);
     }
 
     match exit_code {
@@ -112,5 +134,42 @@ where
                 "{bin_name} terminated abnormally{detail}{hint}"
             )))
         }
+    }
+}
+
+/// Returns true when the event loop should exit (Terminated arrived).
+fn handle_event<F: FnMut(&str)>(
+    event: CommandEvent,
+    stdout: &mut String,
+    stderr_tail: &mut std::collections::VecDeque<String>,
+    tail_lines: usize,
+    on_stderr_line: &mut F,
+    exit_code: &mut Option<i32>,
+) -> bool {
+    match event {
+        CommandEvent::Stdout(bytes) => {
+            stdout.push_str(&String::from_utf8_lossy(&bytes));
+            false
+        }
+        CommandEvent::Stderr(bytes) => {
+            let chunk = String::from_utf8_lossy(&bytes).to_string();
+            on_stderr_line(&chunk);
+            for line in chunk.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if stderr_tail.len() >= tail_lines {
+                    stderr_tail.pop_front();
+                }
+                stderr_tail.push_back(trimmed.to_string());
+            }
+            false
+        }
+        CommandEvent::Terminated(payload) => {
+            *exit_code = payload.code;
+            true
+        }
+        _ => false,
     }
 }

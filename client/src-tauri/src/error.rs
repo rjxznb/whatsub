@@ -23,6 +23,12 @@ pub enum AppError {
 
     #[error("{0}")]
     Other(String),
+
+    /// User cancelled the operation (clicked ✕, pressed Esc, etc).
+    /// Distinct from Subprocess/etc so the frontend can suppress the
+    /// "import failed" dialog and treat it as a quiet abort.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl From<String> for AppError {

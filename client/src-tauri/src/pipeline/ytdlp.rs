@@ -3,6 +3,7 @@ use crate::error::AppResult;
 use crate::pipeline::spawn::run_sidecar;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
+use tokio_util::sync::CancellationToken;
 
 /// Compile-time target triple — Tauri renames sidecars at build time to
 /// `<name>-<target_triple><exe_suffix>` and drops them next to the main
@@ -174,12 +175,22 @@ fn yt_dlp_format(quality: &str) -> &'static str {
 }
 
 /// Download a video to `out_dir/source.mp4` and `out_dir/thumb.jpg`, plus info.json.
+///
+/// `background`: changes the retry strategy.
+///   - false (foreground, user is watching the modal): tight budget,
+///     fail fast. ~10s on a hard-unreachable network so the user sees
+///     the actionable error dialog quickly and can configure cookies
+///     / VPN / etc.
+///   - true (background, queued): patient budget. ~3 min total so
+///     transient blips actually recover.
 pub async fn download(
     app: &AppHandle,
     url: &str,
     out_dir: &Path,
     video_id: &str,
     quality: &str,
+    background: bool,
+    cancel: Option<&CancellationToken>,
 ) -> AppResult<DownloadResult> {
     std::fs::create_dir_all(out_dir)?;
     let video_path = out_dir.join("source.mp4").to_string_lossy().to_string();
@@ -247,26 +258,20 @@ pub async fn download(
         // any single video in the list is unavailable. We only ever want the
         // one video the URL points at.
         "--no-playlist".into(),
-        // Retry budget tuned for flaky-but-recoverable networks (GFW
-        // intermittent SSL EOFs, transient CDN resets). Constant 5s
-        // backoff over 10 retries ≈ 50s per yt-dlp run; with 3 outer
-        // process attempts (below) total worst-case ~3 minutes. yt-dlp
-        // emits "WARNING: ... Retrying (N/M)" lines through our
-        // emit_log mechanism so the log scroller shows continuous
-        // activity during the wait — user can see it's not hung.
-        //
-        // History: v0.1.32 went overboard with --retries 20 +
-        // linear=1:20:2 → ~13 min worst case, looked frozen because
-        // pre-download phase has no percent indicator. v0.1.33 went
-        // too far the other way (10 retries, 2s constant → 40s total,
-        // failed too eagerly on real flaky links). This sits in
-        // between.
+        // Retry budget split by mode. Background imports retry
+        // patiently (~3 min worst case) — the user isn't watching and
+        // probably wants the download to keep trying through a flaky
+        // network. Foreground imports retry briefly (~10s) so the user
+        // sees the "无法访问视频网站 / 挂梯子 / 配 cookies" dialog fast
+        // and can fix the root cause instead of staring at a frozen-
+        // looking modal. The outer process-level retry (below) also
+        // honors `background`.
         "--retries".into(),
-        "10".into(),
+        if background { "10".into() } else { "3".into() },
         "--fragment-retries".into(),
-        "10".into(),
+        if background { "10".into() } else { "3".into() },
         "--retry-sleep".into(),
-        "5".into(),
+        if background { "5".into() } else { "2".into() },
         "-f".into(),
         yt_dlp_format(quality).into(),
         "--merge-output-format".into(),
@@ -312,13 +317,15 @@ pub async fn download(
     // bubbled immediately so the user isn't waiting for the
     // friendly-error dialog they already needed to see.
     //
-    // 3 attempts × ~50s per yt-dlp run + 5s/10s backoff between
-    // attempts → total worst case ~3 minutes for the download() call.
-    // The user sees yt-dlp's retry-warning log lines + our own
-    // "network hiccup — retry N/3" markers throughout, so the wait
-    // doesn't look like a freeze.
-    const MAX_ATTEMPTS: u32 = 3;
-    for attempt in 1..=MAX_ATTEMPTS {
+    // Foreground: 1 attempt (no process retry). The in-process retries
+    // already used ~10s. Punching through with 2 more process attempts
+    // would just push total time to ~30s with no real recovery axis
+    // beyond what yt-dlp itself tried. Better to fail fast and let the
+    // user fix cookies / VPN.
+    //
+    // Background: 3 attempts × ~50s + 5s/10s backoff = ~3 min total.
+    let max_attempts: u32 = if background { 3 } else { 1 };
+    for attempt in 1..=max_attempts {
         if attempt > 1 {
             emit(
                 app,
@@ -327,7 +334,7 @@ pub async fn download(
                     source: "yt-dlp".into(),
                     line: format!(
                         "[whatsub] network hiccup — retry {}/{}",
-                        attempt, MAX_ATTEMPTS
+                        attempt, max_attempts
                     ),
                 },
             );
@@ -373,14 +380,21 @@ pub async fn download(
                     );
                 }
             },
+            cancel,
         )
         .await;
 
         match result {
             Ok(_) => break,
+            Err(crate::error::AppError::Cancelled) => {
+                // Cancellation propagates immediately — no retry, no
+                // friendly-error mapping. The caller (import_video)
+                // handles cleanup of partial files.
+                return Err(crate::error::AppError::Cancelled);
+            }
             Err(e) => {
                 let msg = e.to_string();
-                if attempt < MAX_ATTEMPTS && is_transient_yt_dlp_error(&msg) {
+                if attempt < max_attempts && is_transient_yt_dlp_error(&msg) {
                     // Backoff between fresh-process attempts: 5s → 10s.
                     // Shorter than yt-dlp's own retry cycle so we don't
                     // double-wait, but long enough to give DNS / GFW
@@ -410,6 +424,7 @@ pub async fn download(
         &video_pathbuf,
         &thumb_pathbuf,
         video_id,
+        cancel,
     )
     .await
     {

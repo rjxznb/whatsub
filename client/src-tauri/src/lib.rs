@@ -16,6 +16,7 @@ pub fn run() {
         .manage(commands::analysis::ExportState::default())
         .manage(commands::models::ModelDownloadState::default())
         .manage(commands::youtube_auth::LoginState::default())
+        .manage(commands::import::ImportState::default())
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -41,6 +42,7 @@ pub fn run() {
             commands::models::whisper_model_download,
             commands::models::whisper_model_download_cancel,
             commands::import::import_video,
+            commands::import::cancel_import,
             commands::import::retranscribe_video,
             commands::vocabulary::vocab_list,
             commands::vocabulary::vocab_add,

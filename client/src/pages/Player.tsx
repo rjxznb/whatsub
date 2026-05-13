@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, FileOutput } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
@@ -22,12 +22,14 @@ import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
 import { dedupSubtitles } from "../store/analysis";
+import { runInBackground, takeOverBackground } from "../store/backgroundAnalyses";
 import type { AnalysisResult, Subtitle, SrtCue } from "../llm/types";
 
 type Tab = "subtitles" | "keyPhrases";
 
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
+  const navigate = useNavigate();
   // Optional ?t=<seconds> deep-link target — used by the vocab page to jump
   // back to the cue where a phrase was first starred. Consumed once on
   // loadedmetadata; subsequent seeks are user-driven.
@@ -286,6 +288,44 @@ export function Player() {
     void startAnalysisFrom(startIdx);
   };
 
+  /**
+   * Hand off the in-flight analysis to the background scheduler so the
+   * user can navigate away without losing progress. Snapshots the
+   * current state, starts a BG run that resumes from the snapshot, then
+   * aborts the foreground controller + navigates back. The BG run
+   * writes its progress into useBgAnalyses (visible in the queue
+   * widget) and persists to disk every 800ms — same cadence as the
+   * foreground loop.
+   *
+   * When the user returns to this Player later for the same videoId,
+   * the mount effect calls takeOverBackground() and promotes whatever
+   * the BG accumulated back into useAnalysis, then continues from
+   * there in the foreground.
+   */
+  const onMoveToBackground = () => {
+    if (!videoId) return;
+    const cues = cuesRef.current;
+    if (!cues) return;
+    const snap = useAnalysis.getState();
+    const entry = library.videos.find((v) => v.id === videoId);
+    runInBackground({
+      videoId,
+      label: entry?.title ?? videoId,
+      cues,
+      previouslyAnalyzed: snap.subtitles.slice(),
+      previousSummary: snap.summary,
+      style: entry?.analysisStyle ?? "colloquial",
+    });
+    // Stop the foreground run (its writes would race with BG's). The
+    // BG store now owns the analysis state.
+    abortRef.current?.abort();
+    // Flush any pending partial save so the snapshot we just handed to
+    // BG matches what's on disk — BG resumes from previouslyAnalyzed,
+    // so the on-disk state is mostly cosmetic until BG's next save.
+    flushPartialSave();
+    navigate("/library");
+  };
+
   // Bumped after a successful retranscribe to make the load useEffect
   // (keyed on [videoId, reloadKey]) re-run and pick up the freshly written
   // transcript.srt + restart AI analysis. Pure session state — no need to
@@ -327,7 +367,45 @@ export function Player() {
       cuesRef.current = null;
     }
 
+    // If this video has a background analysis in flight (user clicked
+    // 「在后台解析」 then navigated back), reclaim it: BG returns the
+    // accumulated subtitles/summary, BG controller is cancelled, BG
+    // store entry removed. The mount flow below then continues in
+    // foreground from where BG left off.
+    const reclaimed = takeOverBackground(videoId);
+
     (async () => {
+      // If we reclaimed a BG run, its accumulated state is fresher than
+      // anything on disk (BG persists every 800ms but the most recent
+      // cues might not have made it before we navigated back). Use that
+      // directly; the cache path below is for the cold-start case.
+      if (reclaimed && reclaimed.subtitles.length > 0) {
+        const srt = await invoke<string | null>("load_transcript", { videoId });
+        if (cancelled) return;
+        if (!srt) {
+          analysis.setError("找不到 transcript.srt — 请重新解析");
+          return;
+        }
+        const cues = parseSrt(srt);
+        cuesRef.current = cues;
+        analysis.startFor(videoId);
+        analysis.setSubtitles(reclaimed.subtitles);
+        if (reclaimed.summary) analysis.setSummary(reclaimed.summary);
+
+        const uniqueCueCount = new Set(
+          cues.map((c) => `${c.time}|${c.endTime}|${c.text}`)
+        ).size;
+        const hasSummary =
+          !!reclaimed.summary?.keyPhrases && reclaimed.summary.keyPhrases.length > 0;
+        if (reclaimed.subtitles.length >= uniqueCueCount || hasSummary) {
+          analysis.setPhase("complete");
+        } else {
+          // Resume the foreground run from where BG left off.
+          void startAnalysisFrom(reclaimed.subtitles.length);
+        }
+        return;
+      }
+
       const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
       if (cancelled) return;
 
@@ -548,6 +626,7 @@ export function Player() {
         onStop={onStop}
         onContinue={onContinue}
         onRetranscribe={onRetranscribe}
+        onMoveToBackground={onMoveToBackground}
       />
 
       <div ref={splitContainerRef} className="flex-1 flex min-h-0">

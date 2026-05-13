@@ -17,9 +17,18 @@ interface Props {
    *  button on the error banner so a user whose download succeeded but
    *  whisper failed can recover without re-importing the URL. */
   onRetranscribe?: () => void;
+  /** Hand the running analysis off to the background scheduler so the
+   *  user can navigate away without losing progress. Shown alongside
+   *  「停止解析」 during the analyzing phase. */
+  onMoveToBackground?: () => void;
 }
 
-export function ProgressBanner({ onStop, onContinue, onRetranscribe }: Props) {
+export function ProgressBanner({
+  onStop,
+  onContinue,
+  onRetranscribe,
+  onMoveToBackground,
+}: Props) {
   const { phase, progressPercent, errorMessage, subtitles } = useAnalysis();
   if (phase === "idle" || phase === "complete") return null;
 
@@ -44,6 +53,15 @@ export function ProgressBanner({ onStop, onContinue, onRetranscribe }: Props) {
         {errorMessage && ` — ${errorMessage}`}
       </div>
 
+      {isAnalyzing && onMoveToBackground && (
+        <button
+          onClick={onMoveToBackground}
+          className="px-3 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-xs transition-colors"
+          title="放到后台继续解析，你可以离开当前页面。完成后会自动保存"
+        >
+          在后台解析
+        </button>
+      )}
       {isAnalyzing && onStop && (
         <button
           onClick={onStop}

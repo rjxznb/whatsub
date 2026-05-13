@@ -1,32 +1,86 @@
 import { useState } from "react";
 import { Download, CheckCircle2, AlertCircle } from "lucide-react";
 import { useDownloadQueue, type QueueItem, type QueuePhase } from "../store/downloadQueue";
+import {
+  useBgAnalyses,
+  cancelBackground,
+  type BgAnalysisJob,
+} from "../store/backgroundAnalyses";
 
 /**
- * Floating bottom-right widget for the background download queue.
- * Hidden when the queue is empty. Clicking the badge expands a panel
- * showing every active item with per-item progress + ✕ cancel.
+ * Floating bottom-right widget for the unified background-jobs queue.
+ * Hidden when there's nothing to show. Clicking the badge expands a
+ * panel listing every in-flight item (downloads + background analyses)
+ * with per-item progress + ✕ cancel.
  *
- * Mounted at App root so it sits above all routes — user can navigate
- * freely while imports run.
+ * Mounted at App root so it stays above all routes — user can navigate
+ * freely while jobs run.
  */
+type UnifiedItem =
+  | {
+      kind: "download";
+      videoId: string;
+      label: string;
+      phase: QueuePhase;
+      percent: number;
+      sourceValue: string;
+      speed?: string | null;
+      eta?: string | null;
+      error?: string | null;
+      startedAt: number;
+    }
+  | {
+      kind: "analysis";
+      videoId: string;
+      label: string;
+      phase: BgAnalysisJob["phase"];
+      percent: number;
+      subtitleCount: number;
+      totalCues: number;
+      error?: string | null;
+      startedAt: number;
+    };
+
 export function DownloadQueueWidget() {
-  const entries = useDownloadQueue((s) => s.entries);
-  const cancel = useDownloadQueue((s) => s.cancel);
-  const remove = useDownloadQueue((s) => s.remove);
+  const downloads = useDownloadQueue((s) => s.entries);
+  const cancelDownload = useDownloadQueue((s) => s.cancel);
+  const removeDownload = useDownloadQueue((s) => s.remove);
+  const analyses = useBgAnalyses((s) => s.jobs);
   const [expanded, setExpanded] = useState(false);
 
-  const items = Object.values(entries).sort((a, b) => b.startedAt - a.startedAt);
+  const items: UnifiedItem[] = [
+    ...Object.values(downloads).map<UnifiedItem>((d: QueueItem) => ({
+      kind: "download",
+      videoId: d.videoId,
+      label: d.label,
+      phase: d.phase,
+      percent: d.percent,
+      sourceValue: d.sourceValue,
+      speed: d.speed,
+      eta: d.eta,
+      error: d.error,
+      startedAt: d.startedAt,
+    })),
+    ...Object.values(analyses).map<UnifiedItem>((a) => ({
+      kind: "analysis",
+      videoId: a.videoId,
+      label: a.label,
+      phase: a.phase,
+      percent: a.totalCues > 0 ? Math.min(100, (a.subtitleCount / a.totalCues) * 100) : 0,
+      subtitleCount: a.subtitleCount,
+      totalCues: a.totalCues,
+      error: a.errorMessage,
+      startedAt: a.startedAt,
+    })),
+  ].sort((a, b) => b.startedAt - a.startedAt);
+
   if (items.length === 0) return null;
 
-  // Active count = anything not done / not errored (i.e. actively
-  // working). Determines the badge color: blue while active, green
-  // when everything finished, amber when something errored.
-  const activeCount = items.filter(
-    (i) => i.phase !== "done" && i.phase !== "error"
-  ).length;
+  // Badge color: amber if anything errored, blue while actively
+  // working, green only when everything finished (and is still
+  // lingering pre-auto-remove).
+  const activeCount = items.filter((i) => !isTerminalPhase(i)).length;
   const errorCount = items.filter((i) => i.phase === "error").length;
-
   const badgeColor =
     errorCount > 0
       ? "bg-amber-500"
@@ -40,7 +94,7 @@ export function DownloadQueueWidget() {
         <div className="w-80 max-w-[calc(100vw-2rem)] bg-zinc-900 border border-zinc-700 rounded-lg shadow-2xl overflow-hidden">
           <div className="px-4 py-2.5 border-b border-zinc-800 flex items-center justify-between">
             <span className="text-sm font-semibold text-zinc-100">
-              后台下载（{items.length}）
+              后台任务（{items.length}）
             </span>
             <button
               onClick={() => setExpanded(false)}
@@ -52,11 +106,17 @@ export function DownloadQueueWidget() {
           </div>
           <div className="max-h-[60vh] overflow-y-auto divide-y divide-zinc-800">
             {items.map((item) => (
-              <QueueRow
-                key={item.videoId}
+              <Row
+                key={`${item.kind}:${item.videoId}`}
                 item={item}
-                onCancel={() => void cancel(item.videoId)}
-                onDismiss={() => remove(item.videoId)}
+                onCancel={() => {
+                  if (item.kind === "download") void cancelDownload(item.videoId);
+                  else cancelBackground(item.videoId);
+                }}
+                onDismiss={() => {
+                  if (item.kind === "download") removeDownload(item.videoId);
+                  else cancelBackground(item.videoId);
+                }}
               />
             ))}
           </div>
@@ -65,7 +125,7 @@ export function DownloadQueueWidget() {
       <button
         onClick={() => setExpanded((v) => !v)}
         className="relative h-12 w-12 rounded-full bg-zinc-900 border border-zinc-700 hover:border-zinc-500 shadow-lg flex items-center justify-center text-zinc-200 transition-colors"
-        title={`后台下载（${items.length}）`}
+        title={`后台任务（${items.length}）`}
       >
         <Download className="h-5 w-5" />
         <span
@@ -81,54 +141,60 @@ export function DownloadQueueWidget() {
   );
 }
 
-function QueueRow({
+function isTerminalPhase(item: UnifiedItem): boolean {
+  return item.phase === "done" || item.phase === "error";
+}
+
+function Row({
   item,
   onCancel,
   onDismiss,
 }: {
-  item: QueueItem;
+  item: UnifiedItem;
   onCancel: () => void;
   onDismiss: () => void;
 }) {
-  const isTerminal = item.phase === "done" || item.phase === "error";
+  const isTerminal = isTerminalPhase(item);
+  const phaseTextValue = phaseText(item);
   return (
     <div className="px-4 py-3">
       <div className="flex items-center gap-2 mb-1.5">
         <PhaseIcon phase={item.phase} />
         <span
           className="flex-1 text-xs text-zinc-200 truncate"
-          title={item.sourceValue}
+          title={item.label}
         >
+          {item.kind === "analysis" ? "🤖 " : ""}
           {item.label}
         </span>
         <button
           onClick={isTerminal ? onDismiss : onCancel}
           className="text-zinc-500 hover:text-zinc-200 text-base leading-none px-1 -mr-1"
-          title={isTerminal ? "移除" : "取消下载"}
+          title={isTerminal ? "移除" : "取消"}
         >
           ×
         </button>
       </div>
-      {/* Progress bar: shown for active phases. Hidden once done/error
-          (the phase icon + label already convey the terminal state). */}
       {!isTerminal && (
         <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
           <div
-            className={
-              "h-full transition-all duration-300 " +
-              (item.phase === "started" ? "bg-zinc-600" : "bg-blue-500")
-            }
-            style={{ width: `${item.phase === "started" ? 5 : item.percent}%` }}
+            className="h-full transition-all duration-300 bg-blue-500"
+            style={{ width: `${Math.max(2, item.percent)}%` }}
           />
         </div>
       )}
       <div className="flex items-center gap-2 mt-1.5 text-[10px] text-zinc-500">
-        <span>{phaseLabel(item.phase)}</span>
-        {item.phase === "downloading" && item.speed && (
+        <span>{phaseTextValue}</span>
+        {item.kind === "download" && item.phase === "downloading" && item.speed && (
           <span className="tabular-nums">{item.speed}</span>
         )}
-        {item.phase === "downloading" && item.eta && (
+        {item.kind === "download" && item.phase === "downloading" && item.eta && (
           <span className="tabular-nums">ETA {item.eta}</span>
+        )}
+        {item.kind === "analysis" && item.phase === "analyzing" && (
+          <span className="tabular-nums">
+            {item.subtitleCount}/{item.totalCues} 行
+          </span>
         )}
         {item.phase === "error" && item.error && (
           <span className="text-amber-400 truncate" title={item.error}>
@@ -140,7 +206,7 @@ function QueueRow({
   );
 }
 
-function PhaseIcon({ phase }: { phase: QueuePhase }) {
+function PhaseIcon({ phase }: { phase: UnifiedItem["phase"] }) {
   if (phase === "done") {
     return <CheckCircle2 className="h-4 w-4 text-green-400 shrink-0" />;
   }
@@ -152,16 +218,26 @@ function PhaseIcon({ phase }: { phase: QueuePhase }) {
   );
 }
 
-function phaseLabel(p: QueuePhase): string {
-  switch (p) {
-    case "started":
-      return "准备中";
-    case "downloading":
-      return "下载中";
-    case "extracting":
-      return "提取音频";
-    case "transcribing":
-      return "转录字幕";
+function phaseText(item: UnifiedItem): string {
+  if (item.kind === "download") {
+    switch (item.phase) {
+      case "started":
+        return "准备中";
+      case "downloading":
+        return "下载中";
+      case "extracting":
+        return "提取音频";
+      case "transcribing":
+        return "转录字幕";
+      case "done":
+        return "完成";
+      case "error":
+        return "失败";
+    }
+  }
+  switch (item.phase) {
+    case "analyzing":
+      return "AI 解析";
     case "done":
       return "完成";
     case "error":
@@ -169,8 +245,8 @@ function phaseLabel(p: QueuePhase): string {
   }
 }
 
-/** Trim a multi-line subprocess stderr to a single useful line so the
- *  queue row stays compact. Full text remains on the title attribute. */
+/** One-line summary of a long subprocess stderr so the queue row stays
+ *  compact. Full text still surfaces via the title attribute. */
 function shortError(raw: string): string {
   const first = raw.split("\n").find((line) => line.trim().length > 0) ?? raw;
   return first.length > 40 ? first.slice(0, 40) + "…" : first;

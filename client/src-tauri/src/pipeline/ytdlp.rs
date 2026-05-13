@@ -247,22 +247,26 @@ pub async fn download(
         // any single video in the list is unavailable. We only ever want the
         // one video the URL points at.
         "--no-playlist".into(),
-        // Aggressive in-process retries for flaky networks (GFW / Cloudflare
-        // edge resets on googlevideo CDN, transient TLS EOFs). yt-dlp's
-        // defaults are 10 retries with no sleep between them — when the
-        // failure mode is "TCP handshake to this IP is being interfered
-        // with" those 10 attempts complete in seconds without giving the
-        // network a chance to settle. Bumping to 20 + linear backoff
-        // (1s → 20s, +2s per step) spreads them over ~2 minutes, much
-        // more likely to slip through a transient block. Per-step also
-        // means the user sees the progress meter idle briefly rather
-        // than the process appearing hung.
+        // Retry budget tuned for flaky-but-recoverable networks (GFW
+        // intermittent SSL EOFs, transient CDN resets). Constant 5s
+        // backoff over 10 retries ≈ 50s per yt-dlp run; with 3 outer
+        // process attempts (below) total worst-case ~3 minutes. yt-dlp
+        // emits "WARNING: ... Retrying (N/M)" lines through our
+        // emit_log mechanism so the log scroller shows continuous
+        // activity during the wait — user can see it's not hung.
+        //
+        // History: v0.1.32 went overboard with --retries 20 +
+        // linear=1:20:2 → ~13 min worst case, looked frozen because
+        // pre-download phase has no percent indicator. v0.1.33 went
+        // too far the other way (10 retries, 2s constant → 40s total,
+        // failed too eagerly on real flaky links). This sits in
+        // between.
         "--retries".into(),
-        "20".into(),
+        "10".into(),
         "--fragment-retries".into(),
-        "20".into(),
+        "10".into(),
         "--retry-sleep".into(),
-        "linear=1:20:2".into(),
+        "5".into(),
         "-f".into(),
         yt_dlp_format(quality).into(),
         "--merge-output-format".into(),
@@ -305,8 +309,14 @@ pub async fn download(
     // n-challenge player JS gets re-fetched from scratch. Only retry
     // when stderr matches a known transient pattern (network / SSL /
     // CDN) — deterministic errors like cookies/banned/private are
-    // bubbled immediately so the user isn't waiting 2 minutes for the
+    // bubbled immediately so the user isn't waiting for the
     // friendly-error dialog they already needed to see.
+    //
+    // 3 attempts × ~50s per yt-dlp run + 5s/10s backoff between
+    // attempts → total worst case ~3 minutes for the download() call.
+    // The user sees yt-dlp's retry-warning log lines + our own
+    // "network hiccup — retry N/3" markers throughout, so the wait
+    // doesn't look like a freeze.
     const MAX_ATTEMPTS: u32 = 3;
     for attempt in 1..=MAX_ATTEMPTS {
         if attempt > 1 {
@@ -371,10 +381,11 @@ pub async fn download(
             Err(e) => {
                 let msg = e.to_string();
                 if attempt < MAX_ATTEMPTS && is_transient_yt_dlp_error(&msg) {
-                    // Backoff between fresh-process attempts: 3s → 6s.
-                    // Short enough that the user doesn't think we're hung,
-                    // long enough to give the network a chance to settle.
-                    tokio::time::sleep(std::time::Duration::from_secs(3 * attempt as u64))
+                    // Backoff between fresh-process attempts: 5s → 10s.
+                    // Shorter than yt-dlp's own retry cycle so we don't
+                    // double-wait, but long enough to give DNS / GFW
+                    // state a chance to flip before re-running.
+                    tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64))
                         .await;
                     continue;
                 }

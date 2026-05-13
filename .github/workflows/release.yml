@@ -244,6 +244,17 @@ jobs:
         working-directory: client
         run: pnpm install --frozen-lockfile
 
+      # Explicit toolchain install — DO NOT rely on the runner image having a
+      # default cargo on PATH. GitHub's hosted images have shipped runners
+      # where `cargo` resolves to `rustup-init` (the bootstrap binary) with
+      # no default toolchain installed, in which case `cargo metadata` errors
+      # with "unexpected argument 'metadata' found" before any of our build
+      # logic runs. Swatinem/rust-cache below only caches deps — it doesn't
+      # install the toolchain. Installing stable here makes the job
+      # image-version-independent.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Cache Cargo (Windows)
         uses: Swatinem/rust-cache@v2
         with:
@@ -443,6 +454,13 @@ jobs:
       - name: Install JS dependencies
         working-directory: client
         run: pnpm install --frozen-lockfile
+
+      # See the Windows job for the rationale — macos-14 hit the same issue
+      # (cargo → rustup-init, no default toolchain) and all 3 retries of
+      # tauri build failed with `cargo metadata: unexpected argument
+      # 'metadata' found` until this step landed. Install stable explicitly.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo (macOS)
         uses: Swatinem/rust-cache@v2

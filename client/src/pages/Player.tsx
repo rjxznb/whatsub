@@ -323,6 +323,13 @@ export function Player() {
     // BG matches what's on disk — BG resumes from previouslyAnalyzed,
     // so the on-disk state is mostly cosmetic until BG's next save.
     flushPartialSave();
+    // Clear useAnalysis so:
+    //  (1) the unmount cleanup below doesn't transition phase to
+    //      "paused" (would otherwise make Library card show "继续解析"
+    //      yellow text even though analysis is actively running in BG).
+    //  (2) BG store is the sole owner of this video's analysis state
+    //      until takeOverBackground hands it back on next Player mount.
+    useAnalysis.getState().reset();
     navigate("/library");
   };
 

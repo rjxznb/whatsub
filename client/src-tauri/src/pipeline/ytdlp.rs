@@ -191,26 +191,10 @@ pub async fn download(
     // suffix appended too, leading to `info.info.json` which is confusing.
     let info_path_actual = out_dir.join("source.info.json");
 
-    let id = video_id.to_string();
-    let app_clone = app.clone();
-    let id_for_log = video_id.to_string();
-    let app_for_log = app.clone();
-    let emit_log = move |line: &str| {
-        for actual in line.lines() {
-            let t = actual.trim();
-            if t.is_empty() {
-                continue;
-            }
-            emit(
-                &app_for_log,
-                PipelineEvent::Log {
-                    video_id: id_for_log.clone(),
-                    source: "yt-dlp".into(),
-                    line: t.into(),
-                },
-            );
-        }
-    };
+    // Closures and the `id`/`app` clones they capture live inside the retry
+    // loop below — they need to be recreated each attempt because the
+    // run_sidecar stderr callback takes them by value (move). Build the
+    // arg list first (it's invariant across attempts), then loop.
     // Thumbnail is NOT requested from yt-dlp anymore. The classic
     // "--write-thumbnail" path hits a separate HTTPS connection to
     // i.ytimg.com (or each site's CDN) which gets reset by GFW on a
@@ -263,18 +247,42 @@ pub async fn download(
         // any single video in the list is unavailable. We only ever want the
         // one video the URL points at.
         "--no-playlist".into(),
+        // Aggressive in-process retries for flaky networks (GFW / Cloudflare
+        // edge resets on googlevideo CDN, transient TLS EOFs). yt-dlp's
+        // defaults are 10 retries with no sleep between them — when the
+        // failure mode is "TCP handshake to this IP is being interfered
+        // with" those 10 attempts complete in seconds without giving the
+        // network a chance to settle. Bumping to 20 + linear backoff
+        // (1s → 20s, +2s per step) spreads them over ~2 minutes, much
+        // more likely to slip through a transient block. Per-step also
+        // means the user sees the progress meter idle briefly rather
+        // than the process appearing hung.
+        "--retries".into(),
+        "20".into(),
+        "--fragment-retries".into(),
+        "20".into(),
+        "--retry-sleep".into(),
+        "linear=1:20:2".into(),
         "-f".into(),
         yt_dlp_format(quality).into(),
         "--merge-output-format".into(),
         "mp4".into(),
-        // Belt + suspenders for Mac WKWebView playback: even if the format
-        // selector falls through to a non-m4a audio stream (rare — old uploads
-        // missing AAC tracks), force-transcode the audio to AAC during the
-        // merge step so the resulting mp4 plays in AVFoundation. Video stream
-        // is still copied (`-c:v copy`) so no re-encoding cost there. Audio
-        // re-encode is tiny (a few seconds for a 10-minute video).
+        // Pure remux on merge — no audio re-encode. We used to force
+        // `-c:a aac -b:a 192k` as a "belt + suspenders" for Mac WKWebView
+        // (in case the format chain fell through to Opus-in-WebM audio),
+        // but that backfired on YouTube uploads that ship 5.1 / 7.1
+        // multichannel m4a: the AAC encoder didn't pass an explicit
+        // channel layout, so the re-encoded stream's header declared one
+        // layout while packets carried another → "channel element 1.0
+        // is not allocated" on every packet during downstream WAV
+        // extraction, ffmpeg exits 69 ("Conversion failed!"). Since
+        // tiers 1+2 of yt_dlp_format already constrain `ba[ext=m4a]`
+        // (= AAC) for >99% of videos, the transcode was never needed
+        // there and only created risk. The rare tier-3/4 fall-through
+        // with Opus audio on Mac is now a known soft limitation —
+        // users can re-import at a different quality if hit.
         "--postprocessor-args".into(),
-        "Merger:-c:v copy -c:a aac -b:a 192k".into(),
+        "Merger:-c:v copy -c:a copy".into(),
         "-o".into(),
         video_path.clone(),
         // No `-o "infojson:..."` — let yt-dlp default to writing the JSON
@@ -289,27 +297,91 @@ pub async fn download(
     ]);
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
-    run_sidecar(
-        app,
-        "yt-dlp",
-        &arg_refs,
-        move |line| {
-            emit_log(line);
-            if let Some(p) = parse_progress(line) {
+    // Process-level retry around yt-dlp. The in-process --retries above
+    // handles HTTP retries inside ONE yt-dlp run; this outer loop spawns
+    // a fresh process when the FIRST one gives up, which is a different
+    // recovery axis: new DNS resolution can land on a different IP /
+    // POP, new TLS session can dodge a stuck handshake state, and the
+    // n-challenge player JS gets re-fetched from scratch. Only retry
+    // when stderr matches a known transient pattern (network / SSL /
+    // CDN) — deterministic errors like cookies/banned/private are
+    // bubbled immediately so the user isn't waiting 2 minutes for the
+    // friendly-error dialog they already needed to see.
+    const MAX_ATTEMPTS: u32 = 3;
+    for attempt in 1..=MAX_ATTEMPTS {
+        if attempt > 1 {
+            emit(
+                app,
+                PipelineEvent::Log {
+                    video_id: video_id.to_string(),
+                    source: "yt-dlp".into(),
+                    line: format!(
+                        "[whatsub] network hiccup — retry {}/{}",
+                        attempt, MAX_ATTEMPTS
+                    ),
+                },
+            );
+        }
+
+        let id_cb = video_id.to_string();
+        let app_cb = app.clone();
+        let id_log = video_id.to_string();
+        let app_log = app.clone();
+        let emit_log = move |line: &str| {
+            for actual in line.lines() {
+                let t = actual.trim();
+                if t.is_empty() {
+                    continue;
+                }
                 emit(
-                    &app_clone,
-                    PipelineEvent::Downloading {
-                        video_id: id.clone(),
-                        percent: p.percent,
-                        total: p.total,
-                        speed: p.speed,
-                        eta: p.eta,
+                    &app_log,
+                    PipelineEvent::Log {
+                        video_id: id_log.clone(),
+                        source: "yt-dlp".into(),
+                        line: t.into(),
                     },
                 );
             }
-        },
-    )
-    .await?;
+        };
+
+        let result = run_sidecar(
+            app,
+            "yt-dlp",
+            &arg_refs,
+            move |line| {
+                emit_log(line);
+                if let Some(p) = parse_progress(line) {
+                    emit(
+                        &app_cb,
+                        PipelineEvent::Downloading {
+                            video_id: id_cb.clone(),
+                            percent: p.percent,
+                            total: p.total,
+                            speed: p.speed,
+                            eta: p.eta,
+                        },
+                    );
+                }
+            },
+        )
+        .await;
+
+        match result {
+            Ok(_) => break,
+            Err(e) => {
+                let msg = e.to_string();
+                if attempt < MAX_ATTEMPTS && is_transient_yt_dlp_error(&msg) {
+                    // Backoff between fresh-process attempts: 3s → 6s.
+                    // Short enough that the user doesn't think we're hung,
+                    // long enough to give the network a chance to settle.
+                    tokio::time::sleep(std::time::Duration::from_secs(3 * attempt as u64))
+                        .await;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
 
     // Extract thumbnail from the just-downloaded local video via
     // ffmpeg. Bypasses yt-dlp's network-based thumbnail fetch (which
@@ -355,6 +427,47 @@ pub async fn download(
         title,
         duration_sec: duration,
     })
+}
+
+/// Stderr-substring match for yt-dlp errors that are likely to succeed
+/// on a fresh-process retry. Patterns target network / TLS / CDN
+/// flakiness (the "works on 2nd try" cases). Deterministic failures
+/// (cookies expired, video private/removed/age-gated, members-only,
+/// bot-check) deliberately do NOT match — retrying those just wastes
+/// the user's time before they see the actionable error dialog.
+fn is_transient_yt_dlp_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    const TRANSIENT_FRAGMENTS: &[&str] = &[
+        // Common GFW signature on TLS handshake to youtube.com / googlevideo:
+        "eof occurred in violation of protocol",
+        // Generic TLS / SSL errors:
+        "ssl: ",
+        "ssl error",
+        "ssl_error",
+        "certificate verify failed",
+        // TCP-level resets / timeouts:
+        "connection reset",
+        "connection aborted",
+        "connection timed out",
+        "remote end closed connection",
+        "read operation timed out",
+        // yt-dlp's "couldn't grab the webpage" — matches both the
+        // page-fetch failure ("Unable to download webpage") and the
+        // final exit message ("Giving up after N retries").
+        "unable to download webpage",
+        "giving up after",
+        // DNS hiccups:
+        "getaddrinfo failed",
+        "name or service not known",
+        "temporary failure in name resolution",
+        // yt-dlp's player-JS / n-challenge cache going stale —
+        // a fresh process refetches the player, often resolves itself.
+        "requested format is not available",
+        "unable to extract",
+        "nsig extraction failed",
+        "player response not found",
+    ];
+    TRANSIENT_FRAGMENTS.iter().any(|p| lower.contains(p))
 }
 
 pub(crate) struct DownloadProgress {

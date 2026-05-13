@@ -22,6 +22,12 @@ pub fn license_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("license.json"))
 }
 
+/// Local copy of the trial registration returned by `/api/trial/start`.
+/// Presence = TRIAL_ACTIVE state; absence + no license = call the server.
+pub fn trial_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("trial.json"))
+}
+
 /// Multi-site cookie jar (JSON, source of truth). Holds per-site
 /// buckets keyed by site_key. Always re-derive cookies.txt from this.
 pub fn cookies_jar_path() -> Result<PathBuf, String> {

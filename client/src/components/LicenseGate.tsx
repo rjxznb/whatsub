@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Loader2, ShieldAlert, Cloud } from 'lucide-react';
+import { Loader2, ShieldAlert, Cloud, WifiOff } from 'lucide-react';
 import { useLicense, type ActivateError } from '../store/license';
+import { TrialBanner } from './TrialBanner';
 
 /**
  * Wraps the app router. While `mode === 'INITIALIZING'` shows a loading
@@ -47,9 +48,21 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     return <ActivationScreen />;
   }
 
-  // mode === 'ACTIVE'
+  // mode === 'ACTIVE' or 'TRIAL_ACTIVE' — children render in both cases.
+  // Celebration only fires on the NEEDS_KEY → ACTIVE transition (real
+  // license activation), not on trial start; the trial banner already
+  // signals "you got access" implicitly.
   if (celebrating) {
     return <CelebrationOverlay onDone={() => setCelebrating(false)} />;
+  }
+
+  if (mode === 'TRIAL_ACTIVE') {
+    return (
+      <>
+        <TrialBanner />
+        {children}
+      </>
+    );
   }
 
   return <>{children}</>;
@@ -238,7 +251,8 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
 }
 
 function ActivationScreen() {
-  const { activate, activating, error, clearError } = useLicense();
+  const { activate, activating, error, clearError, trial, trialFetchError } =
+    useLicense();
   const [key, setKey] = useState('');
 
   async function onSubmit(e: React.FormEvent) {
@@ -246,11 +260,23 @@ function ActivationScreen() {
     await activate(key);
   }
 
+  // Branch the header copy based on how the user got here:
+  //   - trial exists AND expired → "试用已结束" pitch
+  //   - trialFetchError set      → "首次需联网领取试用" hint
+  //   - else (cold first launch w/ no trial yet) → original welcome
+  const trialExpired =
+    !!trial && trial.expiresAt > 0 && Date.now() >= trial.expiresAt;
+  const trialNetworkError = !!trialFetchError && !trial;
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <p className="text-zinc-400 text-sm mb-1">嘿～欢迎来到</p>
+          {trialExpired ? (
+            <p className="text-zinc-400 text-sm mb-1">24 小时试用已结束</p>
+          ) : (
+            <p className="text-zinc-400 text-sm mb-1">嘿～欢迎来到</p>
+          )}
           {/* Brand name in Caveat handwriting font (same as the welcome
               animation) — "what" white, "Sub" blue, matching the intro's
               two-tone styling so the activation screen feels like the
@@ -259,10 +285,31 @@ function ActivationScreen() {
             <span className="text-white">what</span>
             <span className="text-blue-400">Sub</span>
           </div>
-          <p className="text-sm text-zinc-400">
-            贴一下你的授权码，就可以使用啦 ~
-          </p>
+          {trialExpired ? (
+            <p className="text-sm text-zinc-400">
+              输入授权码即可继续使用，所有数据都还在 💝
+            </p>
+          ) : (
+            <p className="text-sm text-zinc-400">
+              贴一下你的授权码，就可以使用啦 ~
+            </p>
+          )}
         </div>
+
+        {trialNetworkError && (
+          <div className="mb-4 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-200 flex gap-2">
+            <WifiOff className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="flex-1 leading-relaxed">
+              <div className="font-medium">
+                没有连上服务器，暂时没法领取免费试用
+              </div>
+              <div className="text-amber-300/70 mt-0.5">
+                请检查网络后重启 whatsub —— 系统会自动赠送你 24 小时试用。
+                如果你已经有授权码也可以直接输入下方激活。
+              </div>
+            </div>
+          </div>
+        )}
 
         <form
           onSubmit={onSubmit}

@@ -107,3 +107,47 @@ pub fn license_save_state(state: LicenseState) -> AppResult<()> {
     std::fs::write(&path, json)?;
     Ok(())
 }
+
+// ─── Trial state persistence ──────────────────────────────────────────
+//
+// The trial flow is symmetric to the license flow: JS owns the network
+// call (POST /api/trial/start with the fingerprint we computed above);
+// Rust just persists what the server returned to `<app_data>/trial.json`
+// so subsequent launches don't need to re-ping. The server is the source
+// of truth on expiresAt — we never compute it client-side, otherwise
+// "delete trial.json + restart" would let the user farm fresh trials.
+
+/// Mirror of `TrialState` in TS — local cache of the server's trial
+/// registration. Presence + non-expired `expires_at` = TRIAL_ACTIVE.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrialState {
+    pub fingerprint: String,
+    pub started_at: i64,
+    pub expires_at: i64,
+}
+
+#[tauri::command]
+pub fn trial_read_state() -> AppResult<Option<TrialState>> {
+    let path = paths::trial_path().map_err(crate::error::AppError::Other)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path)?;
+    // Corrupt/partially-written file → treat as missing, JS will re-fetch
+    // from server (which will return the SAME expiresAt since fingerprint
+    // is unchanged, so users can't bypass via file corruption).
+    let state = serde_json::from_str::<TrialState>(&raw).ok();
+    Ok(state)
+}
+
+#[tauri::command]
+pub fn trial_save_state(state: TrialState) -> AppResult<()> {
+    let path = paths::trial_path().map_err(crate::error::AppError::Other)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&state)?;
+    std::fs::write(&path, json)?;
+    Ok(())
+}

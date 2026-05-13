@@ -7,6 +7,8 @@ import { Vocab } from "./pages/Vocab";
 import { FirstRunGate } from "./components/FirstRunGate";
 import { LicenseGate } from "./components/LicenseGate";
 import { UpdateChecker } from "./components/UpdateChecker";
+import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
+import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
 import "./App.css";
@@ -30,6 +32,11 @@ function BackendListener() {
 }
 
 function App() {
+  // Subscribe the download queue store to pipeline-events once, app-wide.
+  // Idempotent — the helper guards against double-mount in StrictMode dev.
+  useEffect(() => {
+    void mountDownloadQueueListener();
+  }, []);
   return (
     // LicenseGate is the OUTERMOST gate: until the user enters a valid
     // license key, none of the routing / settings / update-checker code
@@ -53,6 +60,7 @@ function App() {
           <Route path="/settings" element={<Settings />} />
         </Routes>
         <UpdateChecker />
+        <DownloadQueueWidget />
       </BrowserRouter>
     </LicenseGate>
   );

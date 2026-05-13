@@ -142,6 +142,9 @@ async fn run_import(
         app,
         PipelineEvent::Started {
             video_id: video_id.to_string(),
+            source_kind: Some(req.source_kind.clone()),
+            source_value: Some(req.source_value.clone()),
+            background: req.background,
         },
     );
 
@@ -286,6 +289,9 @@ pub async fn retranscribe_video(
         &app,
         PipelineEvent::Started {
             video_id: video_id.clone(),
+            source_kind: None,
+            source_value: None,
+            background: false,
         },
     );
 

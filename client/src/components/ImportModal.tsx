@@ -33,7 +33,7 @@ interface Props {
 }
 
 type PipelineEventPayload =
-  | { stage: "Started"; video_id: string }
+  | { stage: "Started"; video_id: string; source_kind?: string; source_value?: string; background?: boolean }
   | { stage: "Downloading"; video_id: string; percent: number; total?: string; speed?: string; eta?: string }
   | { stage: "ExtractingAudio"; video_id: string }
   | { stage: "Transcribing"; video_id: string; percent: number }

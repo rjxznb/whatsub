@@ -6,6 +6,19 @@ use tauri::{AppHandle, Emitter};
 pub enum PipelineEvent {
     Started {
         video_id: String,
+        /// Source kind ("url" / "local") + raw value, threaded through so
+        /// the download queue widget can label an entry the moment it
+        /// appears (before yt-dlp has resolved a real title).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_kind: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_value: Option<String>,
+        /// True when the import was started in background mode. The
+        /// download queue widget filters on this so foreground imports
+        /// (which are already shown live inside ImportModal) don't get
+        /// duplicated in the queue panel.
+        #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+        background: bool,
     },
     Downloading {
         video_id: String,

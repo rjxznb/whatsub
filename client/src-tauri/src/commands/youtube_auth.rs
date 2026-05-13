@@ -483,6 +483,19 @@ pub async fn site_login_finish(
             at: now_ms,
         },
     );
+
+    // Cookies are saved + success event emitted — close the browser
+    // we launched. The watcher polling above sees that `pending` was
+    // already consumed by the `guard.take()` at the start of this
+    // function (it tracks pending.gen), so the close won't be
+    // mis-interpreted as a user dismissal. We also clear cdp_port
+    // so the next login spawns a fresh browser rather than trying
+    // to reuse a port whose process is already exiting.
+    let _ = cdp_close_browser(port).await;
+    if let Ok(mut g) = state.cdp_port.lock() {
+        *g = None;
+    }
+
     Ok(())
 }
 
@@ -848,6 +861,58 @@ async fn cdp_get_all_cookies(port: u16) -> Result<Vec<CdpCookie>, String> {
         let _ = ws.close(None).await;
         return Ok(cookies);
     }
+}
+
+/// Tell the dedicated browser to shut itself down. Sent via the same
+/// CDP WebSocket pattern as `cdp_get_all_cookies`. Best-effort: a
+/// failure here is logged but never propagates upward — cookies are
+/// already saved by the time we call this, so the user shouldn't see
+/// an error just because the close ping didn't land.
+///
+/// Browser.close gracefully exits the browser process across all its
+/// tabs. Cleaner than killing the PID (we never kept a handle in
+/// `spawn_browser`) and works the same on Win / Mac / Linux.
+async fn cdp_close_browser(port: u16) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let body = client
+        .get(format!("http://127.0.0.1:{port}/json/version"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let version: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let ws_url = version["webSocketDebuggerUrl"]
+        .as_str()
+        .ok_or_else(|| "CDP /json/version 缺少 webSocketDebuggerUrl".to_string())?
+        .to_string();
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .map_err(|e| format!("WebSocket 连接失败：{e}"))?;
+
+    // Send Browser.close. Don't wait for a reply — the browser will
+    // start tearing down the WebSocket the moment it processes the
+    // command, and the response message may never arrive cleanly.
+    let req = serde_json::json!({
+        "id": 1,
+        "method": "Browser.close",
+        "params": {}
+    });
+    ws.send(Message::Text(req.to_string()))
+        .await
+        .map_err(|e| format!("CDP send: {e}"))?;
+    // Give the browser ~300ms to read the command before we hang up;
+    // closing the WS first would leave the browser running with a
+    // half-processed command.
+    let _ = tokio::time::timeout(Duration::from_millis(300), ws.next()).await;
+    let _ = ws.close(None).await;
+    Ok(())
 }
 
 // ─── settings.json helpers (unchanged from prior impl) ──────────────

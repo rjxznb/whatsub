@@ -536,7 +536,23 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                   </ChecklistItem>
 
                   <ChecklistItem index="③" title="网络偶尔抽风">
-                    如果前两条都不是问题，那就重新点导入多试几次，或换个梯子节点试试。
+                    <div className="text-[11px] text-zinc-400 mb-2 leading-relaxed">
+                      如果 cookies 配过、前台又一直失败，建议直接换「后台下载」
+                      — 后台模式会用更耐心的重试策略反复尝试（~3 分钟预算），
+                      碰到 GFW / CDN 间歇性掐 TLS 这种抖动更可能磨过去；
+                      你不用一直盯着，跑完会自动在库里出现。
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowErrorDialog(false);
+                        setError(null);
+                        void submit({ background: true });
+                      }}
+                      className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-xs font-medium rounded"
+                    >
+                      后台下载 →
+                    </button>
                   </ChecklistItem>
 
                 </div>

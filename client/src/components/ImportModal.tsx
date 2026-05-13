@@ -518,7 +518,8 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                     <div className="text-[11px] text-zinc-400 mb-2 leading-relaxed">
                       cookies 是浏览器里存的登录凭据。很多视频要求登录账号才能下载（YouTube
                       反 bot、B 站会员、Instagram 等）—— 在 whatsub
-                      里登一次就自动保存，下次直接用。
+                      里同一个网站登一次就能用几天，不用反复配（每个网站各自登一次即可）。
+                      如果配过 cookies 还失败，多半是网络抖动，直接试「后台下载」更省事。
                     </div>
                     {act ? (
                       <button

@@ -4,6 +4,7 @@ import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
 import { dedupSubtitles } from "./analysis";
 import { useSettings } from "./settings";
+import { useLibrary } from "./library";
 import type { Subtitle, SrtCue, AnalysisResult } from "../llm/types";
 import type { TranslationStyle } from "../types/settings";
 
@@ -189,6 +190,12 @@ async function driveBgAnalysis(ac: AbortController, opts: RunInBackgroundOptions
             status: "ready",
             error: null,
           });
+          // Refresh the in-memory library so any Library card visible
+          // RIGHT NOW flips from "Analyzing"/spinner to "ready" without
+          // requiring the user to navigate away and back. Without this
+          // the disk state was correct but the on-screen card looked
+          // stuck on "未完成" until refresh.
+          await useLibrary.getState().reload();
         }
       } catch (e) {
         console.warn("BG final save failed", e);

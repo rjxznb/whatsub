@@ -384,19 +384,30 @@ pub async fn download(
             app,
             "yt-dlp",
             &arg_refs,
-            move |line| {
-                emit_log(line);
-                if let Some(p) = parse_progress(line) {
-                    emit(
-                        &app_cb,
-                        PipelineEvent::Downloading {
-                            video_id: id_cb.clone(),
-                            percent: p.percent,
-                            total: p.total,
-                            speed: p.speed,
-                            eta: p.eta,
-                        },
-                    );
+            move |chunk| {
+                // run_sidecar hands us raw stderr CHUNKS (possibly
+                // multi-line). emit_log already iterates `.lines()`
+                // internally; parse_progress needs the same — its
+                // strip_prefix("[progress] ") + split('|') logic only
+                // works on a single line. Without this split, any
+                // chunk that contains multiple progress updates fails
+                // parsing and the entire batch of Downloading events
+                // is lost, so the UI never leaves "准备中" until
+                // ExtractingAudio fires.
+                emit_log(chunk);
+                for actual_line in chunk.lines() {
+                    if let Some(p) = parse_progress(actual_line) {
+                        emit(
+                            &app_cb,
+                            PipelineEvent::Downloading {
+                                video_id: id_cb.clone(),
+                                percent: p.percent,
+                                total: p.total,
+                                speed: p.speed,
+                                eta: p.eta,
+                            },
+                        );
+                    }
                 }
             },
             cancel,

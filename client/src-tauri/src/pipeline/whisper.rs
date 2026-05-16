@@ -370,10 +370,19 @@ pub async fn transcribe(
             "-of", &out_base,
             "--print-progress",
         ],
-        move |line| {
-            emit_log(line);
-            detect_backend(line);
-            if let Some(p) = parse_progress(line) {
+        move |chunk| {
+            // run_sidecar hands us raw stderr CHUNKS that may contain
+            // multiple lines. emit_log / detect_backend already split
+            // internally; parse_progress's `.find("progress =")` only
+            // returns the FIRST match in a chunk, so any subsequent
+            // progress updates batched into the same chunk get
+            // silently dropped. Iterate per-line for complete coverage.
+            emit_log(chunk);
+            detect_backend(chunk);
+            for line in chunk.lines() {
+                let Some(p) = parse_progress(line) else {
+                    continue;
+                };
                 let prev = last_progress_clone.load(std::sync::atomic::Ordering::Relaxed);
                 if p > prev {
                     last_progress_clone.store(p, std::sync::atomic::Ordering::Relaxed);

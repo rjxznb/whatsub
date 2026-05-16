@@ -104,6 +104,14 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   const [tab, setTab] = useState<"local" | "url">(initialFilePath ? "local" : "url");
   const [urlValue, setUrlValue] = useState("");
   const [filePath, setFilePath] = useState(initialFilePath ?? "");
+  // Inline validation message shown directly under the URL input /
+  // file picker when the user clicks 开始解析 / 后台下载 with no
+  // source filled in. Kept SEPARATE from `error` (which is reserved
+  // for real download failures and auto-opens the 排查清单 dialog);
+  // we don't want an empty-input click to open the VPN/cookies
+  // troubleshooter — that would be misleading.
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
   // yt-dlp quality preset: "low" (480p) / "standard" (720p) / "high" (1080p)
   // / "best" (no cap). 720p default — subtitle learning doesn't benefit from
   // 1080p+ and 720p downloads in 1/3 the time on most connections.
@@ -336,18 +344,28 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
       multiple: false,
       filters: [{ name: "Video", extensions: ["mp4", "mkv", "mov", "webm", "avi"] }],
     });
-    if (typeof result === "string") setFilePath(result);
+    if (typeof result === "string") {
+      setFilePath(result);
+      if (validationError) setValidationError(null);
+    }
   }
 
   async function submit(opts: { background?: boolean } = {}) {
     const background = opts.background ?? false;
     setError(null);
     const sourceKind = tab;
-    const sourceValue = tab === "url" ? urlValue : filePath;
+    const sourceValue = tab === "url" ? urlValue.trim() : filePath;
     if (!sourceValue) {
-      setError(tab === "url" ? "请输入 URL" : "请选择文件");
+      // Empty-input validation: inline message + focus, NOT the
+      // troubleshooting checklist (which is for real download
+      // failures and would be confusing here).
+      setValidationError(
+        tab === "url" ? "请先粘贴视频链接" : "请先选择视频文件"
+      );
+      if (tab === "url") urlInputRef.current?.focus();
       return;
     }
+    setValidationError(null);
     if (!settings.whisperModel) {
       setError("Whisper 模型未配置（去设置页选一个并下载）");
       return;
@@ -832,7 +850,10 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           {(["url", "local"] as const).map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => {
+                setTab(t);
+                if (validationError) setValidationError(null);
+              }}
               className={
                 "px-3 py-1 text-sm rounded " +
                 (tab === t ? "bg-blue-500 text-black" : "bg-zinc-800 text-zinc-300")
@@ -846,12 +867,24 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         {tab === "url" ? (
           <>
             <input
+              ref={urlInputRef}
               type="text"
               value={urlValue}
-              onChange={(e) => setUrlValue(e.target.value)}
+              onChange={(e) => {
+                setUrlValue(e.target.value);
+                if (validationError) setValidationError(null);
+              }}
               placeholder="https://www.youtube.com/watch?v="
-              className="w-full px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border border-zinc-700"
+              className={
+                "w-full px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border " +
+                (validationError ? "border-rose-500" : "border-zinc-700")
+              }
             />
+            {validationError && (
+              <div className="mt-1.5 text-xs text-rose-300">
+                {validationError}
+              </div>
+            )}
             <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
               <span className="shrink-0">画质</span>
               <select
@@ -867,21 +900,31 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             </div>
           </>
         ) : (
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={filePath}
-              readOnly
-              placeholder="未选择文件"
-              className="flex-1 px-3 py-2 bg-zinc-800 text-zinc-300 rounded text-sm border border-zinc-700"
-            />
-            <button
-              onClick={pickFile}
-              className="px-3 py-2 bg-zinc-700 text-zinc-100 rounded text-sm"
-            >
-              选择...
-            </button>
-          </div>
+          <>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={filePath}
+                readOnly
+                placeholder="未选择文件"
+                className={
+                  "flex-1 px-3 py-2 bg-zinc-800 text-zinc-300 rounded text-sm border " +
+                  (validationError ? "border-rose-500" : "border-zinc-700")
+                }
+              />
+              <button
+                onClick={pickFile}
+                className="px-3 py-2 bg-zinc-700 text-zinc-100 rounded text-sm"
+              >
+                选择...
+              </button>
+            </div>
+            {validationError && (
+              <div className="mt-1.5 text-xs text-rose-300">
+                {validationError}
+              </div>
+            )}
+          </>
         )}
 
         {/* Translation style — 3-stop slider (正式 / 中性 / 口语). The
@@ -976,29 +1019,61 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           </button>
         )}
 
-        <div className="flex justify-end items-center gap-2 mt-5">
-          <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-300">
-            取消
-          </button>
-          {/* 后台下载 — fire-and-forget. Modal closes immediately; Rust
-              keeps running with a more patient retry budget (~3 min vs.
-              foreground's ~10s). The user trades real-time progress for
-              not being blocked, which is the right trade-off when the
-              network is flaky enough that 前台 fails fast. */}
-          <button
-            onClick={() => void submit({ background: true })}
-            className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded"
-            title="放到后台继续下载，关闭弹窗。后台模式 yt-dlp 会重试更长时间"
-          >
-            后台下载
-          </button>
-          <button
-            onClick={() => void submit({ background: false })}
-            className="px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm rounded font-medium"
-          >
-            开始解析
-          </button>
-        </div>
+        {(() => {
+          // Visually disable the submit buttons when no source is set,
+          // but keep them clickable — clicking surfaces the inline
+          // validation message in submit() (focuses input + red ring).
+          // Don't use HTML `disabled` because that would swallow the
+          // click and the user wouldn't see why the action didn't fire.
+          const canSubmit = tab === "url" ? !!urlValue.trim() : !!filePath;
+          const disabledCls = canSubmit
+            ? ""
+            : " opacity-50 cursor-not-allowed";
+          return (
+            <div className="flex justify-end items-center gap-2 mt-5">
+              <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-300">
+                取消
+              </button>
+              {/* 后台下载 — fire-and-forget. Modal closes immediately; Rust
+                  keeps running with a more patient retry budget (~3 min vs.
+                  foreground's ~10s). The user trades real-time progress for
+                  not being blocked, which is the right trade-off when the
+                  network is flaky enough that 前台 fails fast. */}
+              <button
+                onClick={() => void submit({ background: true })}
+                className={
+                  "px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded" +
+                  disabledCls
+                }
+                title={
+                  canSubmit
+                    ? "放到后台继续下载，关闭弹窗。后台模式 yt-dlp 会重试更长时间"
+                    : tab === "url"
+                    ? "请先粘贴视频链接"
+                    : "请先选择视频文件"
+                }
+              >
+                后台下载
+              </button>
+              <button
+                onClick={() => void submit({ background: false })}
+                className={
+                  "px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm rounded font-medium" +
+                  disabledCls
+                }
+                title={
+                  canSubmit
+                    ? undefined
+                    : tab === "url"
+                    ? "请先粘贴视频链接"
+                    : "请先选择视频文件"
+                }
+              >
+                开始解析
+              </button>
+            </div>
+          );
+        })()}
       </div>
       {/* Same checklist dialog as the progress view — defined once
           as `errorChecklistDialog` const at the top of the component. */}

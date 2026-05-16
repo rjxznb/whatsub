@@ -178,11 +178,14 @@ fn yt_dlp_format(quality: &str) -> &'static str {
 ///
 /// `background`: changes the retry strategy.
 ///   - false (foreground, user is watching the modal): tight budget,
-///     fail fast. ~10s on a hard-unreachable network so the user sees
-///     the actionable error dialog quickly and can configure cookies
-///     / VPN / etc.
+///     fail fast. ~25-50s on a hard-unreachable network (no VPN) so
+///     the user sees the actionable error dialog without staring at a
+///     frozen-looking modal. Knobs: 5s socket-timeout, 1 retry per
+///     request, 1 process attempt. See the inline comments around the
+///     args block for the per-knob rationale.
 ///   - true (background, queued): patient budget. ~3 min total so
-///     transient blips actually recover.
+///     transient blips actually recover. 20s socket-timeout, 10
+///     retries per request, 3 process attempts.
 pub async fn download(
     app: &AppHandle,
     url: &str,
@@ -261,15 +264,31 @@ pub async fn download(
         // Retry budget split by mode. Background imports retry
         // patiently (~3 min worst case) — the user isn't watching and
         // probably wants the download to keep trying through a flaky
-        // network. Foreground imports retry briefly (~10s) so the user
-        // sees the "无法访问视频网站 / 挂梯子 / 配 cookies" dialog fast
-        // and can fix the root cause instead of staring at a frozen-
-        // looking modal. The outer process-level retry (below) also
-        // honors `background`.
+        // network. Foreground imports MUST fail fast (~30s worst case)
+        // so the user sees the "无法访问视频网站 / 挂梯子 / 配 cookies"
+        // dialog quickly and can fix the root cause instead of staring
+        // at a frozen-looking modal.
+        //
+        // Critical: `--retries` is PER HTTP REQUEST inside one yt-dlp
+        // run, not a global budget. yt-dlp typically does 3-4 distinct
+        // requests per download (webpage → player JS → format manifest
+        // → stream); each one retries independently. Combined with
+        // yt-dlp's default ~20s TCP connect timeout, foreground used
+        // to wait ~2 min on a hard-unreachable network (no VPN). We
+        // shrink both knobs:
+        //   --socket-timeout 5  → 5s TCP connect (default ~20s)
+        //   --retries        1  → 1 retry per request (default 10,
+        //                          we used to set 3)
+        // Worst-case per request now ≈ 2 × 5s + 1 × 2s sleep ≈ 12s;
+        // 4 requests ≈ ~50s but cookies/banned/private errors are
+        // deterministic and bubble after the first request, so the
+        // common "no VPN" failure path returns in ~25s.
+        "--socket-timeout".into(),
+        if background { "20".into() } else { "5".into() },
         "--retries".into(),
-        if background { "10".into() } else { "3".into() },
+        if background { "10".into() } else { "1".into() },
         "--fragment-retries".into(),
-        if background { "10".into() } else { "3".into() },
+        if background { "10".into() } else { "1".into() },
         "--retry-sleep".into(),
         if background { "5".into() } else { "2".into() },
         "-f".into(),

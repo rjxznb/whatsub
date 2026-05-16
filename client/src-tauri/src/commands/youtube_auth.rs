@@ -34,6 +34,7 @@ use crate::core::paths;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -314,6 +315,12 @@ fn spawn_close_watcher(app: AppHandle, my_gen: u64) {
         // focus and start interacting.
         tokio::time::sleep(Duration::from_secs(3)).await;
 
+        // Latest cookies seen while CDP was alive. When the browser
+        // dies we use this snapshot to do the harvest+save without
+        // needing live CDP. Refreshed every 2s, so worst-case
+        // staleness is ~2s — fine, the user logs in over many seconds.
+        let mut last_cookies: Vec<CdpCookie> = Vec::new();
+
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -349,69 +356,65 @@ fn spawn_close_watcher(app: AppHandle, my_gen: u64) {
             };
             let Some(port) = port else { return };
 
-            if !is_cdp_alive(port).await {
-                // Browser is gone. Clear our pending (only if it's
-                // still ours — final check guards against a save
-                // racing us in between checks).
-                let cleared = {
-                    let mut p = match state.pending.lock() {
-                        Ok(g) => g,
-                        Err(_) => return,
-                    };
-                    if p.as_ref().map(|x| x.gen) == Some(my_gen) {
-                        *p = None;
-                        true
-                    } else {
-                        false
-                    }
+            if is_cdp_alive(port).await {
+                // Browser still up — refresh the snapshot. On error,
+                // keep the previous snapshot (better stale than empty).
+                if let Ok(latest) = cdp_get_all_cookies(port).await {
+                    last_cookies = latest;
+                }
+                continue;
+            }
+
+            // CDP gone → user closed the browser. Try to save the
+            // most recent snapshot we captured. If it has cookies for
+            // this site's harvest domains, the user logged in before
+            // closing — emit success. Otherwise (empty profile / user
+            // closed without logging in), emit cancelled so the dialog
+            // falls back to the form.
+            let pending = {
+                let mut p = match state.pending.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
                 };
-                if cleared {
-                    // Also drop the cached port so the next login
-                    // launches a fresh browser instead of trying to
-                    // reuse a dead port.
-                    if let Ok(mut g) = state.cdp_port.lock() {
-                        *g = None;
-                    }
+                match p.as_ref() {
+                    Some(pl) if pl.gen == my_gen => p.take(),
+                    _ => None,
+                }
+            };
+            let Some(pending) = pending else { return };
+
+            if let Ok(mut g) = state.cdp_port.lock() {
+                *g = None;
+            }
+
+            match save_cookies_from_snapshot(&app, &last_cookies, &pending) {
+                Ok(_) => {
+                    // success event already emitted inside the helper
+                }
+                Err(_) => {
                     let _ = app.emit("site-login-cancelled", ());
                 }
-                return;
             }
+            return;
         }
     });
 }
 
 // ─── Finish: fetch cookies via CDP ───────────────────────────────────
 
-#[tauri::command]
-pub async fn site_login_finish(
-    app: AppHandle,
-    state: State<'_, LoginState>,
-) -> Result<(), String> {
-    let pending = {
-        let mut guard = state.pending.lock().map_err(|e| e.to_string())?;
-        guard.take()
-    }
-    .ok_or_else(|| "没有正在进行的登录".to_string())?;
-
-    let port = {
-        let g = state.cdp_port.lock().map_err(|e| e.to_string())?;
-        g.or_else(load_saved_port)
-    }
-    .ok_or_else(|| "找不到浏览器的 CDP 端口 —— 请重新点登录".to_string())?;
-
-    if !is_cdp_alive(port).await {
-        // Put pending back so user can retry without restarting the
-        // whole flow.
-        let mut g = state.pending.lock().map_err(|e| e.to_string())?;
-        *g = Some(pending);
-        return Err("浏览器已关闭。请重新点登录按钮，登录后再保存".into());
-    }
-
-    let raw = cdp_get_all_cookies(port)
-        .await
-        .map_err(|e| format!("通过 CDP 抓 cookies 失败：{e}"))?;
-
-    // Filter by this site's harvest domains + drop empty-value entries.
+/// Filter a raw CDP cookie snapshot by the pending site's harvest
+/// domains and persist them to the cookie jar. Emits site-login-success
+/// when at least one usable cookie is found. The caller is responsible
+/// for restoring pending state if this returns Err.
+///
+/// Pure: doesn't touch CDP. Used by both `harvest_cookies_and_save`
+/// (live CDP fetch path) and the watcher's browser-close path (which
+/// uses a cached snapshot taken before the browser process died).
+fn save_cookies_from_snapshot(
+    app: &AppHandle,
+    raw: &[CdpCookie],
+    pending: &PendingLogin,
+) -> Result<usize, String> {
     let mut harvested: Vec<JarCookie> = Vec::new();
     let mut seen: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
@@ -429,8 +432,8 @@ pub async fn site_login_finish(
         let key = (c.domain.clone(), c.name.clone());
         if seen.insert(key) {
             harvested.push(JarCookie {
-                domain: c.domain,
-                path: c.path,
+                domain: c.domain.clone(),
+                path: c.path.clone(),
                 secure: c.secure,
                 // CDP expires is f64 seconds-since-epoch; -1 = session.
                 expires: if c.expires < 0.0 {
@@ -438,17 +441,13 @@ pub async fn site_login_finish(
                 } else {
                     Some(c.expires as i64)
                 },
-                name: c.name,
-                value: c.value,
+                name: c.name.clone(),
+                value: c.value.clone(),
             });
         }
     }
 
     if harvested.is_empty() {
-        // Put pending back — almost always means user hit save before
-        // completing the actual login in the browser window.
-        let mut g = state.pending.lock().map_err(|e| e.to_string())?;
-        *g = Some(pending.clone());
         return Err(format!(
             "没有抓到任何 {} 的 cookies — 请先在浏览器里完成登录",
             pending.label
@@ -477,26 +476,77 @@ pub async fn site_login_finish(
     let _ = app.emit(
         "site-login-success",
         LoginSuccess {
-            site_key: pending.site_key,
-            label: pending.label,
+            site_key: pending.site_key.clone(),
+            label: pending.label.clone(),
             cookie_count,
             at: now_ms,
         },
     );
 
-    // Cookies are saved + success event emitted — close the browser
-    // we launched. The watcher polling above sees that `pending` was
-    // already consumed by the `guard.take()` at the start of this
-    // function (it tracks pending.gen), so the close won't be
-    // mis-interpreted as a user dismissal. We also clear cdp_port
-    // so the next login spawns a fresh browser rather than trying
-    // to reuse a port whose process is already exiting.
-    let _ = cdp_close_browser(port).await;
-    if let Ok(mut g) = state.cdp_port.lock() {
-        *g = None;
+    Ok(cookie_count)
+}
+
+/// Fetch live cookies via CDP, then call save_cookies_from_snapshot.
+/// Used by the explicit `site_login_finish` command.
+async fn harvest_cookies_and_save(
+    app: &AppHandle,
+    port: u16,
+    pending: &PendingLogin,
+) -> Result<usize, String> {
+    let raw = cdp_get_all_cookies(port)
+        .await
+        .map_err(|e| format!("通过 CDP 抓 cookies 失败：{e}"))?;
+    save_cookies_from_snapshot(app, &raw, pending)
+}
+
+#[tauri::command]
+pub async fn site_login_finish(
+    app: AppHandle,
+    state: State<'_, LoginState>,
+) -> Result<(), String> {
+    let pending = {
+        let mut guard = state.pending.lock().map_err(|e| e.to_string())?;
+        guard.take()
+    }
+    .ok_or_else(|| "没有正在进行的登录".to_string())?;
+
+    let port = {
+        let g = state.cdp_port.lock().map_err(|e| e.to_string())?;
+        g.or_else(load_saved_port)
+    }
+    .ok_or_else(|| "找不到浏览器的 CDP 端口 —— 请重新点登录".to_string())?;
+
+    if !is_cdp_alive(port).await {
+        // Put pending back so user can retry without restarting the
+        // whole flow.
+        let mut g = state.pending.lock().map_err(|e| e.to_string())?;
+        *g = Some(pending);
+        return Err("浏览器已关闭。请重新点登录按钮，登录后再保存".into());
     }
 
-    Ok(())
+    match harvest_cookies_and_save(&app, port, &pending).await {
+        Ok(_) => {
+            // Cookies are saved + success event emitted — close the browser
+            // we launched. The watcher polling above sees that `pending` was
+            // already consumed by the `guard.take()` at the start of this
+            // function (it tracks pending.gen), so the close won't be
+            // mis-interpreted as a user dismissal. We also clear cdp_port
+            // so the next login spawns a fresh browser rather than trying
+            // to reuse a port whose process is already exiting.
+            let _ = cdp_close_browser(port).await;
+            if let Ok(mut g) = state.cdp_port.lock() {
+                *g = None;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // Put pending back so user can retry (most common case:
+            // they clicked save before actually completing login).
+            let mut g = state.pending.lock().map_err(|e| e.to_string())?;
+            *g = Some(pending);
+            Err(e)
+        }
+    }
 }
 
 // ─── Cancel / remove / clear ─────────────────────────────────────────
@@ -692,6 +742,16 @@ msEdgeWorkspaces"
         //    another flag.
         .arg("--new-window")
         .arg(login_url)
+        // Suppress Chromium's stderr — it's full of benign internal
+        // notes (fallback_task_provider missing renderer task, USB
+        // device enumeration failures on idle slots, GPU init chatter
+        // on machines without a discrete GPU, etc.) that the user
+        // shouldn't see. The browser is a black box from our point of
+        // view; we monitor its state via CDP, not its stderr.
+        // stdin too in case a build emits prompts on startup.
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
     Ok(())
 }

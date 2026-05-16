@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Loader2, ShieldAlert, Cloud, WifiOff } from 'lucide-react';
+import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft } from 'lucide-react';
 import { useLicense, type ActivateError } from '../store/license';
 import { TrialBanner } from './TrialBanner';
 
@@ -251,7 +251,7 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
 }
 
 function ActivationScreen() {
-  const { activate, activating, error, clearError, trial, trialFetchError } =
+  const { activate, activating, error, clearError, trial, trialFetchError, resumeTrial } =
     useLicense();
   const [key, setKey] = useState('');
 
@@ -267,9 +267,23 @@ function ActivationScreen() {
   const trialExpired =
     !!trial && trial.expiresAt > 0 && Date.now() >= trial.expiresAt;
   const trialNetworkError = !!trialFetchError && !trial;
+  // 只有「试用还活着」时才显示返回按钮 —— 用户是从 TrialBanner 主动点
+  // 「激活完整版」过来的,改主意了应该能回到试用模式继续用。试用真过期
+  // 或根本没领到试用(首次离线启动)时,没地方可退,不显示按钮。
+  const canResumeTrial = !!trial && !trialExpired;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4 py-8">
+    <div className="relative min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-4 py-8">
+      {canResumeTrial && (
+        <button
+          type="button"
+          onClick={resumeTrial}
+          className="absolute top-4 left-4 flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-100 px-2 py-1 rounded transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          继续试用
+        </button>
+      )}
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           {trialExpired ? (

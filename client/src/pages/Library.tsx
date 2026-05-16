@@ -6,9 +6,14 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
 import { ImportModal } from "../components/ImportModal";
+import { ImportChecklistDialog } from "../components/ImportChecklistDialog";
 import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { formatTime } from "../utils/time";
+import {
+  shouldShowImportChecklist,
+  markImportChecklistShown,
+} from "../utils/importChecklistGate";
 import type { LibraryEntry } from "../types/library";
 
 // Phases where actual work (download / ffmpeg / whisper / LLM stream) is
@@ -69,6 +74,9 @@ export function Library() {
   const activeAnalysisVideoId = useAnalysis((s) => s.videoId);
   const activeAnalysisPhase = useAnalysis((s) => s.phase);
   const [importInitial, setImportInitial] = useState<{ filePath?: string } | null>(null);
+  // 仅在「点击 + Import 按钮」时拦截弹出 checklist —— 拖拽本地文件
+  // 不走这里(本地文件不需要梯子/cookies)。
+  const [showChecklist, setShowChecklist] = useState(false);
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
@@ -202,7 +210,13 @@ export function Library() {
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
         <button
-          onClick={() => setImportInitial({})}
+          onClick={() => {
+            if (shouldShowImportChecklist()) {
+              setShowChecklist(true);
+            } else {
+              setImportInitial({});
+            }
+          }}
           className="px-3 py-1.5 bg-blue-500 text-black text-sm rounded font-medium"
         >
           + Import
@@ -303,6 +317,20 @@ export function Library() {
             );
           })}
         </div>
+      )}
+
+      {showChecklist && (
+        <ImportChecklistDialog
+          onDismiss={(skipForever) => {
+            // Dialog handles the cookie-login flow internally. By the
+            // time we get here, either: (a) user clicked X / 继续导入,
+            // (b) cookies were saved successfully. In both cases the
+            // next step is to open ImportModal so they can paste a URL.
+            markImportChecklistShown(skipForever);
+            setShowChecklist(false);
+            setImportInitial({});
+          }}
+        />
       )}
 
       {importInitial && (

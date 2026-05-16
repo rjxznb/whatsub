@@ -54,6 +54,12 @@ interface LicenseStore {
    *  any code path that wants to force the gate to re-check (e.g., to
    *  surface NEEDS_KEY as soon as trial expires mid-session). */
   markTrialExpired(): void;
+  /** User opened the activation screen voluntarily (via "激活完整版"
+   *  banner button) but changed their mind. Flip back to TRIAL_ACTIVE
+   *  so they can keep using the trial. No-op if the trial has actually
+   *  expired or doesn't exist — in that case there's nothing to go
+   *  back to. */
+  resumeTrial(): void;
   clearError(): void;
 }
 
@@ -162,6 +168,16 @@ export const useLicense = create<LicenseStore>((set, get) => ({
     if (cur.mode === 'TRIAL_ACTIVE') {
       set({ mode: 'NEEDS_KEY' });
     }
+  },
+
+  resumeTrial() {
+    const cur = get();
+    // 仅在「试用还活着」时才能回退 —— 真正过期 / 没有试用记录的情况
+    // 不应该出现返回按钮(UI 已经做了门控),这里再守一道防止误调。
+    if (cur.mode !== 'NEEDS_KEY') return;
+    if (!cur.trial) return;
+    if (Date.now() >= cur.trial.expiresAt) return;
+    set({ mode: 'TRIAL_ACTIVE', error: null });
   },
 
   async activate(rawKey: string) {

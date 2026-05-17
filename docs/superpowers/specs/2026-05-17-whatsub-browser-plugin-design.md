@@ -9,8 +9,9 @@
 **贯穿全设计的硬规则**：
 
 1. **插件能独立运行。** 没装桌面端时，双语字幕、AI 标黄、词汇本、划词收藏都正常工作；只是收藏不同步而已。**永远不能因为桌面端缺席弹错。**
-2. **BYOK（Bring Your Own Key）。** 所有 LLM 调用都用用户自己填的 API Key。我们零 token 成本、零服务器、零账号。
-3. **零云端、零网络依赖。** 除了用户配置的 LLM 厂商，插件不主动联任何我们的服务器。隐私权政策可以写得很硬。
+2. **BYOK（Bring Your Own Key）。** 所有 LLM 调用都用用户自己填的 API Key。我们零 token 成本。
+3. **零账号、零登录。** 用户身份用 chrome.storage 里的匿名 `contributorId`（UUID）表达，全过程不需要邮箱 / 手机 / 密码。
+4. **服务端只承接共享语料库一项**——见第 7 节。除此之外，插件不主动联我们任何服务器。LLM 调用、字幕拉取、桌面端同步都点对点，与我们的服务器无关。
 
 ## 1. 范围
 
@@ -19,12 +20,14 @@
 - 视频站点：YouTube only（`*.youtube.com/watch`）— 双语字幕、AI 标黄、视频内划词收藏
 - 任意站点：通用页面划词收藏（任何 `http(s)://` 页面）
 - 桌面端集成：通过 localhost 桥单向同步（插件 → 桌面）
+- **共享语料库**：YouTube 划词默认匿名上传到 `whatsub.eversay.cc`；收藏短语时展示其他用户的语境；冷启动用桌面端 pipeline 已分析数据做「whatsub 精选」种子
 
 **显式 out-of-scope（v1 不做）**：
 - Netflix / Bilibili / 课程平台
 - 沉浸式翻译（任意网页全量双语翻译）
 - 桌面端 → 插件方向同步（用户主动「从桌面端拉一次」按钮以外不自动拉）
-- 云端账号体系
+- 用户账号 / 邮箱 / 跨设备合并我的贡献
+- 共享语料库的人工审核后台（v1 只做自动 blocklist + 举报队列）
 - Firefox
 
 ## 2. 决策摘要
@@ -40,6 +43,9 @@
 | 同步机制 | localhost HTTP 桥 + 4 个分散候选端口 |
 | 同步方向 | 单向：插件 → 桌面（v1） |
 | 桌面端缺席 | 静默降级到「仅本机」模式，不弹错 |
+| 共享语料库 | 匿名上传、YouTube 默认开 / 网页默认关、举报+blocklist 兜底 |
+| 语料库冷启动 | scripts/video_sourcing 已分析数据种子，contributorId = `whatsub-curator` |
+| 语料库后端 | 复用 `whatsub.eversay.cc`（同 license 后端），新 `/api/corpus/*` 路由 |
 | UI 栈 | React + TS + Tailwind + zustand（与桌面端同源） |
 | 构建 | Vite + `@crxjs/vite-plugin` |
 
@@ -202,7 +208,60 @@ interface SyncQueueItem {
 
 队列最大 1000 条，超出按 queuedAt 老的丢弃（极端情况，正常用户不会到）。
 
-### 4.5 `Settings`（`chrome.storage.local["settings"]`）
+### 4.5 服务端：`corpus_phrases` + `corpus_contributions`（`whatsub.eversay.cc` PostgreSQL · 两张表）
+
+**`corpus_phrases`** — 短语维度，**带分类标签**。每条短语只一行，被多个用户贡献时这一行不动，只增 contributions：
+
+```ts
+interface CorpusPhrase {
+  phraseNormalized: string;         // 主键 — normalizeExpression() 后的值
+  phraseRaw: string;                // 第一次见到的原文（参考）
+  // ── 分类标签（首次贡献入库后异步 LLM 分类一次，永久缓存）──
+  tags: {
+    scene?:                         // 18 场景之一，复用桌面端 pipeline 分类
+      | "immigration" | "housing" | "medical" | "campus" | "banking"
+      | "shopping"    | "transport"| "social"  | "dining" | "emergency"
+      | "job"         | "phone"    | "salon"   | "driving"| "travel"
+      | "fitness"     | "mental_health" | "maintenance";
+    partOfSpeech?:                  // 词性 / 表达类型
+      | "noun_phrase" | "verb_phrase" | "phrasal_verb"
+      | "idiom"       | "slang"      | "collocation";
+    cefrLevel?: "A2" | "B1" | "B2" | "C1" | "C2";  // CEFR 难度
+    classifiedAt?: number;          // 分类完成时间；null = 待分类
+  };
+  contributionCount: number;        // 累计贡献数（含 curator）
+  firstSeenAt: number;
+  lastSeenAt: number;
+}
+```
+
+**`corpus_contributions`** — 贡献维度，每次保存一行：
+
+```ts
+interface CorpusContribution {
+  id: string;                       // server UUID
+  phraseNormalized: string;         // FK → corpus_phrases
+  contextSentence: string;          // 上下文整句
+  source: {
+    kind: "youtube" | "web" | "curator";
+    url: string;                    // canonicalize 过：去掉 ?utm_* / #fragment / 常见 token 参数
+    title: string;
+    timestampSec?: number;
+  };
+  contributorId: string;            // 匿名 UUID，"whatsub-curator" 为种子
+  contributedAt: number;
+  flagged: boolean;
+  flagCount: number;
+  hidden: boolean;                  // 举报手工 review 后置 true，前端不展示
+}
+```
+
+**索引**：
+- `corpus_phrases (tags->>'scene', cefrLevel)` — 浏览页按场景 / 难度过滤
+- `corpus_contributions (phraseNormalized, hidden, contributedAt DESC)` — 短语查询主走这个
+- `corpus_contributions (contributorId)` — 「删除我所有贡献」用
+
+### 4.6 `Settings`（`chrome.storage.local["settings"]`）
 
 ```ts
 interface PluginSettings {
@@ -305,6 +364,60 @@ interface PluginSettings {
 - YouTube 字幕里划词 → `source: "youtube"`，带 `videoUrl + cueTime`
 - 任意网页划词 → `source: "web"`，带 `pageUrl + pageTitle`
 
+### 5.4 共享语料库 · 上传 + 查询
+
+**上传时机**（保存动作的附带操作）：
+
+```
+[CS-*] 用户点 [+ 收藏]
+   ↓
+[SW] 同时启动两条并行：
+   ├── A: 桌面端 localhost 同步（5.3 已述）
+   │
+   └── B: 共享语料库上传
+        ↓
+        判断是否上传：
+        - source: "youtube"  → 默认上传（用户设置可关）
+        - source: "web"      → 默认不上传（用户点「也分享到公共语料库」才传）
+        ↓
+        canonicalize URL（去 utm/token/fragment）+ 截 contextSentence 上下文 ±50 字
+        ↓
+        POST whatsub.eversay.cc/api/corpus/contribute
+        body: { phraseRaw, contextSentence, source, contributorId }
+        ↓
+        服务端：
+        1. 写 corpus_contributions
+        2. UPSERT corpus_phrases — count++、lastSeenAt 更新
+        3. 若 phrase.classifiedAt 为 null → 入异步分类队列（cheap LLM call，~80ms）
+        ↓
+        服务端不阻塞返回 201 { id }
+```
+
+**查询时机**（划词气泡打开时 + 词汇本卡片展开时）：
+
+```
+[CS-*] 划词气泡打开，气泡里出现「✨ 看看 N 个人怎么收藏的」入口
+   ↓
+[SW] GET whatsub.eversay.cc/api/corpus/lookup?phrase=<normalized>
+   → 200 {
+       phrase: { tags: { scene, partOfSpeech, cefrLevel }, contributionCount },
+       contributions: [
+         { contextSentence, source, contributedAt, isCurator },  // 最多 10 条
+         ...
+       ]
+     }
+   ↓
+[UI] 气泡展开第二屏：
+   - 顶部 chip：[scene: 求职职场] [phrasal_verb] [B2]
+   - 列表：每条贡献一行
+     · YouTube 类：缩略图 + 标题 + cueTime → 点击新标签页打开 https://youtu.be/<id>?t=<sec>
+     · web 类：favicon + 标题 + 上下文片段 → 点击新标签页打开 URL
+     · curator 类：「⭐ whatsub 精选」徽章
+   - 末尾「🚩 举报这一条」入口
+```
+
+**离线 / 失败兜底**：上传失败入 syncQueue（与桌面端同步队列复用），查询失败 → 气泡直接隐藏「✨ 看看 N 个人怎么收藏的」入口，**绝不弹错**。
+
 ## 6. 同步协议（插件 → 桌面端）
 
 ### 6.1 端口发现
@@ -377,9 +490,92 @@ POST /settings/llm/handoff
 
 第一次安装插件时设置页提示「检测到桌面端，是否继承翻译配置？」用户点 → 插件 `POST /settings/llm/handoff { extensionId }` → 桌面端弹原生确认框「插件请求继承翻译配置 · 同意 / 拒绝」→ 同意则一次性返回 `{ provider, model, baseUrl, apiKey }` → 插件写入自己 settings → `importedFromDesktop: true` 后不再触发。拒绝或 30s 超时则提示用户手动配置。
 
-## 7. 设置 / BYOK 流程
+## 7. 共享语料库
 
-### 7.1 第一次安装
+### 7.1 概念
+
+UGC 短语语料库，目的：当一个用户保存某个短语时，看到**其他人也是在哪个场景 / 哪个视频 / 哪个网页**收藏了同一个短语，给学习上下文。零账号、匿名、自助删除。
+
+### 7.2 服务端架构
+
+复用现有 `whatsub.eversay.cc`（Aliyun ECS 47.93.87.206，已托管 license 后端）：
+
+- **新表**：`corpus_phrases`、`corpus_contributions`（见 4.5）
+- **新路由**（挂在现有 Hono app 下）：
+
+```
+POST   /api/corpus/contribute
+       body: { phraseRaw, contextSentence, source, contributorId }
+       → 201 { id, phrase: { tags } }  // 已分类则返 tags；待分类返 tags: { classifiedAt: null }
+       → 429 { reason: "rate_limited" }   // contributorId 超阈
+       → 400 { reason: "blocklist_match" } // phrase 命中 blocklist
+
+GET    /api/corpus/lookup
+       query: phrase=<normalized>
+       → 200 { phrase: CorpusPhrase, contributions: CorpusContribution[10] }
+       → 404 { reason: "no_data" }       // 该 phrase 还没有人贡献过
+
+POST   /api/corpus/flag
+       body: { contributionId, reason: "spam" | "abusive" | "irrelevant" | "other" }
+       → 204
+
+DELETE /api/corpus/mine
+       body: { contributorId }
+       → 200 { deletedCount }            // 一键删除该 contributorId 名下所有贡献
+
+GET    /api/corpus/browse                 // 仅 web 词汇本页用
+       query: scene=...&cefr=...&limit=20&offset=0
+       → 200 { phrases: CorpusPhrase[], total }
+```
+
+### 7.3 分类（异步 LLM 标签）
+
+- 触发：`corpus_phrases` 新记录或 `classifiedAt` 为 null 时入队（PostgreSQL `pg-boss` 或简单的 cron 表）
+- LLM：用最便宜的（DeepSeek-chat 或 gpt-4o-mini，**用我们自己的 Key**——这是后端唯一会花钱的地方，估算 $0.0001/phrase × 预期 100k phrase/月 = $10/月）
+- Prompt 输出 JSON：
+  ```json
+  { "scene": "campus", "partOfSpeech": "phrasal_verb", "cefrLevel": "B2" }
+  ```
+  失败 / 不确定 → 留空，下次重跑
+- 跑完后 UPDATE corpus_phrases.tags + classifiedAt
+- 没分类完就被查询：返回 phrase 但 tags 字段空，前端不显示 chip 行
+
+### 7.4 反滥用 / 隐私
+
+- **Rate limit**：每 `contributorId` 100 saves/day、5 saves/min（Redis 或 PostgreSQL `INSERT ... ON CONFLICT` 计数）
+- **Blocklist**：脏话词表 + NSFW 关键词，命中直接 400 reject；blocklist 可后端热更新
+- **URL canonicalize**：剥离 `utm_*` / `fbclid` / `gclid` / 已知 OAuth token / `#fragment`；超过 500 字符的 URL 直接拒（防贴 base64）
+- **YouTube 链接归一化**：所有 youtube.com / m.youtube.com / youtu.be / youtube-nocookie 统一成 `https://youtu.be/<id>?t=<sec>` 一种格式（贡献去重）
+- **举报**：`/api/corpus/flag` 把 `flagCount++`；超过 3 票阈值自动 `hidden=true`，进人工 review queue
+- **自助删除**：插件设置页有「删除我的所有贡献」按钮 → `DELETE /api/corpus/mine`，弹一次二次确认
+- **GDPR / 个保法**：contributorId 不绑定 PII；删除接口满足"被遗忘权"；URL 内可能含 PII 是用户行为，需在隐私声明中明确告知
+
+### 7.5 冷启动 · 桌面端 pipeline 数据种子
+
+scripts/video_sourcing 已有数据：
+- 16k 视频已搜出、~1500 已过滤、几百已 AI 分析得 highlightWords + keyNotes + scene
+- 数据形态：`data/videos/{scene}/{video_id}/{video_id}.analysis.json`
+
+**一次性导入脚本**（`scripts/seed_corpus.py`）：
+- 遍历 `data/videos/*/*/{video_id}.analysis.json`
+- 每个 highlightWord 对应一条 contribution：
+  - `phraseRaw` = highlightWord
+  - `contextSentence` = 该 cue 的 text
+  - `source.kind = "curator"`、`url = https://youtu.be/{id}?t={cueTime}`、`title = videoTitle`
+  - `contributorId = "whatsub-curator"`
+- corpus_phrases 的 `tags.scene` 直接从目录名（场景已分好）回填，跳过 LLM 分类
+- partOfSpeech / cefrLevel 仍走 LLM 分类
+- 预期：3-5 万条 phrase、10-20 万条 contribution，覆盖 18 场景每个 1-5k 条
+
+### 7.6 浏览 / 发现 UI
+
+- 划词气泡内：第二屏「✨ 看看 N 个人怎么收藏的」（5.4 已述）
+- 词汇本 popup 顶部加一栏：「🌐 公共语料库 →」入口，打开新标签页 `https://whatsub.eversay.cc/corpus?scene=campus&cefr=B2`
+- 公共语料库网页（不在插件内，在 whatsub-website 项目里加）：场景 / 词性 / 难度过滤；这块工程量大，**v1 只暴露入口链接，落地页放到 whatsub-website 项目独立排期**
+
+## 8. 设置 / BYOK 流程
+
+### 8.1 第一次安装
 
 1. 用户装好插件 → 右上角图标小红点
 2. 点开 → popup 显示 onboarding：
@@ -387,13 +583,13 @@ POST /settings/llm/handoff
    - **路径 B · 未检测到**：直接进配置页，选 provider + 填 Key → 保存
 3. 配置成功后右上角红点消失
 
-### 7.2 没配置 Key 时的降级
+### 8.2 没配置 Key 时的降级
 
 - YouTube 上开 CC → 侧栏出现「请先配置 API Key →」（带跳转按钮）
 - 划词气泡：「+ 收藏」仍可用（不涉及 LLM），「✨ AI 查词」灰显
 - 收藏数据照常写本机 + 入队
 
-### 7.3 复用桌面端 LLM 协议层
+### 8.3 复用桌面端 LLM 协议层
 
 `@whatsub/llm-core` workspace 包：
 - `protocols/{openai-compat,claude,gemini}.ts` — 三协议 SSE 流式 fetch
@@ -406,7 +602,7 @@ POST /settings/llm/handoff
 
 这些代码当前都在 `client/src/llm/`，迁出去后桌面端改 import 路径。**这是本次设计的一个前置条件**，实施计划里会作为第一阶段任务。
 
-## 8. 错误处理与边界
+## 9. 错误处理与边界
 
 | 触发 | 表现 | 不做 |
 |---|---|---|
@@ -422,8 +618,12 @@ POST /settings/llm/handoff
 | 划词选了 contenteditable 内的文字 | 不弹气泡（避免和 Notion / Slack 输入框冲突） | — |
 | 划词跨 iframe | v1 不支持，跨 iframe 时不弹气泡 | — |
 | 用户隐身模式 | 默认禁用（chrome MV3 默认行为） | 不强制启用 |
+| 语料库后端 5xx | 上传入队、查询「N 人收藏」入口隐藏 | 不弹错、不重试到爆 |
+| 语料库 4xx (blocklist) | 仅控制台 warn，保存本机 + 桌面端同步照常 | 不告诉用户「你的短语被拒绝」（避免负反馈） |
+| 语料库 429 限流 | 30s 后重试，重试 3 次后放弃 | — |
+| 用户点举报 | flag 成功 → toast「已收到」；失败 → 静默重试 | — |
 
-## 9. 测试策略
+## 10. 测试策略
 
 | 层级 | 工具 | 覆盖 |
 |---|---|---|
@@ -434,9 +634,9 @@ POST /settings/llm/handoff
 
 **不测真实 LLM**：通过 dependency injection 注入 mock provider（已有桌面端模式）。
 
-## 10. 构建 / 发布
+## 11. 构建 / 发布
 
-### 10.1 构建栈
+### 11.1 构建栈
 
 - **Vite + `@crxjs/vite-plugin`** — MV3 dev/build 链，HMR 在 popup / options / content scripts 都支持
 - **pnpm workspace** — 新增三个工作区：
@@ -449,7 +649,7 @@ POST /settings/llm/handoff
   ```
 - **Tailwind v3** 走 `@tailwindcss/postcss` 注入 Shadow DOM
 
-### 10.2 manifest.json 关键字段
+### 11.2 manifest.json 关键字段
 
 ```json
 {
@@ -468,7 +668,7 @@ POST /settings/llm/handoff
 }
 ```
 
-### 10.3 发布渠道
+### 11.3 发布渠道
 
 | 渠道 | 备注 |
 |---|---|
@@ -478,34 +678,52 @@ POST /settings/llm/handoff
 
 **版本号独立于桌面端**：插件自己 semver（0.1.x），不和桌面端版本绑定。
 
-### 10.4 隐私声明（写在店面 + popup 链接）
+### 11.4 隐私声明（写在店面 + popup 链接）
 
-> whatsub 不收集任何用户数据。所有视频字幕、AI 标黄结果、词汇本都存储在你本机浏览器和（可选）你本地安装的桌面端。AI 翻译调用的是你在设置里配置的 LLM 厂商（DeepSeek / OpenAI / Claude 等），数据流不经过我们的服务器。
+> whatsub 不要求注册、不要求登录、不要求授权码。所有视频字幕、AI 翻译、词汇本都在你的浏览器本地处理，AI 调用走你在设置里配置的 LLM 厂商（DeepSeek / OpenAI / Claude 等），数据不经过我们的服务器。
+>
+> **唯一的例外**：当你在 YouTube 视频字幕里收藏一个短语时，**默认会**把这个短语 + 上下文句子 + YouTube 链接匿名发送到 whatsub 共享语料库（`whatsub.eversay.cc`），帮助其他学英语的用户看到这个短语出现在什么场景。你的浏览器随机生成一个匿名 ID 标识你的贡献，**不绑定任何个人信息**。
+>
+> 你可以：
+> - 在设置里关闭"分享到公共语料库"（关掉后只读、不上传）
+> - 一键删除自己的所有贡献
+> - 普通网页划词收藏**默认不会**上传，需要你主动点"也分享到公共语料库"
+>
+> 上传的内容：短语、上下文句子、URL（去除 utm/token 参数）、网页/视频标题、随机匿名 ID。
+> 不上传的内容：你的 IP（服务端只记请求时间用于限流，不持久化）、你的 LLM Key、你的私密笔记、词汇本释义。
 
-## 11. 实施阶段建议（粗）
+## 12. 实施阶段建议（粗）
 
 实际任务拆分由 writing-plans 跟进，这里只给一个量级判断：
 
 | 阶段 | 内容 | 难度 |
 |---|---|---|
-| 0 | 单独抽 `@whatsub/llm-core` + `@whatsub/shared-types` 包 | M |
-| 1 | 插件骨架：Vite + crxjs + manifest + popup + options 页 | S |
-| 2 | YouTube CS：CC 监听 + 字幕拉取 + IndexedDB + 翻译流 + 侧栏字幕表 | L |
-| 3 | 视频底部叠加层 | M |
-| 4 | AI 标黄按钮 + 渲染 | M |
-| 5 | 划词气泡（YouTube + 任意网页）+ 词汇本 popup 视图 | M |
-| 6 | 桌面端 bridge 服务器 + 路由 + 端口发现 | M |
-| 7 | SW 同步队列 + 回放 + 状态指示器 | M |
-| 8 | 一键继承桌面端 LLM 配置 | S |
-| 9 | E2E 测试 + 跨浏览器手测 + 发布准备 | M |
+| 0  | 单独抽 `@whatsub/llm-core` + `@whatsub/shared-types` 包 | M |
+| 1  | 插件骨架：Vite + crxjs + manifest + popup + options 页 | S |
+| 2  | YouTube CS：CC 监听 + 字幕拉取 + IndexedDB + 翻译流 + 侧栏字幕表 | L |
+| 3  | 视频底部叠加层 | M |
+| 4  | AI 标黄按钮 + 渲染 | M |
+| 5  | 划词气泡（YouTube + 任意网页）+ 词汇本 popup 视图 | M |
+| 6  | 桌面端 bridge 服务器 + 路由 + 端口发现 | M |
+| 7  | SW 同步队列 + 回放 + 状态指示器 | M |
+| 8  | 一键继承桌面端 LLM 配置 | S |
+| 9  | 共享语料库后端：扩 license 服务，新增 `/api/corpus/*` 路由 + 两张表 + rate limit + blocklist | M |
+| 10 | 共享语料库分类 worker：异步 LLM 标签 job（scene / partOfSpeech / cefrLevel） | S |
+| 11 | 共享语料库前端集成：上传时机 + 气泡第二屏「N 个人收藏过」+ 设置开关 + 一键删除 | M |
+| 12 | 冷启动种子脚本 `scripts/seed_corpus.py`：从 video_sourcing 数据导入 curator 贡献 | S |
+| 13 | E2E 测试 + 跨浏览器手测 + 发布准备 | M |
 
-总量目测 4-6 周一人独立完成。
+总量目测 6-8 周一人独立完成（比纯插件多 2 周，主要来自后端 + 种子脚本 + 分类 worker）。
 
-## 12. 未决问题（建议 v2 处理）
+## 13. 未决问题（建议 v2 处理）
 
 - 桌面端 → 插件方向自动同步（避免删除回弹的灵异）
 - 一份 token / pairing code 加强 bridge 鉴权
 - Firefox MV3 适配
 - Bilibili / Netflix 支持
 - 「沉浸式翻译」模式（任意网页全量双语）
-- 桌面端语料库专页（v1 只入库）
+- 桌面端语料库专页（v1 只入库 + 链接出去）
+- 共享语料库公共网页（whatsub-website 项目内的 `/corpus` 浏览页 + 场景过滤）
+- 共享语料库人工审核后台（v1 只做自动 blocklist + 自动 hide on flagCount>=3）
+- 用户邮箱可选绑定（跨设备合并我的贡献、看「我的贡献统计」）
+- 语料库点赞 / 收藏机制（用户给别人的贡献点赞，影响排序）

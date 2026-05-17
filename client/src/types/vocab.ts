@@ -20,6 +20,11 @@ export interface VocabEntry {
   note?: string;
   /** ms timestamp of the last note edit. Used for sort + showing "上次编辑" hint. */
   noteUpdatedAt?: number;
+  // ── Plugin-side fields per spec §4.1 ──
+  source?: "desktop" | "youtube" | "web";
+  pageUrl?: string;
+  videoUrl?: string;
+  syncStatus?: "synced" | "pending";
 }
 
 export function makeVocabId(expression: string): string {

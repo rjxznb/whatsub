@@ -11,7 +11,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 .route(web::post().to(post_vocab))
                 .route(web::get().to(get_vocab)),
         )
-        .service(web::resource("/vocab/batch").route(web::post().to(post_vocab_batch)));
+        .service(web::resource("/vocab/batch").route(web::post().to(post_vocab_batch)))
+        .service(web::resource("/settings/llm").route(web::get().to(get_settings_llm)))
+        .service(
+            web::resource("/settings/llm/handoff")
+                .route(web::post().to(post_handoff)),
+        );
 }
 
 // ── /ping ────────────────────────────────────────────────────────────────────
@@ -101,4 +106,95 @@ async fn get_vocab(_app: web::Data<AppHandle>) -> impl Responder {
         Ok(entries) => HttpResponse::Ok().json(serde_json::json!({ "entries": entries })),
         Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
     }
+}
+
+// ── /settings/llm helpers ─────────────────────────────────────────────────────
+
+/// Load the raw settings Value from disk. Returns an error string on failure.
+fn load_settings_value() -> Result<serde_json::Value, String> {
+    crate::commands::settings::get_settings()
+        .map(|v| if v.is_null() { serde_json::json!({}) } else { v })
+        .map_err(|e| e.to_string())
+}
+
+/// Derive (model, baseUrl, apiKey) from the raw settings JSON.
+///
+/// Settings are persisted in camelCase (TypeScript convention):
+///   llmProvider: "openai-compatible" | "claude" | "gemini"
+///   openaiCompatible: { baseUrl, apiKey, model }
+///   claude: { apiKey, model }
+///   gemini: { apiKey, model }
+fn extract_llm_fields(s: &serde_json::Value) -> (String, String, String, String) {
+    let provider = s["llmProvider"].as_str().unwrap_or("openai-compatible").to_string();
+    let (model, base_url, api_key) = match provider.as_str() {
+        "claude" => (
+            s["claude"]["model"].as_str().unwrap_or("").to_string(),
+            String::new(),
+            s["claude"]["apiKey"].as_str().unwrap_or("").to_string(),
+        ),
+        "gemini" => (
+            s["gemini"]["model"].as_str().unwrap_or("").to_string(),
+            String::new(),
+            s["gemini"]["apiKey"].as_str().unwrap_or("").to_string(),
+        ),
+        // "openai-compatible" and any future providers
+        _ => (
+            s["openaiCompatible"]["model"].as_str().unwrap_or("").to_string(),
+            s["openaiCompatible"]["baseUrl"].as_str().unwrap_or("").to_string(),
+            s["openaiCompatible"]["apiKey"].as_str().unwrap_or("").to_string(),
+        ),
+    };
+    (provider, model, base_url, api_key)
+}
+
+// ── GET /settings/llm ─────────────────────────────────────────────────────────
+
+/// Returns LLM metadata (provider, model, baseUrl) without exposing the API key.
+async fn get_settings_llm(_app: web::Data<AppHandle>) -> impl Responder {
+    let s = match load_settings_value() {
+        Ok(v) => v,
+        Err(e) => return HttpResponse::InternalServerError().body(e),
+    };
+    let (provider, model, base_url, _api_key) = extract_llm_fields(&s);
+    HttpResponse::Ok().json(serde_json::json!({
+        "provider": provider,
+        "model": model,
+        "baseUrl": base_url,
+    }))
+}
+
+// ── POST /settings/llm/handoff ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HandoffReq {
+    extension_id: String,
+}
+
+/// Shows a native confirm dialog; if approved, returns the full LLM config
+/// including the API key. Returns 403 if the user declines.
+async fn post_handoff(
+    app: web::Data<AppHandle>,
+    body: web::Json<HandoffReq>,
+) -> impl Responder {
+    let req = body.into_inner();
+    let approved = super::handoff::request_handoff(&app, &req.extension_id).await;
+    if !approved {
+        return HttpResponse::Forbidden().json(serde_json::json!({
+            "ok": false,
+            "reason": "user_declined"
+        }));
+    }
+    let s = match load_settings_value() {
+        Ok(v) => v,
+        Err(e) => return HttpResponse::InternalServerError().body(e),
+    };
+    let (provider, model, base_url, api_key) = extract_llm_fields(&s);
+    HttpResponse::Ok().json(serde_json::json!({
+        "ok": true,
+        "provider": provider,
+        "model": model,
+        "baseUrl": base_url,
+        "apiKey": api_key,
+    }))
 }

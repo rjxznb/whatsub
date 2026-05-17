@@ -1,6 +1,7 @@
 pub mod port;
 pub mod server;
 pub mod routes;
+pub mod handoff;
 
 use tauri::AppHandle;
 

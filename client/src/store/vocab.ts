@@ -27,7 +27,10 @@ export const useVocabulary = create<VocabState>((set, get) => ({
     set({ entries: list, loaded: true });
   },
   async add(entry) {
-    const list = await invoke<VocabEntry[]>("vocab_add", { entry });
+    // Shallow-merge so plugin-written fields (source, pageUrl, videoUrl, syncStatus) survive desktop edits — spec §4.1.
+    const existing = get().entries.find((e) => e.id === entry.id);
+    const merged: VocabEntry = existing ? { ...existing, ...entry } : entry;
+    const list = await invoke<VocabEntry[]>("vocab_add", { entry: merged });
     set({ entries: list, loaded: true });
   },
   async remove(id) {

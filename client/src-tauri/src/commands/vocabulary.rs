@@ -32,6 +32,59 @@ pub struct VocabEntry {
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_updated_at: Option<i64>,
+    // ── Plugin fields (Task 5 / bridge spec §4.1) ──
+    /// Origin of the entry: "desktop" | "youtube" | "web"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// URL of the page where the phrase was saved (web/youtube plugin context).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<String>,
+    /// Direct video URL (youtube/web plugin context).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_url: Option<String>,
+    /// Sync lifecycle marker: "pending" | "synced" | "conflict"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_status: Option<String>,
+}
+
+impl VocabEntry {
+    /// Shallow-merge `incoming` into `self`. Required fields are always
+    /// overwritten; optional fields are overwritten only when the incoming
+    /// value is `Some`. This preserves any fields the current stored entry
+    /// has that the caller did not include (spec §4.1).
+    pub fn merge_from(&mut self, incoming: &VocabEntry) {
+        self.expression = incoming.expression.clone();
+        self.meaning_zh = incoming.meaning_zh.clone();
+        self.usage = incoming.usage.clone();
+        self.video_id = incoming.video_id.clone();
+        self.video_title = incoming.video_title.clone();
+        self.added_at = incoming.added_at.clone();
+        if incoming.cue_time.is_some() {
+            self.cue_time = incoming.cue_time;
+        }
+        if incoming.cue_text.is_some() {
+            self.cue_text = incoming.cue_text.clone();
+        }
+        if incoming.note.is_some() {
+            self.note = incoming.note.clone();
+        }
+        if incoming.note_updated_at.is_some() {
+            self.note_updated_at = incoming.note_updated_at;
+        }
+        // Plugin fields: incoming overwrites only when Some
+        if incoming.source.is_some() {
+            self.source = incoming.source.clone();
+        }
+        if incoming.page_url.is_some() {
+            self.page_url = incoming.page_url.clone();
+        }
+        if incoming.video_url.is_some() {
+            self.video_url = incoming.video_url.clone();
+        }
+        if incoming.sync_status.is_some() {
+            self.sync_status = incoming.sync_status.clone();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -85,6 +138,29 @@ pub fn vocab_remove(id: String) -> AppResult<Vec<VocabEntry>> {
     v.entries.retain(|e| e.id != id);
     write(&v)?;
     Ok(v.entries)
+}
+
+// ── Bridge-accessible internal API (not Tauri commands) ──
+
+/// Upsert a single entry using shallow-merge semantics (spec §4.1).
+/// If an entry with the same `id` exists it is merged in-place; otherwise
+/// the entry is appended. Returns the `id` on success.
+pub fn vocab_upsert(entry: VocabEntry) -> AppResult<String> {
+    let mut v = read()?;
+    let id = entry.id.clone();
+    if let Some(existing) = v.entries.iter_mut().find(|e| e.id == entry.id) {
+        existing.merge_from(&entry);
+    } else {
+        v.entries.push(entry);
+    }
+    write(&v)?;
+    Ok(id)
+}
+
+/// Load and return all vocabulary entries. Used by the bridge GET /vocab
+/// handler to avoid duplicating the file-read logic.
+pub fn vocab_load_all() -> AppResult<Vec<VocabEntry>> {
+    Ok(read()?.entries)
 }
 
 /// Update just the `note` + `note_updated_at` fields of an existing entry.

@@ -2,6 +2,7 @@ mod core;
 mod error;
 mod commands;
 mod pipeline;
+mod bridge;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,6 +18,10 @@ pub fn run() {
         .manage(commands::models::ModelDownloadState::default())
         .manage(commands::youtube_auth::LoginState::default())
         .manage(commands::import::ImportState::default())
+        .setup(|app| {
+            bridge::start_bridge(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,

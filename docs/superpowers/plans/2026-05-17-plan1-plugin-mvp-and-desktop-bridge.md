@@ -14,6 +14,18 @@
 
 This plan implements **spec §12 phases 0–8 only**: workspace bootstrap → plugin skeleton → YouTube subtitle pipeline → AI highlight → selection bubble → desktop bridge → sync queue → LLM-config handoff. Shared-corpus work (UGC upload, lookup, classifier, seed) is Plan 2 + Plan 3. The deliverable from this plan is a shippable extension that works standalone OR with desktop sync.
 
+## Mid-execution adjustment · 2026-05-17 (post-brainstorm decision)
+
+The original spec assumed a single monorepo (pnpm workspace inside `Get_Video/`) with `@whatsub/llm-core` shared live between desktop and plugin. **User chose to make the plugin a fully independent repo instead**, accepting that LLM protocol code is **copied** rather than workspace-shared. Net effect on this plan:
+
+- **Plugin repo path**: `C:\Users\renjx\Desktop\whatsub-plugin\` (initialized with commit `06f8c95`). All "Files" paths in tasks that begin with `pnpm-workspace.yaml`, `packages/`, `web-plugin/` are relative to **this new repo**, NOT `Get_Video/`.
+- **Desktop client changes** (Task 5 + Tasks 20–23 bridge work) still happen in `Get_Video/client/`. These tasks operate on a feature branch `feat/whatsub-bridge` inside `Get_Video`, created just-in-time before Task 5.
+- **Task 3 switches from `git mv` to copy** — code is copied from `Get_Video/client/src/llm/*.ts` into `whatsub-plugin/packages/llm-core/src/`. The desktop client's `client/src/llm/` is left untouched, so the desktop continues to work unchanged.
+- **Task 4 is removed entirely** — there's no "wire desktop client to consume new packages" step because there's no workspace dependency to introduce.
+- **VocabEntry schema sync** is a manual concern: when Task 2 adds 4 new fields to shared-types, the equivalent type in `Get_Video/client/src/types/vocab.ts` needs to be edited to match (or those new fields stay plugin-only and desktop just preserves them via shallow-merge from Task 5).
+
+Subagent dispatches will repeat the relevant adjustment in their prompt's "Context" section so implementers don't need to interpret this preamble themselves.
+
 ## File structure
 
 ### New packages (pnpm workspace at repo root)

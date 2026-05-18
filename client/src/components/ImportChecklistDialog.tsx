@@ -242,7 +242,10 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
   if (pendingLogin) {
     return (
       <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl p-5">
+        <div
+          data-tour="checklist"
+          className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl p-5"
+        >
           <h2 className="text-base font-semibold text-zinc-100 mb-3">
             等待 {pendingLogin.label} 登录完成
           </h2>
@@ -315,7 +318,10 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl">
+      <div
+        data-tour="checklist"
+        className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl"
+      >
         <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-zinc-800">
           <h2 className="text-base font-semibold text-zinc-100">导入前请先确认</h2>
           <button

@@ -197,10 +197,11 @@ export const useLicense = create<LicenseStore>((set, get) => ({
 
     let resp: Response;
     try {
-      // 30s timeout: first activation from a Chinese network can take
-      // 5-10s for the TCP handshake to settle through GFW throttling.
-      // Defaulting fetch's timeout (typically 0/no-timeout in browsers,
-      // ~120s in Tauri) is fine but we guard explicitly anyway.
+      // 30s timeout: post-migration (2026-05-09) this hits our Aliyun
+      // ECS at whatsub.eversay.cc with typical mainland latency <200ms,
+      // so 30s is generous headroom for slow networks. The Cloudflare
+      // Workers + D1 era needed this for GFW-throttled TLS handshake
+      // (5-10s first-hit); it's retired but the guard stays defensive.
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30_000);
       try {

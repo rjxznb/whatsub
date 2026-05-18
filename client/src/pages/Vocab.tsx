@@ -111,6 +111,13 @@ export function Vocab() {
   function dismissTour() {
     setTourStep(null);
     window.localStorage.setItem("vocabTourSeen", "1");
+    // Also close the demo NoteBubble if it's currently open. Without
+    // this, clicking 跳过引导 during step="bubble" only unmounts the
+    // tour overlay but leaves the bubble in the user's face — feels
+    // like the skip didn't take effect. The demo card itself stays
+    // (separate dismissDemo flow) so the user can still try the
+    // double-click → bubble interaction later if they want.
+    setDemoEditing(null);
   }
   function advanceTour() {
     setTourStep("bubble");

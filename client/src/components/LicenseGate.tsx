@@ -354,7 +354,7 @@ function ActivationScreen() {
             {activating ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                马上就好～第一次见面可能要 10-15 秒
+                正在验证授权码...
               </>
             ) : (
               '走起 →'
@@ -414,21 +414,21 @@ function ErrorDisplay({ error }: { error: ActivateError }) {
   }
 
   if (error.kind === 'network') {
-    // Network kind is almost always GFW-induced TCP throttling on the
-    // Cloudflare edge — RST-on-SYN until a reachable POP responds. Re-
-    // hitting the button literally retries through a different path and
-    // usually succeeds within 2-3 tries. Friendlier amber styling instead
-    // of rose so the user reads this as "try again" not "something is
-    // broken" — the technical stderr stays available but de-emphasised.
+    // Network errors post-migration (2026-05-09) hit our Aliyun ECS at
+    // whatsub.eversay.cc — usual latency is <200ms from mainland. A
+    // failure here almost always means: no network, DNS hiccup, or the
+    // ECS itself is down. The old "Cloudflare GFW handshake" copy was
+    // misleading and survived past the migration; killed in v0.1.45.
     return (
       <div className="mt-3 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-200 flex gap-2">
         <Cloud className="w-4 h-4 shrink-0 mt-0.5" />
         <div className="flex-1">
-          <div className="font-medium">这次没连上 —— 再点一次「走起」试试 👉</div>
+          <div className="font-medium">这次没连上激活服务器</div>
           <div className="text-amber-300/80 mt-1 leading-relaxed">
-            激活服务器在 Cloudflare，国内首次握手经常会被「卡一下」，
-            <span className="text-amber-200 font-medium">多试 2-3 次通常就能成功</span>。
-            如果反复失败，请检查网络是否畅通后再来～
+            请检查
+            <span className="text-amber-200 font-medium">网络是否畅通</span>
+            (能否打开其他网站),然后再点一次「走起」重试。
+            如果反复失败可能是服务器维护中,稍后再试。
           </div>
           <div className="text-amber-300/40 mt-1 text-[10px] font-mono break-all">
             {error.message}

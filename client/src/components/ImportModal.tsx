@@ -13,6 +13,12 @@ import type { TranslationStyle } from "../types/settings";
 
 // Slider positions, left → right. Anything outside this trio is a legacy
 // entry style that the slider snaps to the nearest position via indexOf.
+// One-click sample URL surfaced in the URL tab as an "下载示例" link
+// for first-time users who land in the modal without a video in mind.
+// "Me at the zoo" — first ever YouTube upload (April 2005), 18 seconds,
+// English narration with auto-captions, will never be removed.
+const SAMPLE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+
 const STYLE_SLIDER_ORDER: TranslationStyle[] = ["formal", "neutral", "colloquial"];
 const STYLE_LABEL: Record<"formal" | "neutral" | "colloquial", string> = {
   formal: "正式",
@@ -869,6 +875,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
             <input
               ref={urlInputRef}
               type="text"
+              data-tour="url-input"
               value={urlValue}
               onChange={(e) => {
                 setUrlValue(e.target.value);
@@ -885,6 +892,26 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 {validationError}
               </div>
             )}
+            {/* 示例链接 — one-click affordance for first-time users who
+                don't have a URL handy. Uses "Me at the zoo" (the first
+                video ever uploaded to YouTube, jNQXAC9IVRw):
+                  · 18 秒,下载快
+                  · 永久存在(YouTube 不会删第一支视频)
+                  · 有英文 auto-captions,跑得通整条字幕流水线
+                Note: still needs 梯子 to actually fetch since it's on
+                youtube.com — checklist already covers that path. */}
+            <button
+              type="button"
+              data-tour="sample-link"
+              onClick={() => {
+                setUrlValue(SAMPLE_URL);
+                if (validationError) setValidationError(null);
+                urlInputRef.current?.focus();
+              }}
+              className="mt-1.5 text-[11px] text-blue-300 hover:text-blue-200 hover:underline transition-colors"
+            >
+              没有合适的链接?试试示例:Me at the zoo(YouTube 第一支视频,18 秒) →
+            </button>
             <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
               <span className="shrink-0">画质</span>
               <select
@@ -1056,6 +1083,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                 后台下载
               </button>
               <button
+                data-tour="submit-button"
                 onClick={() => void submit({ background: false })}
                 className={
                   "px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm rounded font-medium" +

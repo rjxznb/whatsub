@@ -124,14 +124,19 @@ export function VocabTour({ step, onAdvance, onDismiss }: Props) {
     step === "card" ? "双击卡片试试 ✨" : "点击气泡开始记笔记 ✏️";
 
   return createPortal(
-    <div className="animate-vocab-tour-fade-in">
+    // Wrapper holds the z-index itself, NOT the SVG/tooltip children.
+    // The opacity animation creates a local stacking context — without
+    // hoisting z-index to the wrapper, children's z-[200]/z-[201] are
+    // confined to that local context and any z-50 modal on the page
+    // can cover the tour. pointer-events: none here so the wrapper
+    // doesn't capture clicks meant for the underlying card/bubble.
+    <div className="fixed inset-0 z-[200] pointer-events-none animate-vocab-tour-fade-in">
       {/* Dim overlay using SVG mask. The mask creates a hole around the
-          target element so it stays fully visible underneath. pointer-
-          events: none so the underlying card/bubble's own click and
-          double-click handlers run unimpeded — the tour observes via
-          document-level listeners rather than intercepting. */}
+          target element so it stays fully visible underneath. The
+          underlying card/bubble's own click and double-click handlers
+          still run because the wrapper is pointer-events: none. */}
       <svg
-        className="fixed inset-0 z-[200] pointer-events-none"
+        className="absolute inset-0 w-full h-full"
         width="100%"
         height="100%"
         aria-hidden
@@ -171,7 +176,7 @@ export function VocabTour({ step, onAdvance, onDismiss }: Props) {
       </svg>
 
       <div
-        className="fixed z-[201] px-4 py-2.5 bg-zinc-900 border border-amber-400/50 text-amber-100 rounded-lg shadow-2xl text-sm whitespace-nowrap flex items-center gap-3"
+        className="absolute pointer-events-auto px-4 py-2.5 bg-zinc-900 border border-amber-400/50 text-amber-100 rounded-lg shadow-2xl text-sm whitespace-nowrap flex items-center gap-3"
         style={{
           top: tipTop,
           left: tipLeft,

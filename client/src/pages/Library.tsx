@@ -7,6 +7,10 @@ import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
 import { ImportModal } from "../components/ImportModal";
 import { ImportChecklistDialog } from "../components/ImportChecklistDialog";
+import {
+  LibraryTour,
+  type LibraryTourStep,
+} from "../components/LibraryTour";
 import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { formatTime } from "../utils/time";
@@ -77,6 +81,21 @@ export function Library() {
   // 仅在「点击 + Import 按钮」时拦截弹出 checklist —— 拖拽本地文件
   // 不走这里(本地文件不需要梯子/cookies)。
   const [showChecklist, setShowChecklist] = useState(false);
+  // First-visit guided tour. Drives users from + Import → URL input
+  // → 开始解析 button. Persisted in localStorage so it only fires once
+  // per user.
+  const [tourStep, setTourStep] = useState<LibraryTourStep>(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("libraryTourSeen") ? null : "import";
+  });
+  function dismissTour() {
+    setTourStep(null);
+    try {
+      window.localStorage.setItem("libraryTourSeen", "1");
+    } catch {
+      /* localStorage unavailable — tour will re-show next session, harmless */
+    }
+  }
   const [search, setSearch] = useState("");
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
@@ -210,6 +229,7 @@ export function Library() {
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
         <button
+          data-tour="import-button"
           onClick={() => {
             if (shouldShowImportChecklist()) {
               setShowChecklist(true);
@@ -317,6 +337,14 @@ export function Library() {
             );
           })}
         </div>
+      )}
+
+      {tourStep && (
+        <LibraryTour
+          step={tourStep}
+          onAdvance={(next) => setTourStep(next)}
+          onDismiss={dismissTour}
+        />
       )}
 
       {showChecklist && (

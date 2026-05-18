@@ -264,23 +264,54 @@ pub async fn site_login_start(
     let port = pick_free_port()
         .ok_or_else(|| "在 9223-9322 范围内找不到空闲端口".to_string())?;
 
-    spawn_browser(&browser_path, port, &profile_dir, &args.login_url)
+    let mut child = spawn_browser(&browser_path, port, &profile_dir, &args.login_url)
         .map_err(|e| format!("启动浏览器失败：{e}"))?;
 
-    // Poll until CDP endpoint responds (browser fully booted), up to 12s.
+    // Poll until CDP endpoint responds (browser fully booted), up to 30s.
+    // We also check if the child process exited prematurely each cycle —
+    // common cause:Chrome/Edge has a "single-instance per user-data-dir"
+    // lock. If a stale instance is still running with our profile dir
+    // (e.g. previous login flow that wasn't cleanly torn down), the new
+    // chrome.exe just signals the existing one to open the URL and
+    // exits immediately — CDP never comes up on the new port we picked.
     let mut ready = false;
-    for _ in 0..60 {
+    let mut exit_status: Option<std::process::ExitStatus> = None;
+    for _ in 0..150 {
         tokio::time::sleep(Duration::from_millis(200)).await;
         if is_cdp_alive(port).await {
             ready = true;
             break;
         }
+        // Quick poll: did the child already exit? If so, no point
+        // waiting the full 30s — error out with the exit code.
+        if let Ok(Some(s)) = child.try_wait() {
+            exit_status = Some(s);
+            break;
+        }
     }
     if !ready {
-        return Err(
-            "浏览器启动了但 CDP 端点没响应。请确认 Edge / Chrome 不是企业策略限制版本"
-                .into(),
-        );
+        let detail = if let Some(s) = exit_status {
+            let code = s.code().map_or("?".into(), |c| c.to_string());
+            format!(
+                "浏览器进程在 CDP 启动前就退出了 (exit code {code})。最常见原因:\
+                 \n① 已经有 Chrome/Edge 实例在用同一个登录 profile —— 请彻底退出\
+                 所有 {browser_label} 窗口(系统托盘里也检查一下)后重试\
+                 \n② 企业 / 学校组策略禁用了 --remote-debugging-port 调试端口",
+                browser_label = browser_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("浏览器"),
+            )
+        } else {
+            format!(
+                "浏览器启动了但 CDP 端点 (127.0.0.1:{port}) 30 秒内没响应。\
+                 可能原因:\
+                 \n① 已有浏览器实例占用同一 profile,新进程被合并(关掉所有 Chrome / Edge 重试)\
+                 \n② 企业 / 学校组策略禁用了 --remote-debugging-port\
+                 \n③ 杀软 / 防火墙拦截 127.0.0.1:{port}"
+            )
+        };
+        return Err(detail);
     }
 
     save_port(port);
@@ -648,7 +679,7 @@ fn spawn_browser(
     port: u16,
     profile_dir: &PathBuf,
     login_url: &str,
-) -> std::io::Result<()> {
+) -> std::io::Result<std::process::Child> {
     // Detach the child. We don't `.wait()` on it; the user controls
     // the browser's lifetime from the browser UI.
     //
@@ -670,7 +701,7 @@ fn spawn_browser(
     // --enable-automation because those trigger anti-bot detection
     // on Google / Instagram / X login forms (the whole reason we
     // moved off the embedded webview).
-    std::process::Command::new(exe)
+    let child = std::process::Command::new(exe)
         .arg(format!(
             "--user-data-dir={}",
             profile_dir.to_string_lossy()
@@ -753,7 +784,7 @@ msEdgeWorkspaces"
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    Ok(())
+    Ok(child)
 }
 
 fn pick_free_port() -> Option<u16> {

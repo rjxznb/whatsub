@@ -40,6 +40,7 @@ interface Props {
 
 type PipelineEventPayload =
   | { stage: "Started"; video_id: string; source_kind?: string; source_value?: string; background?: boolean }
+  | { stage: "Preparing"; video_id: string; step: string }
   | { stage: "Downloading"; video_id: string; percent: number; total?: string; speed?: string; eta?: string }
   | { stage: "ExtractingAudio"; video_id: string }
   | { stage: "Transcribing"; video_id: string; percent: number }
@@ -47,6 +48,21 @@ type PipelineEventPayload =
   | { stage: "Failed"; video_id: string; error: string }
   | { stage: "ModelDownload"; progress: number; total_mb: number; downloaded_mb: number }
   | { stage: "Log"; video_id: string; source: string; line: string };
+
+/**
+ * Sub-step labels for the "准备中" phase. Keys must match the
+ * `step` field on the Rust `PipelineEvent::Preparing` event
+ * (emitted by ytdlp.rs's stderr scanner). Unknown step → fall back
+ * to the bare "准备中" label, so adding new steps in Rust without
+ * matching TS is safe.
+ */
+const PREPARING_SUBSTEP_LABEL: Record<string, string> = {
+  "fetching-webpage": "获取视频信息",
+  "fetching-player": "获取播放器",
+  "solving-signature": "解算签名 (这一步常常最慢)",
+  "fetching-manifest": "获取清晰度列表",
+  "format-selected": "格式已选,即将下载",
+};
 
 interface LogLine {
   source: string;
@@ -261,6 +277,8 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
+  // Fine-grained sub-step within "准备中". Cleared on each phase change.
+  const [preparingStep, setPreparingStep] = useState<string | null>(null);
   // Download-only metrics from yt-dlp's progress template; null when unknown
   // (e.g. before yt-dlp has resolved size, or during non-download phases).
   const [dlSpeed, setDlSpeed] = useState<string | null>(null);
@@ -297,7 +315,11 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
         case "Started":
           setPhase("started");
           setPercent(0);
+          setPreparingStep(null);
           currentVideoIdRef.current = ev.video_id;
+          break;
+        case "Preparing":
+          setPreparingStep(ev.step);
           break;
         case "Downloading":
           setPhase("downloading");
@@ -305,10 +327,13 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
           setDlSpeed(ev.speed ?? null);
           setDlEta(ev.eta ?? null);
           setDlTotal(ev.total ?? null);
+          // Clear sub-step now that we've moved on.
+          setPreparingStep(null);
           break;
         case "ExtractingAudio":
           setPhase("extracting");
           setPercent(0);
+          setPreparingStep(null);
           break;
         case "Transcribing":
           setPhase("transcribing");
@@ -742,7 +767,17 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                       <span className="w-2 h-2 border border-zinc-600 rounded-full inline-block" />
                     )}
                   </span>
-                  <span className="font-medium">{PHASE_LABEL[p]}</span>
+                  <span className="font-medium">
+                    {PHASE_LABEL[p]}
+                    {/* Sub-step badge inside "准备中" when active —
+                        shows which yt-dlp sub-task is currently running
+                        so a long preparation isn't a black box. */}
+                    {isCurrent && p === "started" && preparingStep && (
+                      <span className="ml-2 text-[11px] text-blue-200/80 font-normal">
+                        · {PREPARING_SUBSTEP_LABEL[preparingStep] ?? preparingStep}
+                      </span>
+                    )}
+                  </span>
                   <span className="flex-1 text-[10px] text-zinc-600 italic">
                     {phaseDuration(p, settings.whisperModel)}
                   </span>

@@ -6,3 +6,4 @@ pub mod import;
 pub mod vocabulary;
 pub mod license;
 pub mod youtube_auth;
+pub mod yt_dlp;

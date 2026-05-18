@@ -52,9 +52,9 @@ on:
         required: true
         default: '22.11.0'
       yt_dlp_tag:
-        description: 'yt-dlp release tag to bundle (or "latest" for rolling — but pinning is recommended to avoid surprise perf/regression from upstream updates between releases). See https://github.com/yt-dlp/yt-dlp/releases'
+        description: 'yt-dlp release tag to bundle. Default "latest" tracks upstream so YouTube/Instagram/etc. compatibility stays current. If a specific release breaks something, pin to a known-good tag (e.g. 2026.03.17) for the next CI run. Users can also runtime-update via Settings → 更新 yt-dlp.'
         required: true
-        default: '2026.03.17'
+        default: 'latest'
       dry_run:
         description: 'Build artifacts only — do not publish to release repo'
         type: boolean

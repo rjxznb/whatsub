@@ -1,7 +1,10 @@
 use crate::error::{AppError, AppResult};
+use std::path::Path;
+use std::process::Stdio;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 /// Run a sidecar to completion, capturing stdout. Streams stderr to a callback
@@ -171,5 +174,125 @@ fn handle_event<F: FnMut(&str)>(
             true
         }
         _ => false,
+    }
+}
+
+/// Same contract as `run_sidecar` but spawns an arbitrary path on disk
+/// instead of going through Tauri's shell plugin. Used by yt-dlp when
+/// the user has updated it via Settings → 更新 yt-dlp (lives in AppData,
+/// not in the sidecar allowlist).
+///
+/// Captures stdout into the returned String, streams stderr chunks to
+/// `on_stderr_line`, honours a `CancellationToken` (kills the child on
+/// fire), and returns the last 20 lines of stderr in the error message
+/// on non-zero exit.
+pub async fn run_external_with_callback<F>(
+    exe: &Path,
+    args: &[&str],
+    mut on_stderr_line: F,
+    cancel: Option<&CancellationToken>,
+) -> AppResult<String>
+where
+    F: FnMut(&str),
+{
+    let mut child = tokio::process::Command::new(exe)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            AppError::Subprocess(format!("spawn {}: {e}", exe.display()))
+        })?;
+
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+
+    let mut stdout_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let mut stderr_tail: std::collections::VecDeque<String> =
+        std::collections::VecDeque::new();
+    const TAIL_LINES: usize = 20;
+
+    let mut buf_out = vec![0u8; 4096];
+    let mut buf_err = vec![0u8; 4096];
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+
+    // Read both pipes concurrently, watch for cancellation, until both
+    // are EOF (which happens when the child exits). Then child.wait()
+    // gives us the exit code.
+    loop {
+        if stdout_done && stderr_done {
+            break;
+        }
+        let cancel_fut = async {
+            match cancel {
+                Some(t) => t.cancelled().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = cancel_fut => {
+                let _ = child.kill().await;
+                return Err(AppError::Cancelled);
+            }
+            r = stdout.read(&mut buf_out), if !stdout_done => {
+                match r {
+                    Ok(0) => stdout_done = true,
+                    Ok(n) => stdout_buf.extend_from_slice(&buf_out[..n]),
+                    Err(_) => stdout_done = true,
+                }
+            }
+            r = stderr.read(&mut buf_err), if !stderr_done => {
+                match r {
+                    Ok(0) => stderr_done = true,
+                    Ok(n) => {
+                        let chunk = String::from_utf8_lossy(&buf_err[..n]).to_string();
+                        on_stderr_line(&chunk);
+                        for line in chunk.lines() {
+                            let t = line.trim();
+                            if t.is_empty() { continue; }
+                            if stderr_tail.len() >= TAIL_LINES { stderr_tail.pop_front(); }
+                            stderr_tail.push_back(t.to_string());
+                        }
+                    }
+                    Err(_) => stderr_done = true,
+                }
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| AppError::Subprocess(format!("wait: {e}")))?;
+    let stdout_str = String::from_utf8_lossy(&stdout_buf).to_string();
+
+    match status.code() {
+        Some(0) => Ok(stdout_str),
+        Some(c) => {
+            let tail = stderr_tail
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
+            let detail = if tail.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n--- {} stderr (last {} lines) ---\n{}",
+                    exe.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("child"),
+                    stderr_tail.len(),
+                    tail
+                )
+            };
+            Err(AppError::Subprocess(format!("exit {c}{detail}")))
+        }
+        None => Err(AppError::Subprocess(
+            "child terminated abnormally (no exit code)".into(),
+        )),
     }
 }

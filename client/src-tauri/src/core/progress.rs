@@ -20,6 +20,19 @@ pub enum PipelineEvent {
         #[serde(skip_serializing_if = "std::ops::Not::not", default)]
         background: bool,
     },
+    /// Fine-grained "准备中" sub-step. Emitted by the yt-dlp stderr
+    /// scanner when it detects known patterns (resolving URL / fetching
+    /// player JS / solving signature / fetching manifest / etc.) so the
+    /// UI can show *what specifically* is being slow during the
+    /// preparation window between `Started` and the first `Downloading`.
+    Preparing {
+        video_id: String,
+        /// Stable identifier the UI maps to a Chinese label. Known values:
+        /// "fetching-webpage", "fetching-player", "solving-signature",
+        /// "fetching-manifest", "format-selected". UI shows a fallback
+        /// label for unrecognised values so adding new ones is safe.
+        step: String,
+    },
     Downloading {
         video_id: String,
         percent: u8,

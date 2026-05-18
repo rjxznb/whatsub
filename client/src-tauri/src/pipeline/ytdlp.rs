@@ -1,6 +1,7 @@
+use crate::commands::yt_dlp::resolve_appdata_yt_dlp;
 use crate::core::progress::{emit, PipelineEvent};
 use crate::error::AppResult;
-use crate::pipeline::spawn::run_sidecar;
+use crate::pipeline::spawn::{run_external_with_callback, run_sidecar};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
@@ -380,39 +381,70 @@ pub async fn download(
             }
         };
 
-        let result = run_sidecar(
-            app,
-            "yt-dlp",
-            &arg_refs,
-            move |chunk| {
-                // run_sidecar hands us raw stderr CHUNKS (possibly
-                // multi-line). emit_log already iterates `.lines()`
-                // internally; parse_progress needs the same — its
-                // strip_prefix("[progress] ") + split('|') logic only
-                // works on a single line. Without this split, any
-                // chunk that contains multiple progress updates fails
-                // parsing and the entire batch of Downloading events
-                // is lost, so the UI never leaves "准备中" until
-                // ExtractingAudio fires.
-                emit_log(chunk);
-                for actual_line in chunk.lines() {
-                    if let Some(p) = parse_progress(actual_line) {
-                        emit(
-                            &app_cb,
-                            PipelineEvent::Downloading {
-                                video_id: id_cb.clone(),
-                                percent: p.percent,
-                                total: p.total,
-                                speed: p.speed,
-                                eta: p.eta,
-                            },
-                        );
-                    }
+        // "准备中" sub-step tracker — emits Preparing events on detected
+        // yt-dlp stderr patterns so the UI can show *which* part of the
+        // ~30s preparation window is slow (webpage vs player JS vs
+        // n-sig solver vs manifest). Stateful: each step is emitted at
+        // most once per yt-dlp run so the UI doesn't churn.
+        let id_step = video_id.to_string();
+        let app_step = app.clone();
+        let mut emitted_steps = std::collections::HashSet::<&'static str>::new();
+        let mut emit_step = move |step: &'static str| {
+            if !emitted_steps.insert(step) {
+                return;
+            }
+            emit(
+                &app_step,
+                PipelineEvent::Preparing {
+                    video_id: id_step.clone(),
+                    step: step.into(),
+                },
+            );
+        };
+
+        // Common stderr callback for both the bundled-sidecar path and
+        // the AppData-direct path. Defined here so it's identical in
+        // semantics (logs / progress / sub-step detection).
+        let callback = move |chunk: &str| {
+            // run_sidecar hands us raw stderr CHUNKS (possibly
+            // multi-line). emit_log already iterates `.lines()`
+            // internally; parse_progress needs the same — its
+            // strip_prefix("[progress] ") + split('|') logic only
+            // works on a single line. Without this split, any
+            // chunk that contains multiple progress updates fails
+            // parsing and the entire batch of Downloading events
+            // is lost, so the UI never leaves "准备中" until
+            // ExtractingAudio fires.
+            emit_log(chunk);
+            for actual_line in chunk.lines() {
+                if let Some(step) = detect_prepare_step(actual_line) {
+                    emit_step(step);
                 }
-            },
-            cancel,
-        )
-        .await;
+                if let Some(p) = parse_progress(actual_line) {
+                    emit(
+                        &app_cb,
+                        PipelineEvent::Downloading {
+                            video_id: id_cb.clone(),
+                            percent: p.percent,
+                            total: p.total,
+                            speed: p.speed,
+                            eta: p.eta,
+                        },
+                    );
+                }
+            }
+        };
+
+        // Prefer the user-updated AppData yt-dlp over the bundled
+        // sidecar. This lets users react to YouTube extractor changes
+        // (Settings → 更新 yt-dlp) without waiting for a whatsub
+        // release. Fallback to shell-plugin sidecar when AppData copy
+        // is absent (fresh install or never updated).
+        let result = if let Some(appdata_path) = resolve_appdata_yt_dlp() {
+            run_external_with_callback(&appdata_path, &arg_refs, callback, cancel).await
+        } else {
+            run_sidecar(app, "yt-dlp", &arg_refs, callback, cancel).await
+        };
 
         match result {
             Ok(_) => break,
@@ -531,6 +563,32 @@ pub(crate) struct DownloadProgress {
     pub total: Option<String>,
     pub speed: Option<String>,
     pub eta: Option<String>,
+}
+
+/// Map a yt-dlp stderr line to a fine-grained "准备中" sub-step
+/// identifier. None for lines that don't indicate a known phase
+/// transition. Order matters: "n-sig" appears in lines also containing
+/// "Downloading" so the signature check goes first.
+fn detect_prepare_step(line: &str) -> Option<&'static str> {
+    if line.contains("Downloading n-sig")
+        || line.contains("signature deciphering")
+        || line.contains("nsig solving")
+    {
+        Some("solving-signature")
+    } else if line.contains("Downloading webpage") {
+        Some("fetching-webpage")
+    } else if line.contains("Downloading") && line.contains("player API") {
+        Some("fetching-player")
+    } else if line.contains("Downloading m3u8")
+        || line.contains("Downloading MPD")
+        || line.contains("Downloading format")
+    {
+        Some("fetching-manifest")
+    } else if line.starts_with("[info]") && line.contains("Downloading 1 format") {
+        Some("format-selected")
+    } else {
+        None
+    }
 }
 
 fn parse_progress(line: &str) -> Option<DownloadProgress> {

@@ -393,7 +393,12 @@ jobs:
 
       - name: Download static ffmpeg (arm64)
         run: |
-          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o ffmpeg.zip "${{ inputs.ffmpeg_url_macos }}"
+          # --http1.1 forces HTTP/1.1 because osxexperts.net's HTTP/2
+          # server is flaky: mid-download streams die with
+          # PROTOCOL_ERROR (err 1) on Actions runners. HTTP/1.1 has no
+          # stream layer so the same connection works reliably.
+          # -C - resumes from any partial bytes left by a prior attempt.
+          curl -L --http1.1 -C - --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o ffmpeg.zip "${{ inputs.ffmpeg_url_macos }}"
           unzip -o ffmpeg.zip -d ffmpeg-extract
           BIN=$(find ffmpeg-extract -name ffmpeg -type f | head -1)
           cp "$BIN" client/src-tauri/binaries/ffmpeg-aarch64-apple-darwin
@@ -402,8 +407,9 @@ jobs:
       - name: Download static ffprobe (arm64)
         run: |
           # osxexperts ships ffprobe in a separate zip on macOS; needed by
-          # yt-dlp for fragmented DASH/HLS streams.
-          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o ffprobe.zip "${{ inputs.ffprobe_url_macos }}"
+          # yt-dlp for fragmented DASH/HLS streams. Same --http1.1 + -C -
+          # workaround as ffmpeg above (their server's HTTP/2 is broken).
+          curl -L --http1.1 -C - --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o ffprobe.zip "${{ inputs.ffprobe_url_macos }}"
           unzip -o ffprobe.zip -d ffprobe-extract
           BIN=$(find ffprobe-extract -name ffprobe -type f | head -1)
           cp "$BIN" client/src-tauri/binaries/ffprobe-aarch64-apple-darwin

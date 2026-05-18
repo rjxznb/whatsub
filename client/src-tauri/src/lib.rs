@@ -19,7 +19,20 @@ pub fn run() {
         .manage(commands::youtube_auth::LoginState::default())
         .manage(commands::import::ImportState::default())
         .setup(|app| {
-            bridge::start_bridge(app.handle().clone());
+            // BRIDGE TEMPORARILY DISABLED for 0.1.50 to A/B test if
+            // it's the cause of "准备中" hanging 3+ min on YouTube
+            // imports (reported 2026-05-18). The bridge runs in an
+            // isolated std::thread + actix System so on paper it
+            // shouldn't affect yt-dlp at all — but the user has
+            // empirical evidence that pinning yt-dlp to 2026.03.17
+            // didn't fix it. If 0.1.50 download speed is back to
+            // normal, the bridge is somehow guilty and we'll dig
+            // into the actual mechanism. If still slow, it's not
+            // bridge.
+            //
+            // Restore by uncommenting the line below.
+            let _ = app;
+            // bridge::start_bridge(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

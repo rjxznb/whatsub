@@ -319,8 +319,55 @@ export function Settings() {
         <UpdateSection />
 
         <YtDlpSection />
+
+        <BridgeSection settings={settings} setDraft={(s) => void save(s)} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Toggle for the browser-plugin HTTP bridge. Off by default for users
+ * who don't use the plugin (no point binding a port + spawning a thread
+ * for nothing). Persists to settings.bridgeEnabled; Rust reads this
+ * synchronously in setup() so it takes effect on the next app launch.
+ */
+function BridgeSection({
+  settings,
+  setDraft,
+}: {
+  settings: Settings;
+  setDraft: (s: Settings) => void;
+}) {
+  // Treat missing field as true (legacy behavior).
+  const enabled = settings.bridgeEnabled !== false;
+  function toggle() {
+    setDraft({ ...settings, bridgeEnabled: !enabled });
+  }
+  return (
+    <section className="border-t border-zinc-800 pt-6">
+      <h2 className="font-semibold mb-1">浏览器插件桥接</h2>
+      <p className="text-xs text-zinc-500 leading-relaxed mb-3">
+        whatsub 桌面端会启动一个本机 HTTP 服务(只监听 127.0.0.1),
+        供 whatsub 浏览器插件连接,实现词汇本 / 翻译服务设置在浏览器和桌面间同步。
+        如果你没装插件,可以关掉它,**省一个常驻线程 + 一个监听端口**。
+        修改后需重启 whatsub 生效。
+      </p>
+      <label className="flex items-center gap-3 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={toggle}
+          className="w-4 h-4 accent-blue-500"
+        />
+        <span className="text-sm">
+          启用桥接服务
+          <span className="ml-2 text-[11px] text-zinc-500">
+            (默认开,没有插件可以关闭)
+          </span>
+        </span>
+      </label>
+    </section>
   );
 }
 

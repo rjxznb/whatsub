@@ -19,11 +19,15 @@ pub fn run() {
         .manage(commands::youtube_auth::LoginState::default())
         .manage(commands::import::ImportState::default())
         .setup(|app| {
-            // Bridge restored in 0.1.51 after A/B confirmed it's NOT
-            // the cause of variable yt-dlp slowdown (the slowness
-            // persisted in 0.1.50 without bridge → it's network /
-            // YouTube CDN routing variance, not our code).
-            bridge::start_bridge(app.handle().clone());
+            // Bridge: gated by settings.bridgeEnabled (default true).
+            // Users without the browser plugin can flip it off in
+            // Settings so we don't bind a port + spawn a thread for
+            // nothing. Takes effect on next launch — actix System
+            // runs forever once spawned. Default to true if settings
+            // unavailable to preserve existing plugin users' flow.
+            if bridge_enabled_from_settings() {
+                bridge::start_bridge(app.handle().clone());
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,4 +81,29 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Read `bridgeEnabled` from settings.json synchronously at startup.
+/// Returns true (= start bridge) if the field is true / missing /
+/// settings.json doesn't exist (first-launch preserve-existing-behavior).
+/// Returns false ONLY when the user has explicitly set it to false in
+/// the Settings UI.
+fn bridge_enabled_from_settings() -> bool {
+    let Ok(path) = core::paths::settings_path() else {
+        return true;
+    };
+    if !path.exists() {
+        return true;
+    }
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return true;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return true;
+    };
+    // Missing field → true (default). Present but non-bool → true (be
+    // forgiving with malformed values). Explicit false → false.
+    v.get("bridgeEnabled")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(true)
 }

@@ -71,6 +71,12 @@ export interface Settings {
    *  is the per-vendor archive. Populated lazily; missing entry = no saved
    *  credentials for that vendor (input fields show empty). */
   vendorKeys?: Record<string, { apiKey: string; model: string }>;
+  /** Whether the local-HTTP bridge for the browser plugin should bind a
+   *  port at app startup. Default true to preserve existing plugin users'
+   *  flow. Users without the plugin can flip this off so we don't claim
+   *  a port + a thread for nothing. Takes effect on next launch (actix
+   *  System spawns once in setup() and runs forever). */
+  bridgeEnabled?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -85,4 +91,5 @@ export const DEFAULT_SETTINGS: Settings = {
   cookiesFile: "",
   whisperBackend: "",
   vendorKeys: {},
+  bridgeEnabled: true,
 };

@@ -900,12 +900,21 @@ jobs:
           # PUT to Generic Packages: idempotent (same version+filename
           # overwrites). Uses --upload-file which streams without reading
           # whole file into memory — fine for 100+ MB artifacts.
+          #
+          # Timeouts (added 2026-05-18 after a publish hung 13+ min on
+          # this step with no progress): --connect-timeout 30 hard fails
+          # if jihu's TLS handshake doesn't settle; --max-time 600 caps
+          # a single upload at 10 min — 100MB at 200KB/s would just
+          # barely fit, real failure should be way under. --retry 3
+          # safe because PUT is idempotent.
           upload_file() {
             local file="$1"
             local name
             name=$(urlify "$file")
             echo "  → uploading $name ($(du -h "$file" | cut -f1))"
-            curl -sf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            curl -sf --connect-timeout 30 --max-time 600 \
+                 --retry 3 --retry-delay 5 --retry-all-errors \
+                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                  --upload-file "$file" \
                  "$API/packages/generic/whatsub/$VERSION/$name" > /dev/null
           }
@@ -926,11 +935,16 @@ jobs:
           #    jihulab's previous release manifest so latest.json stays
           #    complete for users on the un-rebuilt platform. ─────────────
           PREV_LATEST=""
-          PREV_TAG=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+          # Short timeouts on these probe GETs — non-critical (carry-over
+          # is a nicety; if jihu is slow we just skip and the manifest
+          # only lists the platforms we built this run).
+          PREV_TAG=$(curl -s --connect-timeout 15 --max-time 30 \
+                          --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                           "$API/releases?per_page=1" \
                      | jq -r '.[0].tag_name // ""')
           if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$TAG" ]; then
-            PREV_LATEST=$(curl -sL "$GITLAB_HOST/$PROJECT_PATH/-/releases/$PREV_TAG/downloads/latest.json" 2>/dev/null || echo "")
+            PREV_LATEST=$(curl -sL --connect-timeout 15 --max-time 30 \
+                               "$GITLAB_HOST/$PROJECT_PATH/-/releases/$PREV_TAG/downloads/latest.json" 2>/dev/null || echo "")
           fi
 
           # ── Build manifest with jihulab download URLs ──────────────────
@@ -1000,9 +1014,19 @@ jobs:
           # preserved (DELETE only removes the release record). On second
           # POST GitLab sees existing tag and ties new release to it
           # (ref param ignored when tag exists).
-          if curl -sf --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API/releases/$TAG" > /dev/null 2>&1; then
+          # All meta operations get short timeouts. Existence-check + DELETE
+          # are idempotent so safe to retry. The final POST that creates the
+          # release record is NOT retried (would create duplicates if a
+          # partial response came back).
+          if curl -sf --connect-timeout 15 --max-time 30 \
+                  --retry 3 --retry-delay 5 \
+                  --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                  "$API/releases/$TAG" > /dev/null 2>&1; then
             echo "Release $TAG exists — deleting + recreating to refresh asset links"
-            curl -sf -X DELETE --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API/releases/$TAG" > /dev/null
+            curl -sf --connect-timeout 15 --max-time 30 \
+                 --retry 3 --retry-delay 5 --retry-all-errors \
+                 -X DELETE --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                 "$API/releases/$TAG" > /dev/null
           fi
 
           PAYLOAD=$(jq -n \
@@ -1013,7 +1037,8 @@ jobs:
             --argjson links "$LINKS" \
             '{name:$name, tag_name:$tag, description:$desc, ref:$ref, assets:{links:$links}}')
 
-          curl -sf -X POST --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+          curl -sf --connect-timeout 15 --max-time 60 \
+               -X POST --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                --header "Content-Type: application/json" \
                --data "$PAYLOAD" \
                "$API/releases" > /dev/null

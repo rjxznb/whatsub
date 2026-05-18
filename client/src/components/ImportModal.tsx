@@ -302,7 +302,10 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
   // Monotonic id source for log lines. Increments on every push so
   // simultaneous log events get distinct React keys.
   const logIdRef = useRef(0);
-  const [showLog, setShowLog] = useState(false);
+  // Default to OPEN — too many users report "no logs visible" without
+  // realising the panel was collapsed. They can still flip it closed.
+  // The trade-off: a bit more vertical real estate during normal imports.
+  const [showLog, setShowLog] = useState(true);
 
   // Subscribe to pipeline events while submitting so we can render live progress.
   useEffect(() => {
@@ -604,6 +607,28 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                       后台下载 →
                     </button>
                   </ChecklistItem>
+
+                  {/* Raw error tail — surfaces yt-dlp's actual stderr to
+                      power users without forcing them to dig into the
+                      log panel. Most useful when ① ② ③ above don't
+                      pinpoint the cause (e.g. format unavailable,
+                      ffmpeg merge error, signature extraction failed —
+                      stuff that's specific to a particular video). */}
+                  {error && (
+                    <ChecklistItem
+                      index="④"
+                      title="详细错误信息（yt-dlp 原始输出）"
+                    >
+                      <div className="text-[10px] text-zinc-400 mb-1.5 leading-relaxed">
+                        以下是后台 yt-dlp 实际报的错(stderr 末尾)。
+                        遇到上面三条都不对症的情况下,这里通常能定位具体原因。
+                        长按选中可以拷贝。
+                      </div>
+                      <pre className="text-[10px] font-mono leading-relaxed bg-zinc-950 border border-zinc-800 rounded p-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-zinc-300 select-text">
+                        {error}
+                      </pre>
+                    </ChecklistItem>
+                  )}
 
                 </div>
 

@@ -386,6 +386,12 @@ pub async fn download(
         // ~30s preparation window is slow (webpage vs player JS vs
         // n-sig solver vs manifest). Stateful: each step is emitted at
         // most once per yt-dlp run so the UI doesn't churn.
+        //
+        // ALSO emits a redundant Log entry per substep so users with the
+        // log panel expanded see the same info, AND so the trace remains
+        // visible even if (somehow) the Preparing event handler isn't
+        // wired — defensive given how many times "no logs at all" has
+        // been reported.
         let id_step = video_id.to_string();
         let app_step = app.clone();
         let mut emitted_steps = std::collections::HashSet::<&'static str>::new();
@@ -393,6 +399,22 @@ pub async fn download(
             if !emitted_steps.insert(step) {
                 return;
             }
+            let label_zh = match step {
+                "fetching-webpage" => "获取视频信息",
+                "fetching-player" => "获取播放器",
+                "solving-signature" => "解算签名 (常是最慢的一步)",
+                "fetching-manifest" => "获取清晰度列表",
+                "format-selected" => "格式已选,即将开始下载",
+                _ => step,
+            };
+            emit(
+                &app_step,
+                PipelineEvent::Log {
+                    video_id: id_step.clone(),
+                    source: "whatsub".into(),
+                    line: format!("准备中 → {label_zh}"),
+                },
+            );
             emit(
                 &app_step,
                 PipelineEvent::Preparing {
@@ -440,7 +462,30 @@ pub async fn download(
         // (Settings → 更新 yt-dlp) without waiting for a whatsub
         // release. Fallback to shell-plugin sidecar when AppData copy
         // is absent (fresh install or never updated).
-        let result = if let Some(appdata_path) = resolve_appdata_yt_dlp() {
+        //
+        // Emit a "[whatsub] starting yt-dlp" marker BEFORE spawn so
+        // users see immediate evidence the pipeline is running even
+        // when yt-dlp itself is slow to produce stderr (some yt-dlp
+        // versions are silent for 5-10s on first request — would look
+        // like "stuck with no logs" otherwise).
+        let appdata = resolve_appdata_yt_dlp();
+        let source_label = match &appdata {
+            Some(p) => format!("AppData ({})", p.display()),
+            None => "内置版本".into(),
+        };
+        emit(
+            app,
+            PipelineEvent::Log {
+                video_id: video_id.to_string(),
+                source: "whatsub".into(),
+                line: format!(
+                    "启动 yt-dlp ({source_label}) — 后台={}, attempt={}/{}",
+                    background, attempt, max_attempts
+                ),
+            },
+        );
+
+        let result = if let Some(appdata_path) = appdata {
             run_external_with_callback(&appdata_path, &arg_refs, callback, cancel).await
         } else {
             run_sidecar(app, "yt-dlp", &arg_refs, callback, cancel).await

@@ -38,31 +38,39 @@ function App() {
     void mountDownloadQueueListener();
   }, []);
   return (
-    // LicenseGate is the OUTERMOST gate: until the user enters a valid
-    // license key, none of the routing / settings / update-checker code
-    // runs. This is intentional — pre-activation we don't want background
-    // network calls (LLM keys, updater, etc.) firing.
-    <LicenseGate>
-      <BrowserRouter>
-        <BackendListener />
-        <Routes>
-          <Route path="/" element={<Navigate to="/library" replace />} />
-          <Route
-            path="/library"
-            element={
-              <FirstRunGate>
-                <Library />
-              </FirstRunGate>
-            }
-          />
-          <Route path="/player/:videoId" element={<Player />} />
-          <Route path="/vocab" element={<Vocab />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
-        <UpdateChecker />
-        <DownloadQueueWidget />
-      </BrowserRouter>
-    </LicenseGate>
+    // LicenseGate is the OUTERMOST gate for the *app* — routing, FirstRun
+    // setup, BackendListener, etc. don't mount until the user has a valid
+    // license (or active trial). HOWEVER the updater MUST mount even when
+    // license=NEEDS_KEY: a user stuck on the activation screen (trial
+    // expired, no key yet) still benefits from an update prompt — maybe
+    // the new version fixes whatever's blocking them. UpdateChecker is
+    // hoisted out of LicenseGate's children to ensure that.
+    //
+    // (UpdateChecker has no router dependencies — pure useUpdater hook +
+    // localStorage + JSX — so sitting outside BrowserRouter is fine.)
+    <>
+      <LicenseGate>
+        <BrowserRouter>
+          <BackendListener />
+          <Routes>
+            <Route path="/" element={<Navigate to="/library" replace />} />
+            <Route
+              path="/library"
+              element={
+                <FirstRunGate>
+                  <Library />
+                </FirstRunGate>
+              }
+            />
+            <Route path="/player/:videoId" element={<Player />} />
+            <Route path="/vocab" element={<Vocab />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+          <DownloadQueueWidget />
+        </BrowserRouter>
+      </LicenseGate>
+      <UpdateChecker />
+    </>
   );
 }
 

@@ -51,6 +51,10 @@ on:
         description: 'Node.js version bundled as sidecar (used by yt-dlp for YouTube n-challenge). Pick an LTS minor — see https://nodejs.org/en/about/previous-releases'
         required: true
         default: '22.11.0'
+      yt_dlp_tag:
+        description: 'yt-dlp release tag to bundle (or "latest" for rolling — but pinning is recommended to avoid surprise perf/regression from upstream updates between releases). See https://github.com/yt-dlp/yt-dlp/releases'
+        required: true
+        default: '2026.03.17'
       dry_run:
         description: 'Build artifacts only — do not publish to release repo'
         type: boolean
@@ -183,8 +187,17 @@ jobs:
 
       - name: Download yt-dlp
         run: |
+          $tag = "${{ inputs.yt_dlp_tag }}"
+          # "latest" gets the rolling /latest/download/ URL; a specific
+          # tag like 2026.03.17 hits the immutable release asset URL.
+          $url = if ($tag -eq "latest") {
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+          } else {
+            "https://github.com/yt-dlp/yt-dlp/releases/download/$tag/yt-dlp.exe"
+          }
+          Write-Host "Fetching yt-dlp from: $url"
           Invoke-WebRequest `
-            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -Uri $url `
             -OutFile "client/src-tauri/binaries/yt-dlp-x86_64-pc-windows-msvc.exe" `
             -UseBasicParsing
 
@@ -417,8 +430,16 @@ jobs:
 
       - name: Download yt-dlp
         run: |
-          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin \
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          TAG="${{ inputs.yt_dlp_tag }}"
+          # "latest" gets the rolling /latest/download/ URL; a specific
+          # tag like 2026.03.17 hits the immutable release asset URL.
+          if [ "$TAG" = "latest" ]; then
+            URL="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          else
+            URL="https://github.com/yt-dlp/yt-dlp/releases/download/$TAG/yt-dlp_macos"
+          fi
+          echo "Fetching yt-dlp from: $URL"
+          curl -L --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 -o client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin "$URL"
           chmod +x client/src-tauri/binaries/yt-dlp-aarch64-apple-darwin
 
       # Bundled node for yt-dlp's YouTube n-challenge JS solver — same reason

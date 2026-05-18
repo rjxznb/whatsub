@@ -58,6 +58,8 @@ pub fn run() {
             commands::license::license_save_state,
             commands::license::trial_read_state,
             commands::license::trial_save_state,
+            commands::license::license_activate_http,
+            commands::license::license_trial_start_http,
             commands::youtube_auth::site_presets,
             commands::youtube_auth::site_logins_list,
             commands::youtube_auth::site_login_pending,

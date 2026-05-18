@@ -8,7 +8,30 @@ import type {
   TrialState,
   TrialStartResponse,
 } from '../types/license';
-import { ACTIVATE_ENDPOINT, TRIAL_START_ENDPOINT } from '../types/license';
+/**
+ * Map a Rust-side reqwest error string (as returned by the
+ * license_activate_http / license_trial_start_http commands) to a
+ * user-friendly Chinese message + technical footer. The Rust side
+ * tags errors with stable prefixes: timeout / connect / request /
+ * decode / network / http <N> / parse. Anything not matching falls
+ * through to a generic "network error" message with the raw string
+ * appended so power users can still diagnose.
+ */
+function friendlyNetworkMessage(raw: string): string {
+  if (/^timeout/i.test(raw)) {
+    return '请求超时（30 秒）—— 网络太慢或服务器无响应。\n详情:' + raw;
+  }
+  if (/^connect/i.test(raw)) {
+    return '无法连接到激活服务器 —— DNS 解析失败或网络阻断。\n常见原因:① 没联网 ② 系统时间不对导致 TLS 握手失败 ③ 杀软或代理拦截了 whatsub.eversay.cc。\n详情:' + raw;
+  }
+  if (/^http /i.test(raw)) {
+    return '服务器返回异常 —— 可能是后端维护中,稍后再试。\n详情:' + raw;
+  }
+  if (/tls|certificate|ssl/i.test(raw)) {
+    return 'TLS 握手失败 —— 系统时间不正确,或杀软 / 防火墙正在做 SSL 注入。请校准系统时间后重试。\n详情:' + raw;
+  }
+  return '网络错误:' + raw;
+}
 
 /**
  * License gate state. Mounted once at app root via `<LicenseGate>`. The
@@ -195,50 +218,25 @@ export const useLicense = create<LicenseStore>((set, get) => ({
 
     set({ activating: true, error: null });
 
-    let resp: Response;
-    try {
-      // 30s timeout: post-migration (2026-05-09) this hits our Aliyun
-      // ECS at whatsub.eversay.cc with typical mainland latency <200ms,
-      // so 30s is generous headroom for slow networks. The Cloudflare
-      // Workers + D1 era needed this for GFW-throttled TLS handshake
-      // (5-10s first-hit); it's retired but the guard stays defensive.
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30_000);
-      try {
-        resp = await fetch(ACTIVATE_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            key,
-            fingerprint: device.fingerprint,
-            deviceLabel: device.deviceLabel,
-          }),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      set({
-        activating: false,
-        error: {
-          kind: 'network',
-          message: /aborted/i.test(msg)
-            ? '请求超时（30 秒），可能是网络太慢，请检查网络后重试'
-            : '网络错误：' + msg,
-        },
-      });
-      return false;
-    }
-
+    // POST goes through Rust (reqwest) instead of WebView fetch — bypasses
+    // WebView2 quirks (CSP/CORS/cert chain/AV-injected MITM/etc.) that
+    // surface to JS as a useless "TypeError: Failed to fetch". Rust gives
+    // us categorised errors (timeout / connect / tls / etc.) we can map
+    // to actionable copy. 30s timeout enforced inside the Rust command.
     let data: ActivateResponse;
     try {
-      data = (await resp.json()) as ActivateResponse;
-    } catch {
+      data = await invoke<ActivateResponse>('license_activate_http', {
+        args: {
+          key,
+          fingerprint: device.fingerprint,
+          deviceLabel: device.deviceLabel,
+        },
+      });
+    } catch (e) {
+      const msg = String(e);
       set({
         activating: false,
-        error: { kind: 'unknown', message: `服务器返回异常 (HTTP ${resp.status})` },
+        error: { kind: 'network', message: friendlyNetworkMessage(msg) },
       });
       return false;
     }
@@ -313,39 +311,21 @@ type FetchTrialResult =
 
 /** POST /api/trial/start. Idempotent on fingerprint — repeated calls
  *  return the SAME expiresAt the server first issued (anti-bypass).
- *  See docs/whatsub-trial-server-snippet.md for the server contract. */
+ *  See docs/whatsub-trial-server-snippet.md for the server contract.
+ *
+ *  Same Rust-side reqwest path as activate() — see comment there for
+ *  why we don't use WebView fetch. */
 async function fetchTrialFromServer(
   fingerprint: string,
   deviceLabel: string,
 ): Promise<FetchTrialResult> {
-  let resp: Response;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
-    try {
-      resp = await fetch(TRIAL_START_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fingerprint, deviceLabel }),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: msg };
-  }
-
-  if (!resp.ok) {
-    return { ok: false, error: `HTTP ${resp.status}` };
-  }
-
   let data: TrialStartResponse;
   try {
-    data = (await resp.json()) as TrialStartResponse;
-  } catch {
-    return { ok: false, error: `HTTP ${resp.status} — malformed response` };
+    data = await invoke<TrialStartResponse>('license_trial_start_http', {
+      args: { fingerprint, deviceLabel },
+    });
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
 
   if (data.status === 'granted' || data.status === 'already_used') {

@@ -89,6 +89,10 @@ pub fn run() {
             commands::youtube_auth::site_login_cancel,
             commands::youtube_auth::site_login_remove,
             commands::youtube_auth::site_logins_clear,
+            commands::auth::auth_send_code,
+            commands::auth::auth_verify_code,
+            commands::auth::auth_me,
+            commands::auth::auth_logout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

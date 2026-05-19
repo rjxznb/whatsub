@@ -329,11 +329,11 @@ Out of scope for Plan D (desktop doesn't write yet — in-player save still loca
 
 ## 7. Migration / deployment
 
-**Plan D is local-only per user instruction.** No git push, no docker deploy, no server schema apply on the live DB. Everything below describes the eventual deploy path; implementer's job ends at "all tests pass locally + desktop `tauri dev` smoke works against a locally-running server".
+**Server is deployed normally; desktop is local-only.** Per user clarification: the server endpoints must be live so the desktop can hit them. Desktop changes stay on the dev machine.
 
-### Server (local only)
+### Server (full deploy, standard recipe)
 
-1. **Schema bootstrap SQL** lives in `schema.sql`:
+1. **Schema bootstrap** appended to `schema.sql`:
 
    ```sql
    INSERT INTO app_settings (key, value, updated_at)
@@ -343,32 +343,43 @@ Out of scope for Plan D (desktop doesn't write yet — in-player save still loca
    ON CONFLICT (key) DO NOTHING;
    ```
 
-   Applied automatically by pg-mem in tests; goes live on 47.93.87.206 only when user manually runs the existing `scp + docker exec psql` recipe.
+   This makes any pre-existing curator-written data implicitly "published" (visible to clients immediately on deploy). Without this row, `/browse` would return 0 rows until first publish.
 
-2. **Build:** `pnpm build` locally; no `docker build` for prod image; no `docker compose up -d`.
+2. **git push** on `whatsub-license/main` (carries the new endpoints + schema delta + admin SPA additions).
 
-3. **For end-to-end smoke:** implementer runs `pnpm start` (or equivalent) to bring up the server on localhost:3002 against a local Postgres OR runs `pnpm test` against pg-mem. Either is sufficient to validate the new endpoints.
+3. **Apply schema:**
+   ```bash
+   scp schema.sql root@47.93.87.206:/tmp/schema.sql
+   ssh root@47.93.87.206 "docker exec -i enghub-postgres-1 \
+     psql -U whatsub_license_user -d whatsub_license < /tmp/schema.sql"
+   ```
 
-### Admin SPA (local only)
+4. **Docker build + load + recreate** via standard recipe:
+   ```bash
+   docker build -t whatsub-license:latest .
+   docker save whatsub-license:latest | gzip > /tmp/img.tar.gz
+   scp /tmp/img.tar.gz root@47.93.87.206:/tmp/
+   ssh root@47.93.87.206 "docker load < /tmp/img.tar.gz && \
+     cd /opt/whatsub && docker compose --env-file .env up -d --force-recreate whatsub-license"
+   ```
 
-Static change to `public/admin/index.html` ships with the server. Implementer can verify by visiting `http://localhost:3002/admin/` after starting the local server.
+5. **Smoke**: hit `/api/license/corpus/versions` (with a real session) + admin SPA's 推送更新 button.
+
+6. **Backward compat:** Old desktop clients (Plan C era) hitting `/browse` after deploy will see the new filter applied. Pre-existing data is grandfathered in by the bootstrap INSERT, so the filter is a no-op on day one — clients see the same data they saw before. Future admin curate writes are drafts until 推送更新.
+
+### Admin SPA
+
+Static change to `public/admin/index.html`. Ships with the server container rebuild. No separate deploy.
 
 ### Desktop (local only)
 
-Implementer runs `cargo check`, `pnpm typecheck`, `pnpm test -- --run`, `pnpm build`, and `pnpm tauri dev` smoke. Point the `SERVER_BASE` constant temporarily at `http://localhost:3002/api/license` if testing against local server; otherwise it still hits prod (and the new endpoints will 404 there since prod hasn't been updated — that's expected).
+Implementer runs `cargo check`, `pnpm typecheck`, `pnpm test -- --run`, `pnpm build`, and `pnpm tauri dev` smoke against the live (post-deploy) server. **No git push, no Tauri bundle, no release.** When user is ready to ship desktop changes, that's a separate step (probably a future Tauri auto-update release).
 
-**No push, no bundle, no release.**
+`SERVER_BASE` in the new Rust commands defaults to `https://whatsub.eversay.cc/api/license` — so as long as the server deploy succeeds (steps 1-5 above), desktop locally will hit the new endpoints correctly.
 
 ### Plugin
 
 No changes.
-
-### When user is ready to ship
-
-1. `git push` from both repos
-2. Apply schema (1 INSERT) via existing recipe
-3. Docker build + scp + load + compose up -d for `whatsub-license`
-4. Desktop: future Tauri auto-update release (not Plan D's job)
 
 ---
 

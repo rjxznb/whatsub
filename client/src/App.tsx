@@ -6,29 +6,13 @@ import { Settings } from "./pages/Settings";
 import { Corpus } from "./pages/Corpus";
 import { FirstRunGate } from "./components/FirstRunGate";
 import { LicenseGate } from "./components/LicenseGate";
+import { LicenseSessionGate } from "./components/LicenseSessionGate";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
-import { useAuth } from "./store/auth";
-import { AuthCard } from "./components/AuthCard";
 import "./App.css";
-
-function AuthGate({ children }: { children: React.ReactNode }) {
-  const status = useAuth((s) => s.status);
-  const refresh = useAuth((s) => s.refresh);
-  useEffect(() => { void refresh(); }, [refresh]);
-  if (status === 'unknown') return <div className="p-8 text-zinc-400">加载中…</div>;
-  if (status === 'unauthed') {
-    return (
-      <div className="min-h-screen bg-zinc-900 flex items-center justify-center p-4">
-        <AuthCard />
-      </div>
-    );
-  }
-  return <>{children}</>;
-}
 
 /** Listens globally for whisper backend detection events emitted from Rust on
  *  every transcribe. Persists the latest value into settings.json so the
@@ -67,7 +51,7 @@ function App() {
     // localStorage + JSX — so sitting outside BrowserRouter is fine.)
     <>
       <LicenseGate>
-        <AuthGate>
+        <LicenseSessionGate>
           <BrowserRouter>
             <BackendListener />
             <Routes>
@@ -87,7 +71,7 @@ function App() {
             </Routes>
             <DownloadQueueWidget />
           </BrowserRouter>
-        </AuthGate>
+        </LicenseSessionGate>
       </LicenseGate>
       <UpdateChecker />
     </>

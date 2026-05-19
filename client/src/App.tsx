@@ -3,7 +3,7 @@ import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Library } from "./pages/Library";
 import { Player } from "./pages/Player";
 import { Settings } from "./pages/Settings";
-import { Vocab } from "./pages/Vocab";
+import { Corpus } from "./pages/Corpus";
 import { FirstRunGate } from "./components/FirstRunGate";
 import { LicenseGate } from "./components/LicenseGate";
 import { UpdateChecker } from "./components/UpdateChecker";
@@ -81,7 +81,8 @@ function App() {
                 }
               />
               <Route path="/player/:videoId" element={<Player />} />
-              <Route path="/vocab" element={<Vocab />} />
+              <Route path="/corpus" element={<Corpus />} />
+              <Route path="/vocab" element={<Navigate to="/corpus" replace />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
             <DownloadQueueWidget />

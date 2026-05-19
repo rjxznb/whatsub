@@ -242,11 +242,11 @@ export function Library() {
           + Import
         </button>
         <Link
-          to="/vocab"
+          to="/corpus"
           className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
-          title="我的词汇本"
+          title="公共语料库"
         >
-          ⭐ 词汇本
+          📚 语料库
         </Link>
         <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
           ⚙

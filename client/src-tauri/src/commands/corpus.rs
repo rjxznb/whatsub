@@ -154,3 +154,28 @@ pub async fn corpus_phrase_detail<R: Runtime>(
     let body = resp.text().await.map_err(|e| e.to_string())?;
     serde_json::from_str::<PhraseDetail>(&body).map_err(|e| e.to_string())
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct VersionsResp {
+    pub mine: i64,
+    pub public: i64,
+}
+
+#[tauri::command]
+pub async fn corpus_versions<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<VersionsResp, String> {
+    let token = require_token(&app)?;
+    let client = Client::new();
+    let resp = client
+        .get(format!("{}/corpus/versions", SERVER_BASE))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("http_{}", resp.status().as_u16()));
+    }
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    serde_json::from_str::<VersionsResp>(&body).map_err(|e| e.to_string())
+}

@@ -320,7 +320,7 @@ export function Settings() {
 
         <YtDlpSection />
 
-        <BridgeSection settings={settings} setDraft={(s) => void save(s)} />
+        <BridgeSection settings={settings} save={save} />
       </div>
     </div>
   );
@@ -331,40 +331,75 @@ export function Settings() {
  * who don't use the plugin (no point binding a port + spawning a thread
  * for nothing). Persists to settings.bridgeEnabled; Rust reads this
  * synchronously in setup() so it takes effect on the next app launch.
+ *
+ * Save serialisation:
+ *   The naive `onChange={() => save({...})}` pattern lets rapid clicks
+ *   fire concurrent invoke()'s, which can land on disk in non-click
+ *   order. We instead `await save()` inside an `isSaving` guard so:
+ *   ① clicks during the in-flight save are ignored (idempotent — UI
+ *   already reflects the pending target); ② we have a clean place to
+ *   show "保存中..." then "已保存". Belt-and-suspenders.
  */
 function BridgeSection({
   settings,
-  setDraft,
+  save,
 }: {
   settings: Settings;
-  setDraft: (s: Settings) => void;
+  save: (s: Settings) => Promise<void>;
 }) {
   // Treat missing field as true (legacy behavior).
   const enabled = settings.bridgeEnabled !== false;
-  function toggle() {
-    setDraft({ ...settings, bridgeEnabled: !enabled });
+  const [phase, setPhase] = useState<"idle" | "saving" | "saved">("idle");
+
+  async function toggle() {
+    if (phase === "saving") return; // race guard
+    setPhase("saving");
+    try {
+      await save({ ...settings, bridgeEnabled: !enabled });
+      setPhase("saved");
+      // Auto-revert the "已保存" badge so the UI doesn't permanently
+      // claim a save just happened.
+      setTimeout(() => setPhase("idle"), 1500);
+    } catch {
+      setPhase("idle");
+    }
   }
+
   return (
     <section className="border-t border-zinc-800 pt-6">
       <h2 className="font-semibold mb-1">浏览器插件桥接</h2>
       <p className="text-xs text-zinc-500 leading-relaxed mb-3">
         whatsub 桌面端会启动一个本机 HTTP 服务(只监听 127.0.0.1),
         供 whatsub 浏览器插件连接,实现词汇本 / 翻译服务设置在浏览器和桌面间同步。
-        如果你没装插件,可以关掉它,**省一个常驻线程 + 一个监听端口**。
-        修改后需重启 whatsub 生效。
+        如果你没装插件,可以关掉它,
+        <span className="text-zinc-300">省一个常驻线程 + 一个监听端口</span>。
       </p>
-      <label className="flex items-center gap-3 cursor-pointer select-none">
+      <label
+        className={
+          "flex items-center gap-3 select-none " +
+          (phase === "saving" ? "cursor-wait opacity-60" : "cursor-pointer")
+        }
+      >
         <input
           type="checkbox"
           checked={enabled}
-          onChange={toggle}
-          className="w-4 h-4 accent-blue-500"
+          onChange={() => void toggle()}
+          disabled={phase === "saving"}
+          className="w-4 h-4 accent-blue-500 disabled:opacity-50"
         />
         <span className="text-sm">
           启用桥接服务
           <span className="ml-2 text-[11px] text-zinc-500">
             (默认开,没有插件可以关闭)
           </span>
+          {phase === "saving" && (
+            <span className="ml-2 text-[11px] text-blue-300">保存中...</span>
+          )}
+          {phase === "saved" && (
+            <span className="ml-2 text-[11px] text-green-400">
+              ✓ 已保存(重启 whatsub 后生效)
+            </span>
+          )}
         </span>
       </label>
     </section>

@@ -4,27 +4,33 @@
 
 ## 下载
 
-最新版本 **v0.1.23**（2026-05-07，Win 改 NSIS 安装包 + 主程序更名 whatsub.exe）：
+最新版本 **v0.1.53**（2026-05-19,准备中阶段拆 5 步 + 排查清单加 yt-dlp 原始错误 + 默认展开日志面板）:
 
-| 平台 | 下载（**国内推荐**）| 下载（GitHub 备用）| 说明 |
+> 不需要总盯版本号 —— 装上之后会自动检测更新,bottom-right 弹 toast 提示。
+
+| 平台 | 下载(**国内推荐**)| 下载(GitHub 备用) | 说明 |
 |------|---------------------|--------------------|------|
-| Windows 10/11 x64 | [whatsub_0.1.23_x64-setup.exe](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.23/downloads/whatsub_0.1.23_x64-setup.exe) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.23/whatsub_0.1.23_x64-setup.exe) | NSIS 安装包，双击装到当前用户、无需管理员权限。**老版本（v0.1.22 及以前的 .msi 用户）请先在「程序和功能」里卸载老的 whatsub，再装新的 .exe**——两个安装系统的注册表入口不互通 |
-| macOS Apple Silicon | [whatsub_0.1.23_aarch64.dmg](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.23/downloads/whatsub_0.1.23_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.23/whatsub_0.1.23_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证，双击 .dmg → **务必拖进 Applications 文件夹再打开**（直接从下载目录打开会触发 macOS App Translocation，自动更新会写不进去） |
+| Windows 10/11 x64 | [whatsub_0.1.53_x64-setup.exe](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.53/downloads/whatsub_0.1.53_x64-setup.exe) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.53/whatsub_0.1.53_x64-setup.exe) | NSIS 安装包,双击装到当前用户、无需管理员权限。**老版本(v0.1.22 及以前的 .msi 用户)请先在「程序和功能」里卸载老的 whatsub,再装新的 .exe** —— 两个安装系统的注册表入口不互通 |
+| macOS Apple Silicon | [whatsub_0.1.53_aarch64.dmg](https://jihulab.com/rjxznb-group/whatsub-release/-/releases/v0.1.53/downloads/whatsub_0.1.53_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.53/whatsub_0.1.53_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证,双击 .dmg → **务必拖进 Applications 文件夹再打开**(直接从下载目录打开会触发 macOS App Translocation,自动更新会写不进去) |
 | Intel Mac | — | — | 暂不支持 |
 
-> 国内用户推荐 jihulab 链接（极狐 GitLab，国内直连，无需梯子）；GitHub 链接作为备用。应用内自动更新会优先尝试 jihulab，失败时自动回落到 GitHub。
+> 国内用户推荐 jihulab 链接(极狐 GitLab,国内直连,无需梯子);GitHub 链接作为备用。应用内自动更新会优先尝试 jihulab,失败时自动回落到 GitHub。
 
 ## 主要功能
 
-- **本地转录**：whisper.cpp 在本机跑，不上传音频；自动检测 GPU
-  - Windows：Vulkan 后端，NVIDIA / AMD / Intel 显卡都加速
-  - Mac：Metal 后端，Apple Silicon 原生
+- **本地转录**:whisper.cpp 在本机跑,不上传音频;自动检测 GPU
+  - Windows:Vulkan 后端,NVIDIA / AMD / Intel 显卡都加速
+  - Mac:Metal 后端,Apple Silicon 原生
   - 无 GPU 自动 fallback CPU
-- **任意 LLM**：DeepSeek / OpenAI / Kimi / Claude / Gemini / 智谱 / Qwen / SiliconFlow / Ollama，10 个预设 + 自定义
-- **YouTube 导入**：内置 yt-dlp，支持 cookies.txt 绕年龄/地区限制；可选画质（480p / 720p / 1080p / 原画）
-- **字幕导出**：英文 / 中文 / 双语 SRT，或将带高亮的字幕烧录进视频导出 MP4（可选 高 / 标准 / 流畅 三档画质），也支持都不勾字幕直接流复制原视频
-- **词汇本**：⭐ 收藏重点短语，跨视频汇总，CSV 导出，深链跳回原片对应字幕段
-- **断点续传**：字幕识别引擎下载、长视频 AI 解析都可暂停/继续，状态自动落盘
+- **任意 LLM**:DeepSeek / OpenAI / Kimi / Claude / Gemini / 智谱 / Qwen / SiliconFlow / Ollama,10 个预设 + 自定义
+- **多站点视频导入**:内置 yt-dlp,支持 YouTube / B 站 / Instagram / X / TikTok 等;可选画质(480p / 720p / 1080p / 原画)
+- **可视化 cookies 登录**:启动你电脑上的 Edge / Chrome 在独立 profile 里登录目标站点,whatsub 通过 CDP 抓 cookies。会员视频 / 年龄限制 / 私有视频都能下载
+- **yt-dlp 用户可自更新**:Settings → 更新 yt-dlp 一键下载最新版到 AppData,YouTube 哪天换 player JS 不用等 whatsub 发版
+- **字幕导出**:英文 / 中文 / 双语 SRT,或将带高亮的字幕烧录进视频导出 MP4(可选 高 / 标准 / 流畅 三档画质),也支持都不勾字幕直接流复制原视频
+- **词汇本**:⭐ 收藏重点短语,跨视频汇总,CSV 导出,深链跳回原片对应字幕段
+- **断点续传**:字幕识别引擎下载、长视频 AI 解析都可暂停/继续,状态自动落盘
+- **24 小时免费试用**:首次启动自动领,期间所有功能可用;过期后输入授权码继续(3 台设备共享,永久有效)
+- **浏览器插件桥接**(0.1.46+):本机 HTTP 服务,供 whatsub 浏览器插件同步词汇本 / LLM 设置。不用插件可在 Settings 里关掉
 
 ## 首次配置
 

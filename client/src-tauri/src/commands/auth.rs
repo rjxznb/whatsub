@@ -181,3 +181,47 @@ pub async fn auth_logout<R: Runtime>(app: AppHandle<R>) -> Result<AuthResult, St
     auth::clear_auth(&app)?;
     Ok(AuthResult { ok: true, reason: None })
 }
+
+#[derive(Serialize)]
+struct FromLicenseReq<'a> {
+    #[serde(rename = "licenseKey")]
+    license_key: &'a str,
+}
+
+#[derive(Deserialize)]
+struct FromLicenseResp {
+    #[serde(rename = "sessionToken")]
+    session_token: String,
+    #[serde(rename = "expiresAt")]
+    expires_at: i64,
+}
+
+/// Exchange a license key for a session token.
+/// Calls `POST /auth/from-license` and persists the resulting session locally.
+/// Email is left empty — `auth_me` must be called after to populate it.
+#[tauri::command]
+pub async fn auth_from_license<R: Runtime>(
+    app: AppHandle<R>,
+    license_key: String,
+) -> Result<AuthResult, String> {
+    let client = Client::new();
+    let body = serde_json::to_string(&FromLicenseReq { license_key: &license_key })
+        .map_err(|e| e.to_string())?;
+    let (status, body_val) =
+        post_json_body(&client, &format!("{}/auth/from-license", SERVER_BASE), body).await?;
+    if status.is_success() {
+        let v: FromLicenseResp =
+            serde_json::from_value(body_val).map_err(|e| e.to_string())?;
+        auth::set_auth(
+            &app,
+            &AuthState {
+                session_token: v.session_token,
+                email: String::new(),
+                expires_at: v.expires_at,
+            },
+        )?;
+        Ok(AuthResult { ok: true, reason: None })
+    } else {
+        Ok(AuthResult { ok: false, reason: Some(map_reason(&body_val)) })
+    }
+}

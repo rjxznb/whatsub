@@ -78,7 +78,9 @@ Routes (in `bridge/routes.rs`):
 - `GET /settings/llm` — extension reads the LLM provider/key/baseUrl currently configured.
 - `POST /settings/llm/handoff` — extension hands a fresh LLM config over with a native confirm dialog (handoff.rs).
 
-CORS allowed only for `chrome-extension://*` and `moz-extension://*` origins. Toggle: `settings.bridgeEnabled` (default `true`). Disabled users have NO listening port + NO actix thread. Toggle requires restart (actix System lives for the process; no clean stop wired up yet).
+CORS allowed only for `chrome-extension://*` and `moz-extension://*` origins. Toggle: `settings.bridgeEnabled` (default `true`). Disabled users have NO listening port + NO actix thread.
+
+Runtime stop (0.1.55+): `BridgeState { handle: Mutex<Option<ServerHandle>> }` lives in Tauri-managed state. `start_bridge` uses an mpsc channel to send the `ServerHandle` back to the caller; the Settings toggle invokes `bridge_set_enabled(enabled: bool)` which either spawns a fresh actix thread (enable) or calls `handle.stop(true).await` to graceful-shutdown (disable). No restart needed.
 
 ## yt-dlp resolution order
 
@@ -213,5 +215,7 @@ Updater state lives in a module-level zustand store in `useUpdater.ts` (not comp
 - ffprobe bundled but yt-dlp can't reach it (see 踩过的坑).
 - Burn-in export = libx264 only, no NVENC. 1–2× realtime CPU.
 - Tauri updater plugin doesn't disk-cache across app restarts — close mid-download + reopen + click = re-download from byte 0. ~80 lines to fix; deferred.
-- Bridge `settings.bridgeEnabled` toggle requires app restart to take effect — actix System has no clean stop wired up. Would need a `Server::handle().stop(true)` + persistent handle to flip on the fly; deferred until anyone actually asks.
+<!-- Bridge runtime stop was deferred-then-implemented in 0.1.55. -->
+<!-- Settings.bridgeEnabled toggle now flips at runtime via the      -->
+<!-- bridge_set_enabled command — see bridge/mod.rs.                  -->
 - No way to shorten yt-dlp's player-JS sigsolver time. `--socket-timeout` only bounds TCP connect. Long YouTube videos with large DASH manifests can sit in "准备中" for minutes regardless of our retry budget.

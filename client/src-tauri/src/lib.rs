@@ -18,15 +18,23 @@ pub fn run() {
         .manage(commands::models::ModelDownloadState::default())
         .manage(commands::youtube_auth::LoginState::default())
         .manage(commands::import::ImportState::default())
+        .manage(bridge::BridgeState::default())
         .setup(|app| {
             // Bridge: gated by settings.bridgeEnabled (default true).
             // Users without the browser plugin can flip it off in
-            // Settings so we don't bind a port + spawn a thread for
-            // nothing. Takes effect on next launch — actix System
-            // runs forever once spawned. Default to true if settings
-            // unavailable to preserve existing plugin users' flow.
+            // Settings — `bridge_set_enabled` command toggles it at
+            // runtime now (no restart needed). At startup we honour
+            // the on-disk setting so users who explicitly turned it
+            // off don't see it come back.
             if bridge_enabled_from_settings() {
-                bridge::start_bridge(app.handle().clone());
+                if let Some(h) = bridge::start_bridge(app.handle().clone()) {
+                    use tauri::Manager;
+                    if let Some(state) = app.try_state::<bridge::BridgeState>() {
+                        if let Ok(mut g) = state.handle.lock() {
+                            *g = Some(h);
+                        }
+                    }
+                }
             }
             Ok(())
         })
@@ -70,6 +78,7 @@ pub fn run() {
             commands::license::license_trial_start_http,
             commands::yt_dlp::yt_dlp_get_status,
             commands::yt_dlp::yt_dlp_update,
+            bridge::bridge_set_enabled,
             commands::youtube_auth::site_presets,
             commands::youtube_auth::site_logins_list,
             commands::youtube_auth::site_login_pending,

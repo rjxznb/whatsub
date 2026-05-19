@@ -355,12 +355,20 @@ function BridgeSection({
     if (phase === "saving") return; // race guard
     setPhase("saving");
     try {
-      await save({ ...settings, bridgeEnabled: !enabled });
+      const next = !enabled;
+      // Order: persist to disk FIRST so a crash mid-toggle doesn't
+      // leave the on-disk setting out of sync with the live state.
+      // Then flip the live actix server. The runtime flip is async —
+      // the actix System graceful-stop drains in-flight requests,
+      // typically <100ms but can be up to a few seconds under load.
+      await save({ ...settings, bridgeEnabled: next });
+      await invoke("bridge_set_enabled", { enabled: next });
       setPhase("saved");
       // Auto-revert the "已保存" badge so the UI doesn't permanently
       // claim a save just happened.
       setTimeout(() => setPhase("idle"), 1500);
-    } catch {
+    } catch (e) {
+      console.error("[whatsub] bridge toggle failed:", e);
       setPhase("idle");
     }
   }
@@ -397,7 +405,7 @@ function BridgeSection({
           )}
           {phase === "saved" && (
             <span className="ml-2 text-[11px] text-green-400">
-              ✓ 已保存(重启 whatsub 后生效)
+              ✓ 已{enabled ? "启动" : "关闭"}
             </span>
           )}
         </span>

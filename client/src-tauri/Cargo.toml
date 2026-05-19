@@ -72,6 +72,4 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 # whisper child processes mid-flight instead of letting them finish
 # silently in the background.
 tokio-util = "0.7"
-actix-web = "4.9"
-actix-cors = "0.7"
 

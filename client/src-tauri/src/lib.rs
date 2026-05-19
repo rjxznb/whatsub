@@ -74,6 +74,9 @@ pub fn run() {
             commands::auth::auth_verify_code,
             commands::auth::auth_me,
             commands::auth::auth_logout,
+            commands::corpus::corpus_browse,
+            commands::corpus::corpus_mine,
+            commands::corpus::corpus_phrase_detail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

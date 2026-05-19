@@ -8,8 +8,7 @@ interface AuthStore {
   email: string | null;
   hasActiveLicense: boolean;
   refresh: () => Promise<void>;
-  sendCode: (email: string) => Promise<{ ok: boolean; reason?: string }>;
-  verifyCode: (email: string, code: string) => Promise<{ ok: boolean; reason?: string }>;
+  authFromLicense: (licenseKey: string) => Promise<{ ok: boolean; reason?: string }>;
   logout: () => Promise<void>;
 }
 
@@ -46,12 +45,8 @@ export const useAuth = create<AuthStore>((set, get) => ({
     }
   },
 
-  sendCode: async (email: string) => {
-    return invoke<AuthResult>('auth_send_code', { email });
-  },
-
-  verifyCode: async (email: string, code: string) => {
-    const r = await invoke<AuthResult>('auth_verify_code', { email, code });
+  authFromLicense: async (licenseKey: string) => {
+    const r = await invoke<AuthResult>('auth_from_license', { licenseKey });
     if (r.ok) await get().refresh();
     return r;
   },

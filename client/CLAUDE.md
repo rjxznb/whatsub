@@ -6,7 +6,7 @@ Tauri 2 desktop app for English subtitle learning. Pipeline: import (yt-dlp / lo
 
 ## Stack
 
-Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`, `node`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs). License + trial HTTP runs in Rust via `reqwest` (NOT WebView fetch — see 踩过的坑). Browser-plugin bridge uses `actix-web` on a separate `std::thread`.
+Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`, `node`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs). License + trial + corpus HTTP runs in Rust via `reqwest` (NOT WebView fetch — see 踩过的坑). Tag-chip browse cache uses `tauri-plugin-store` (LazyStore). Bridge module (`bridge/`) was deleted 2026-05-18 — plugin + desktop now both talk to `whatsub-license` directly; no localhost peer-to-peer sync.
 
 ## Layout
 
@@ -67,20 +67,31 @@ Side streams: `ModelDownload` (model fetch), `Exporting → Exported` (burn-in),
 - **24h trial mode (TRIAL_ACTIVE).** First launch with no license: POST `/api/license/trial/start` returns `expiresAt` (server-authoritative — same fingerprint always gets the SAME expiresAt, so wiping `trial.json` doesn't farm new trials). App fully usable but `TrialBanner` countdown at top; banner's 「激活完整版」 button flips `mode: TRIAL_ACTIVE → NEEDS_KEY`. `LicenseGate.resumeTrial()` action can flip back if user hits the activation page by accident and trial is still valid.
 - **License + trial HTTP runs in Rust, NOT WebView fetch.** Both endpoints (`license_activate_http` / `license_trial_start_http` in `commands/license.rs`) wrap `reqwest::Client::builder().timeout(30s)` and POST from native side, bypassing WebView2's network stack quirks (CSP/CORS/cert chain/antivirus SSL inspection that all surface as a useless `TypeError: Failed to fetch`). On error, Rust returns prefixed strings (`timeout:` / `connect:` / `tls:` / `http <N>:`) which `store/license.ts::friendlyNetworkMessage()` maps to actionable Chinese copy.
 
-## Browser plugin bridge
+## License-key → session auto-login
 
-`bridge/` module spawns an **actix-web HTTP server bound to 127.0.0.1** (port-races over `[51737, 53401, 59283, 62015]`) so the whatsub browser extension can sync vocabulary + LLM-settings handoff with the desktop app. Runs on a dedicated `std::thread` with its own `actix_web::rt::System` — isolated from Tauri's tokio runtime, no shared state beyond `AppHandle`.
+Desktop never asks the user for an email/OTP. `LicenseSessionGate` (mounted once at app root) fires-and-forgets `useAuth.authFromLicense(licenseKey)` on mount — Rust command `auth_from_license` (commands/auth.rs) POSTs `/api/auth/from-license` with the user's already-activated license key, gets back a 30-day sessionToken, persists to `app_data_dir/auth.json`. Subsequent corpus calls (`corpus_browse` / `corpus_mine` / `corpus_tags` / `corpus_phrase_detail` / `corpus_versions`) attach the bearer.
 
-Routes (in `bridge/routes.rs`):
-- `GET /ping` — health + version banner. Used by the extension to discover the desktop is running.
-- `POST /vocab` + `POST /vocab/batch` — extension pushes vocab cards into `vocabulary.json` (shallow-merge so user notes survive desktop re-saves).
-- `GET /vocab` — extension reads the user's full vocab.
-- `GET /settings/llm` — extension reads the LLM provider/key/baseUrl currently configured.
-- `POST /settings/llm/handoff` — extension hands a fresh LLM config over with a native confirm dialog (handoff.rs).
+`LicenseSessionGate` is **non-blocking by design** — if the server call fails or the user is offline, the app still renders normally (library, vocab, player, settings all work). Only the `/corpus` page reads `useAuth.status` and shows a 「云端未连接 + 重试」 inline UI when the session isn't ready. The gate is purely an initializer; it never gates the rest of the app behind a full-screen blocker.
 
-CORS allowed only for `chrome-extension://*` and `moz-extension://*` origins. Toggle: `settings.bridgeEnabled` (default `true`). Disabled users have NO listening port + NO actix thread.
+## Corpus page — multi-tag chip browse
 
-Runtime stop (0.1.55+): `BridgeState { handle: Mutex<Option<ServerHandle>> }` lives in Tauri-managed state. `start_bridge` uses an mpsc channel to send the `ServerHandle` back to the caller; the Settings toggle invokes `bridge_set_enabled(enabled: bool)` which either spawns a fresh actix thread (enable) or calls `handle.stop(true).await` to graceful-shutdown (disable). No restart needed.
+`/corpus` (`pages/Corpus.tsx`) replaces the older fixed-18-scene tree with a flat multi-tag chip model that mirrors the server's `tags.list[]` storage.
+
+Layout:
+```
+[← Library | 语料库 | ↻]
+[公共 / 我的]                              (tab strip)
+[chip1] [chip2] [chip3] ... [清除(N)]      (tag chip wrap, scope-aware)
+[phrase list]      | [phrase detail + YouTube embed + 例句出处]
+```
+
+- `CorpusTagChips` pulls tags from `useCorpusTags(scope)` which invokes `corpus_tags` Rust command (which calls `/api/corpus/tags?scope=public|mine`). 18 official scenes are pinned in canonical order, custom tags after a divider. Multi-select AND.
+- `useCorpusList(scope)` SWR-style cache: reads server version via `corpus_versions`, compares to `tauri-plugin-store`-cached version, refetches only when stale. Scope = `{mode: 'mine'|'browse', tags: string[]}` — tags array participates in cache key so each filter combo caches separately.
+- `CorpusPhraseList` shows row title + meaning + inline tag chips per row.
+- `CorpusPhraseDetail` shows `📚 公共例句出处` + `⭐ 我的例句出处` lists. Each instance has a clickable `▶ MM:SS` button (resolved via `instance.source.timestampSec ?? parseYouTubeUrl(url).startSec`) that re-seeks the embedded YouTube iframe.
+- `YouTubeEmbed` uses `youtube-nocookie.com/embed/...` (Tracking Prevention bypass) + `allow="encrypted-media; picture-in-picture; clipboard-write"`. No autoplay — WebView2 blocks unmuted autoplay by default and the failed-load leaves the iframe blank.
+
+Cache storage: `corpus_cache.json` via `tauri-plugin-store` LazyStore (see `lib/corpusCache.ts`). Two version keys (`mineVersion`, `publicVersion`) + per-scope data keys (`mineData:tag,sig` / `publicData:tag,sig`). Refresh button invalidates everything + bumps a render key so all children remount.
 
 ## yt-dlp resolution order
 
@@ -124,7 +135,7 @@ pnpm test               # Vitest
 pnpm typecheck          # tsc --noEmit
 pnpm tauri build        # → src-tauri/target/release/bundle/
 
-cd src-tauri && cargo test    # NB: library + settings tests pollute real %APPDATA%/whatsub/
+cd src-tauri && cargo test    # safe: tests use temp paths only (see "tests must use temp paths" rule below)
 ```
 
 > Dev mode: Tauri puts sidecars at `target/debug/<basename>.exe` (no triple). If you delete those during cleanup, dev spawn fails with `os error 2`.
@@ -200,6 +211,8 @@ Updater state lives in a module-level zustand store in `useUpdater.ts` (not comp
 
 - **stderr chunks from `run_sidecar` callback are NOT line-aligned.** `tauri-plugin-shell`'s `CommandEvent::Stderr(bytes)` delivers raw byte chunks, possibly containing multiple `\n`s. `parse_progress` and `parse_whisper_progress` use single-line patterns (`strip_prefix("[progress] ")` / `find("progress =")`), so multi-line chunks fail to parse OR only the first match registers — losing intermediate progress events. Both `ytdlp.rs` and `whisper.rs` callbacks must iterate `chunk.lines()` before invoking parse helpers. Hit 2026-05-18 (0.1.44): "准备中" turned green simultaneously with "下载视频" because every Downloading event was being dropped.
 
+- **Rust `#[cfg(test)]` blocks must NEVER call `paths::*_path()` directly.** Earlier `commands/library.rs` and `commands/settings.rs` test modules ran `fs::remove_file(paths::library_index_path())` / `save_settings(...)` against the REAL `%APPDATA%/whatsub/` paths — so `cargo test` wiped the user's library.json + settings.json (DeepSeek key, etc. all gone). Fixed 2026-05-20 by extracting pure-memory helpers (`upsert_in_memory`, `set_status_in_memory`) and `path`-injectable variants (`save_settings_to(path, value)`, `get_settings_from(path)`); tests now operate on `Library::default()` or `std::env::temp_dir()` paths. **When adding a new Rust command that touches a user-data path, never let its tests call the production path resolver.** Mirror the pattern: extract the logic to take an injectable path, test that.
+
 - **Validation errors in ImportModal must NOT share state with real download errors.** The error-dialog auto-open effect (`useEffect` watching `error`) triggers the troubleshooting checklist whenever `error` is non-empty. A simple `setError("请输入 URL")` for empty-URL validation accidentally pops the VPN/cookies dialog — actively misleading. Use a separate `validationError` state for input validation; reserve `error` for actual yt-dlp / ffmpeg / whisper failures.
 
 - **JiHu GitLab API curl without `--connect-timeout` can hang the release job indefinitely.** Default curl waits forever on stalled TLS handshake. 0.1.49 publish step hung 13+ min on "Mirror to JiHu GitLab" before manual cancel. All curl calls in that workflow step now have `--connect-timeout 15-30 --max-time 30-600` matched to operation type. POST that creates the release record stays non-retried (`--retry` would risk duplicate records); idempotent ops (PUT package upload, DELETE, GETs) all have `--retry 3 --retry-all-errors`.
@@ -210,12 +223,9 @@ Updater state lives in a module-level zustand store in `useUpdater.ts` (not comp
 
 - All OpenAI-compatible vendors share one API-key slot — switching DeepSeek ↔ Kimi may lose the prior key (vendorKeys stash exists but switch logic isn't fully wired).
 - `settings.modelsDir` change does NOT migrate existing `.bin` files.
-- Rust tests pollute real `%APPDATA%/whatsub/`. Should use temp dir.
 - ARM64 Windows / Intel Mac not built.
 - ffprobe bundled but yt-dlp can't reach it (see 踩过的坑).
 - Burn-in export = libx264 only, no NVENC. 1–2× realtime CPU.
 - Tauri updater plugin doesn't disk-cache across app restarts — close mid-download + reopen + click = re-download from byte 0. ~80 lines to fix; deferred.
-<!-- Bridge runtime stop was deferred-then-implemented in 0.1.55. -->
-<!-- Settings.bridgeEnabled toggle now flips at runtime via the      -->
-<!-- bridge_set_enabled command — see bridge/mod.rs.                  -->
 - No way to shorten yt-dlp's player-JS sigsolver time. `--socket-timeout` only bounds TCP connect. Long YouTube videos with large DASH manifests can sit in "准备中" for minutes regardless of our retry budget.
+- Personal-corpus 我的 tab loads via cached SWR but doesn't show a global "正在同步" state; user has to click 刷新 if they just added a tag and want to see counts update.

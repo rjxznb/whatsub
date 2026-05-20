@@ -53,9 +53,29 @@ pub struct LibraryEntry {
     pub analysis_style: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFolder {
+    pub id: String,
+    pub name: String,
+    pub video_ids: Vec<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum LibraryItemRef {
+    Video { id: String },
+    Folder { id: String },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Library {
     pub videos: Vec<LibraryEntry>,
+    #[serde(default)]
+    pub folders: Vec<LibraryFolder>,
+    #[serde(default, rename = "topLevelOrder")]
+    pub top_level_order: Vec<LibraryItemRef>,
 }
 
 fn read_index() -> AppResult<Library> {
@@ -64,7 +84,15 @@ fn read_index() -> AppResult<Library> {
         return Ok(Library::default());
     }
     let raw = fs::read_to_string(&path)?;
-    let lib: Library = serde_json::from_str(&raw)?;
+    let mut lib: Library = serde_json::from_str(&raw)?;
+    if lib.top_level_order.is_empty() && !lib.videos.is_empty() {
+        // Legacy file: synthesize default top-level order from the videos list.
+        lib.top_level_order = lib
+            .videos
+            .iter()
+            .map(|v| LibraryItemRef::Video { id: v.id.clone() })
+            .collect();
+    }
     Ok(lib)
 }
 
@@ -280,5 +308,43 @@ mod tests {
         let entry = lib.videos.iter().find(|v| v.id == "c").unwrap();
         assert_eq!(entry.status, LibraryStatus::Failed);
         assert_eq!(entry.last_error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn library_default_has_empty_folders_and_order() {
+        let lib = Library::default();
+        assert!(lib.folders.is_empty());
+        assert!(lib.top_level_order.is_empty());
+    }
+
+    #[test]
+    fn library_round_trips_with_folders() {
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("v1"));
+        lib.folders.push(LibraryFolder {
+            id: "f1".into(),
+            name: "Folder".into(),
+            video_ids: vec!["v1".into()],
+            created_at: "2026-05-20T00:00:00Z".into(),
+        });
+        lib.top_level_order = vec![LibraryItemRef::Folder { id: "f1".into() }];
+        let json = serde_json::to_string(&lib).unwrap();
+        let parsed: Library = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.folders.len(), 1);
+        assert_eq!(parsed.folders[0].video_ids, vec!["v1".to_string()]);
+        assert_eq!(parsed.top_level_order.len(), 1);
+        match &parsed.top_level_order[0] {
+            LibraryItemRef::Folder { id } => assert_eq!(id, "f1"),
+            _ => panic!("expected folder ref"),
+        }
+    }
+
+    #[test]
+    fn library_legacy_json_decodes_with_default_fields() {
+        let legacy = r#"{"videos":[]}"#;
+        let lib: Library = serde_json::from_str(legacy).unwrap();
+        assert_eq!(lib.videos.len(), 0);
+        assert!(lib.folders.is_empty());
+        assert!(lib.top_level_order.is_empty());
     }
 }

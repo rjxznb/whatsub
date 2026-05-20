@@ -17,8 +17,13 @@ interface PhraseDetail {
     phraseNormalized: string;
     phraseRaw: string;
     meaningZh: string | null;
-    keyNotes: string | null;
-    tags: Record<string, unknown>;
+    /** Schema migration 2026-05-20: corpus_phrases.key_notes column was
+     *  dropped and the equivalent moved to corpus_contributions.usage_note.
+     *  Server's /lookup now aggregates that field and returns it as
+     *  `usage_note` (camelCase → usageNote on this side). The UI label
+     *  stays 「📝 重点笔记」 — same intent, just the storage moved. */
+    usageNote: string | null;
+    tags: Record<string, unknown> | string[];
   };
   publicContributions: Contribution[];
   personalContributions: Contribution[];
@@ -54,7 +59,14 @@ function tagLabel(t: string): string {
   return SCENE_LABELS[t] ?? t;
 }
 
-function phraseTagList(tags: Record<string, unknown>): string[] {
+function phraseTagList(tags: Record<string, unknown> | string[] | null | undefined): string[] {
+  if (!tags) return [];
+  // Server may emit either a bare string[] (legacy curator-aggregate output)
+  // or a { list: [...] } envelope (current per-contribution shape, also what
+  // /lookup withScope now returns). Accept both.
+  if (Array.isArray(tags)) {
+    return tags.filter((t): t is string => typeof t === 'string' && t.length > 0);
+  }
   const list = (tags as { list?: unknown }).list;
   if (Array.isArray(list)) {
     return list.filter((t): t is string => typeof t === 'string' && t.length > 0);
@@ -148,24 +160,24 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
           isActive ? 'bg-zinc-800' : 'bg-zinc-900'
         }`}
       >
-        <div className="flex items-center gap-2 mb-1">
-          {sec !== null ? (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setSelectedInstance(c); }}
-              title={`跳转到 ${formatTime(sec)} 播放`}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-mono rounded bg-amber-400/15 border border-amber-400/40 text-amber-200 hover:bg-amber-400/30"
-            >
-              <Play className="h-2.5 w-2.5 fill-current" />
-              {formatTime(sec)}
-            </button>
-          ) : (
-            <span className="text-[11px] text-zinc-600">无时间戳</span>
-          )}
-          {c.source.title && (
-            <span className="text-xs text-zinc-500 truncate">{c.source.title}</span>
-          )}
-        </div>
+        {(sec !== null || c.source.title) && (
+          <div className="flex items-center gap-2 mb-1">
+            {sec !== null && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setSelectedInstance(c); }}
+                title={`跳转到 ${formatTime(sec)} 播放`}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-mono rounded bg-amber-400/15 border border-amber-400/40 text-amber-200 hover:bg-amber-400/30"
+              >
+                <Play className="h-2.5 w-2.5 fill-current" />
+                {formatTime(sec)}
+              </button>
+            )}
+            {c.source.title && (
+              <span className="text-xs text-zinc-500 truncate">{c.source.title}</span>
+            )}
+          </div>
+        )}
         <div>{c.contextSentence}</div>
       </li>
     );
@@ -271,11 +283,11 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
           })()}
         </div>
       )}
-      {detail.phrase.keyNotes && (
+      {detail.phrase.usageNote && (
         <section>
           <h3 className="text-sm text-zinc-400 mb-2">📝 重点笔记</h3>
           <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap bg-zinc-900 rounded p-3 border border-zinc-800">
-            {detail.phrase.keyNotes}
+            {detail.phrase.usageNote}
           </p>
         </section>
       )}

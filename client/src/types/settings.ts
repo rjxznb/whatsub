@@ -77,6 +77,20 @@ export interface Settings {
    *  a port + a thread for nothing. Takes effect on next launch (actix
    *  System spawns once in setup() and runs forever). */
   bridgeEnabled?: boolean;
+  /** Caption (CaptionOverlay) font hex color. Default "#FFFFFF". */
+  captionFontColor?: string;
+  /** Caption font size scale: 0.75 / 1 / 1.25 / 1.5. Default 1. */
+  captionFontScale?: number;
+  /** Caption text opacity 0–1. Default 1. */
+  captionFontOpacity?: number;
+  /** Caption background hex color (no alpha). Default "#000000". */
+  captionBackgroundColor?: string;
+  /** Caption background opacity 0–1. Default 0.7. */
+  captionBackgroundOpacity?: number;
+  /** Whether the LLM key-phrase highlight spans render inside CaptionOverlay.
+   *  When false, English text + Chinese translation render plain. The
+   *  right-side SubtitleList is unaffected. Default true. */
+  captionHighlightsEnabled?: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -92,4 +106,42 @@ export const DEFAULT_SETTINGS: Settings = {
   whisperBackend: "",
   vendorKeys: {},
   bridgeEnabled: true,
+  captionFontColor: "#FFFFFF",
+  captionFontScale: 1,
+  captionFontOpacity: 1,
+  captionBackgroundColor: "#000000",
+  captionBackgroundOpacity: 0.7,
+  captionHighlightsEnabled: true,
 };
+
+/** Projection of caption-related Settings fields with defaults applied.
+ *  CaptionOverlay + the gear-menu captions submenu both consume this. */
+export interface CaptionStyle {
+  fontColor: string;
+  fontScale: number;
+  fontOpacity: number;
+  bgColor: string;
+  bgOpacity: number;
+  highlightsEnabled: boolean;
+}
+
+export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
+  fontColor: "#FFFFFF",
+  fontScale: 1,
+  fontOpacity: 1,
+  bgColor: "#000000",
+  bgOpacity: 0.7,
+  highlightsEnabled: true,
+};
+
+export function captionStyleFromSettings(s: Settings): CaptionStyle {
+  return {
+    fontColor: s.captionFontColor ?? DEFAULT_CAPTION_STYLE.fontColor,
+    fontScale: s.captionFontScale ?? DEFAULT_CAPTION_STYLE.fontScale,
+    fontOpacity: s.captionFontOpacity ?? DEFAULT_CAPTION_STYLE.fontOpacity,
+    bgColor: s.captionBackgroundColor ?? DEFAULT_CAPTION_STYLE.bgColor,
+    bgOpacity: s.captionBackgroundOpacity ?? DEFAULT_CAPTION_STYLE.bgOpacity,
+    highlightsEnabled:
+      s.captionHighlightsEnabled ?? DEFAULT_CAPTION_STYLE.highlightsEnabled,
+  };
+}

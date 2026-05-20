@@ -300,21 +300,6 @@ export function Library() {
               setRenamingFolder({ id: menu.folder.id, currentName: menu.folder.name }),
           },
           {
-            // Library folders are virtual (just a grouping in library.json) so
-            // there is no filesystem folder to open. Closest UX match: reveal
-            // the first contained video's own directory; the user can then
-            // navigate up if they want the library root.
-            label: "在文件夹中显示",
-            onClick: () => {
-              const firstId = menu.folder.videoIds[0];
-              if (!firstId) {
-                alert("空文件夹，没有视频可以显示。");
-                return;
-              }
-              reveal(firstId).catch((e) => alert(`打开文件夹失败：${e}`));
-            },
-          },
-          {
             label: "删除文件夹",
             onClick: async () => {
               try {

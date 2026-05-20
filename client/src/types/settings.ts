@@ -91,10 +91,6 @@ export interface Settings {
    *  When false, English text + Chinese translation render plain. The
    *  right-side SubtitleList is unaffected. Default true. */
   captionHighlightsEnabled?: boolean;
-  /** Caption box pixel offset from its default centered-bottom position.
-   *  Default 0/0. Set by user drag on the overlay. */
-  captionOffsetX?: number;
-  captionOffsetY?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -116,8 +112,6 @@ export const DEFAULT_SETTINGS: Settings = {
   captionBackgroundColor: "#000000",
   captionBackgroundOpacity: 0.7,
   captionHighlightsEnabled: true,
-  captionOffsetX: 0,
-  captionOffsetY: 0,
 };
 
 /** Projection of caption-related Settings fields with defaults applied.
@@ -153,7 +147,10 @@ export function captionStyleFromSettings(s: Settings): CaptionStyle {
     bgOpacity: s.captionBackgroundOpacity ?? DEFAULT_CAPTION_STYLE.bgOpacity,
     highlightsEnabled:
       s.captionHighlightsEnabled ?? DEFAULT_CAPTION_STYLE.highlightsEnabled,
-    offsetX: s.captionOffsetX ?? DEFAULT_CAPTION_STYLE.offsetX,
-    offsetY: s.captionOffsetY ?? DEFAULT_CAPTION_STYLE.offsetY,
+    // offsetX/Y are NOT persisted in settings — they reset to 0 every time
+    // Player mounts. Caller (Player.tsx) overrides them with a per-session
+    // useState before passing the style to CaptionOverlay.
+    offsetX: 0,
+    offsetY: 0,
   };
 }

@@ -49,7 +49,12 @@ interface Props {
   captionStyle: CaptionStyle;
   /** Patch one or more caption-style Settings fields. Caller persists via
    *  useSettings().save(). */
-  onChangeCaptionStyle: (patch: Partial<AppSettings>) => void;
+  /** Patches caption-related Settings fields. Caption offset (offsetX/offsetY)
+   *  is session-only and not persisted, but rides on this same channel — the
+   *  caller (Player.tsx) routes the offset keys to local state. */
+  onChangeCaptionStyle: (
+    patch: Partial<AppSettings> & { captionOffsetX?: number; captionOffsetY?: number }
+  ) => void;
 }
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];

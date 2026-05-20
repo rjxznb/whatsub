@@ -43,11 +43,36 @@ export function Player() {
     return Number.isFinite(n) && n >= 0 ? n : null;
   })();
   const { settings, save: saveSettings } = useSettings();
+  // Caption box position is session-only — every fresh Player mount starts at
+  // (0,0) regardless of what the previous video left behind. Persisted style
+  // (color / size / opacity / highlights) still lives in settings.
+  const [captionOffset, setCaptionOffset] = useState({ x: 0, y: 0 });
   const captionStyle = useMemo(
-    () => captionStyleFromSettings(settings),
-    [settings]
+    () => ({
+      ...captionStyleFromSettings(settings),
+      offsetX: captionOffset.x,
+      offsetY: captionOffset.y,
+    }),
+    [settings, captionOffset]
   );
-  const onChangeCaptionStyle = (patch: Partial<Settings>) => {
+  const onChangeCaptionStyle = (
+    patch: Partial<Settings> & { captionOffsetX?: number; captionOffsetY?: number }
+  ) => {
+    // Offset patches go to local state (not persisted); everything else hits
+    // saveSettings.
+    if (patch.captionOffsetX !== undefined || patch.captionOffsetY !== undefined) {
+      setCaptionOffset((cur) => ({
+        x: patch.captionOffsetX ?? cur.x,
+        y: patch.captionOffsetY ?? cur.y,
+      }));
+      const { captionOffsetX: _ox, captionOffsetY: _oy, ...rest } = patch;
+      void _ox;
+      void _oy;
+      if (Object.keys(rest).length > 0) {
+        void saveSettings({ ...settings, ...rest });
+      }
+      return;
+    }
     void saveSettings({ ...settings, ...patch });
   };
   const { library, reload } = useLibrary();

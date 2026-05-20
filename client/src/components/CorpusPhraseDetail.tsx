@@ -166,7 +166,17 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
             {sec !== null && (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); setSelectedInstance(c); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // Always force a reseek — even if this row is already the
+                  // selected instance. setSelectedInstance with the same
+                  // reference is a no-op (no state change → no key change),
+                  // so the iframe wouldn't remount and the player would stay
+                  // wherever the user paused. Bumping seekNonce always
+                  // triggers the key change.
+                  setSelectedInstance(c);
+                  setSeekNonce((n) => n + 1);
+                }}
                 title={`跳转到 ${formatTime(sec)} 播放`}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-mono rounded bg-amber-400/15 border border-amber-400/40 text-amber-200 hover:bg-amber-400/30"
               >

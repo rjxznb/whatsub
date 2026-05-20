@@ -39,7 +39,13 @@ export function YouTubeEmbed({ videoId, startSec = 0, className }: Props) {
   // fallback path. Autoplay also dropped — Edge WebView2 blocks unmuted
   // autoplay without a user gesture and the resulting failed-load can
   // leave the iframe blank.
-  const src = `https://www.youtube-nocookie.com/embed/${videoId}?start=${startSec}&rel=0`;
+  //
+  // start MUST be an integer — YouTube silently treats `?start=5.6` as
+  // invalid and falls back to 0, so the saved-with-decimal timestamps
+  // (e.g. 5.646522 captured from player.getCurrentTime()) wouldn't seek
+  // at all. Math.floor — never skip the moment, only land before it.
+  const startInt = Math.max(0, Math.floor(startSec));
+  const src = `https://www.youtube-nocookie.com/embed/${videoId}?start=${startInt}&rel=0`;
   return (
     <iframe
       src={src}

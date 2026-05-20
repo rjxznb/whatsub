@@ -6,7 +6,7 @@ Tauri 2 desktop app for English subtitle learning. Pipeline: import (yt-dlp / lo
 
 ## Stack
 
-Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`, `node`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs). License + trial + corpus HTTP runs in Rust via `reqwest` (NOT WebView fetch — see 踩过的坑). Tag-chip browse cache uses `tauri-plugin-store` (LazyStore). Bridge module (`bridge/`) was deleted 2026-05-18 — plugin + desktop now both talk to `whatsub-license` directly; no localhost peer-to-peer sync.
+Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · framer-motion (Library reorder FLIP) · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`, `node`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs). License + trial + corpus HTTP runs in Rust via `reqwest` (NOT WebView fetch — see 踩过的坑). Tag-chip browse cache uses `tauri-plugin-store` (LazyStore). Bridge module (`bridge/`) was deleted 2026-05-18 — plugin + desktop now both talk to `whatsub-license` directly; no localhost peer-to-peer sync.
 
 ## Layout
 
@@ -41,6 +41,10 @@ library/<video_id>/
 ```
 
 `videoDir` per library entry is **frozen at import time** — changing `settings.libraryDir` doesn't orphan old entries. `library_freeze_paths` patches legacy entries before any libraryDir change. `assetProtocol.scope` covers `$DATA/whatsub/**` + `$LOCALDATA/whatsub/**` + `**/*.{mp4,jpg,...}` so custom paths still load.
+
+`library.json` schema (since 2026-05-20): `{ videos: LibraryEntry[], folders: LibraryFolder[], topLevelOrder: LibraryItemRef[] }`. The legacy `{ videos: [...] }` shape auto-upgrades on first read (Rust `read_index` synthesises `topLevelOrder` from `videos` when missing). Folders are virtual — no filesystem analog; `folder.videoIds` references entries by id and a video at the top level appears as `{type: "video", id}` in `topLevelOrder`. See "Library folders + drag-to-merge" below.
+
+`settings.json` new caption-style fields (2026-05-20): `captionFontColor` / `captionFontScale` / `captionFontOpacity` / `captionBackgroundColor` / `captionBackgroundOpacity` / `captionHighlightsEnabled`. All optional, defaults applied via `mergeWithDefaults` so old settings.json files keep working. Caption box X/Y offset (drag-to-move) is **deliberately NOT persisted** — every Player remount starts at (0,0), see "Caption style menu + draggable overlay" below.
 
 ## Pipeline event stream
 
@@ -92,6 +96,59 @@ Layout:
 - `YouTubeEmbed` uses `youtube-nocookie.com/embed/...` (Tracking Prevention bypass) + `allow="encrypted-media; picture-in-picture; clipboard-write"`. No autoplay — WebView2 blocks unmuted autoplay by default and the failed-load leaves the iframe blank.
 
 Cache storage: `corpus_cache.json` via `tauri-plugin-store` LazyStore (see `lib/corpusCache.ts`). Two version keys (`mineVersion`, `publicVersion`) + per-scope data keys (`mineData:tag,sig` / `publicData:tag,sig`). Refresh button invalidates everything + bumps a render key so all children remount.
+
+### `/api/corpus/lookup?withScope=true` field shape
+
+Server (since 2026-05-20) returns `{ phrase: { meaning_zh, usage_note, tags: {list} }, publicContributions, personalContributions }`. Three things to know:
+
+1. **`meaning_zh` / `usage_note` fall back to caller's own contribution** when no `whatsub-curator` row exists. Aggregation in `aggregatePhraseViewWithPersonal()` in `whatsub-license/src/routes/corpus.ts`. Curator wins; caller's newest-non-null is the fallback. This is what lets users see their own saved meaning + usage note in the detail panel before a curator publishes anything.
+2. **`tags` wraps as `{list}`** to match the corpus_contributions JSONB shape (was a bare array under legacy `aggregateCuratorView`). The desktop client's `phraseTagList()` accepts both shapes.
+3. **`personalContributions` is now caller-scoped** (filtered by `contributor_id === deriveContributorId(session.email)`). Earlier "non-curator" filter included everyone else's rows under the user's `⭐ 我的例句出处` header — that was a privacy leak; the user could read other users' saved notes.
+
+Client-side Rust struct `BrowseItem` uses `usage_note ↔ usageNote` serde mapping (was `key_notes ↔ keyNotes`; column was renamed in the 2026-05-20 schema migration). The TS side reads `phrase.usageNote`. UI label stays 「📝 重点笔记」 — same intent.
+
+### `/api/corpus/versions` `public` field
+
+The route now returns `{ mine, public }` — `mine = MAX(contributed_at) WHERE contributor_id = <caller>`, `public = MAX(contributed_at) WHERE contributor_id = 'whatsub-curator'`. Both bump on hide-no-longer or hide-resurrect because `MAX` recomputes from the current visible set. The desktop's `useCorpusList` cache compares for equality and refetches on any mismatch, so a downward bump is still a consistent signal.
+
+Pre-Plan-D server builds returned only `{ mine }`. Both Rust (`#[serde(default)] public: i64`) and TS (`public?: number`) tolerate missing field — fall to 0, public cache check never short-circuits, browse always refetches. No UX regression, just no caching benefit for browse until server is upgraded.
+
+## Library folders + drag-to-merge
+
+`pages/Library.tsx` renders single-level folders via `library.topLevelOrder` instead of a flat `library.videos.filter()`. Drag-to-merge UX:
+
+- Drag video A onto another video B with **overlap ≥ 0.85** → merge into a new folder. Threshold lives in `utils/overlap.ts::MERGE_THRESHOLD` (was 0.9 originally, briefly 0.7, settled at 0.85 — 0.7 made every reasonable drop into a merge, 0.9 required bullseye precision).
+- Drop with overlap < 0.85 → reorder. The grid renders an `effectiveOrder` computed by `useMemo` — source is inserted at the hover target's index in `library.topLevelOrder` — so the user sees a live preview of where the dragged card will land.
+- Drop on a folder card with overlap ≥ 0.85 → add the video to that folder.
+- Folder source can never merge — `resolveDropMode(folder→*)` always returns reorder. Folders can be rearranged at the top level but not nested.
+
+**FLIP-style smooth reorder preview** uses `framer-motion`'s `<motion.div layout>`. Each card in the topLevelOrder branch is wrapped — when `effectiveOrder` changes, `layout` measures rect-before / rect-after and animates the transform difference with a spring (stiffness 350, damping 30). Search-mode rendering is unwrapped (filter-driven, doesn't reorder).
+
+**Folder open uses an iPad-style modal** (`components/FolderOpenView.tsx`). Click captures the card's `getBoundingClientRect()`; the modal mounts at that rect and transitions `transform: scale + translate` to a centered (80vw × 75vh) target over 300ms ease-out. Esc / backdrop-click reverses the animation.
+
+**Merge animation** (`components/MergeAnimationLayer.tsx`): on a merge drop, two thumbnail clones fly toward the midpoint (300ms), a blue Apple-Finder-style folder pops with bounce (250ms), clones fade (200ms). After 750ms the layer calls `mergeIntoFolder([target, source])` server-side then opens the rename dialog seeded with "新建文件夹".
+
+Rust side (`src-tauri/src/commands/library.rs`) — pure in-memory helpers `create_folder_in_memory` / `delete_folder_in_memory` / `rename_folder_in_memory` / `move_video_to_folder_in_memory` / `merge_into_folder_in_memory` / `set_top_level_order_in_memory`, all callable from tests with a `&mut Library`. The `library_*` Tauri commands are thin `read_index → helper(...)? → write_index` wrappers. Error propagation uses `From<String> for AppError` (no `AppError::Internal` variant exists). ID generation is `sha256(now_secs || now_nanos)[..10]` — no `rand` crate dependency (intentional; existing deps only).
+
+## Caption style menu + draggable overlay
+
+Player gear button opens a 3-view menu (`pages/VideoPlayer.tsx` `menuView` state: `null | "root" | "speed" | "captions" | "captions.*"`):
+
+- **root**: 「播放速度」 + 「字幕设置」 rows.
+- **speed**: existing playback-speed list (Check icon ✓ marks selection — unified with captions).
+- **captions**: row-list YouTube-style. Each row drills into a deep submenu (`captions.fontColor` / `captions.fontScale` / `captions.fontOpacity` / `captions.highlights` / `captions.bgColor` / `captions.bgOpacity`). 8-color palette uses Chinese labels (白色 / 黄色 / 青色 / 绿色 / 蓝色 / 品红色 / 红色 / 黑色). Picking an option does NOT auto-back — user stays in the deep view to compare. Back arrow at the top returns to captions level. Bottom has a 「重置字幕设置」 button that patches all 6 fields to defaults in one call.
+
+Menu container: `w-[280px] bg-zinc-900/30 backdrop-blur-2xl`. Gear icon rotates 30° via `transition-transform` while menu is open.
+
+**`CaptionOverlay` is draggable** — `mousedown` on the box starts a transient drag (local `dragDelta` useState), `mousemove` updates the visible `transform: translate(dx, dy)`, `mouseup` calls `onPositionChange(x, y)` → Player.tsx sets local `captionOffset` state. **Position is session-only, NOT persisted to settings** — every fresh Player mount resets to (0, 0). This was a deliberate UX choice; the user originally asked for persistence then asked for per-video reset.
+
+**`backdrop-blur-sm` is conditional on `bgOpacity > 0`** — the blur filter is independent of bg-color alpha. At 0% background opacity the user expects the video to show through crisply; if blur stayed on, the picture behind the caption looked "as if through a lens". Toggle the class off when opacity is 0.
+
+## Library progress-bar hover thumbnail
+
+YouTube-style scrubber preview in `components/VideoPlayer.tsx`. A hidden `<video>` element (separate ref, same `src` as the main player) lives above the progress bar with `display: none` until hover. On mouse-move over the progress bar, a `requestAnimationFrame`-throttled `useEffect` syncs the preview video's `currentTime` to the hovered timestamp. Render size 160×90 px (`w-40 aspect-video`) framed above the cursor with a time-label below.
+
+The preview element **stays mounted** (toggled via inline `display`) so we pay the metadata-load cost once per video open, not per hover-tick. Lag for local mp4 via the asset protocol is ~50–200ms — comparable to YouTube's storyboard previews but live-decoded.
 
 ## yt-dlp resolution order
 
@@ -218,6 +275,26 @@ Updater state lives in a module-level zustand store in `useUpdater.ts` (not comp
 - **JiHu GitLab API curl without `--connect-timeout` can hang the release job indefinitely.** Default curl waits forever on stalled TLS handshake. 0.1.49 publish step hung 13+ min on "Mirror to JiHu GitLab" before manual cancel. All curl calls in that workflow step now have `--connect-timeout 15-30 --max-time 30-600` matched to operation type. POST that creates the release record stays non-retried (`--retry` would risk duplicate records); idempotent ops (PUT package upload, DELETE, GETs) all have `--retry 3 --retry-all-errors`.
 
 - **osxexperts.net HTTP/2 stream PROTOCOL_ERROR mid-download.** macOS CI ffmpeg/ffprobe download from osxexperts.net intermittently dies at 30-60% with `HTTP/2 stream X was not closed cleanly: PROTOCOL_ERROR (err 1)`. `--retry` alone doesn't help (re-tries die at the same point). Fix: pass `--http1.1 -C - --retry 5` to curl. HTTP/1.1 has no stream layer so the bug can't trigger; `-C -` resumes from any partial bytes so reconnects don't restart from byte 0.
+
+- **Tauri 2 `dragDropEnabled: true` (the default) intercepts ALL HTML5 drag inside the webview.** Symptom: the webview-internal drag-and-drop (Library card reorder, drag-to-merge) shows the 「禁止」 cursor on every drop target — `dragover` events never fire because the OS-level OLE/COM drag handler is consuming them. Fix: set `windows[0].dragDropEnabled: false` in `tauri.conf.json`. Trade-off: `getCurrentWindow().onDragDropEvent` stops firing, so OS-level file drops (dragging a video file from Explorer into the window for import) break. Acceptable — Import button + URL input still cover the same flow.
+
+- **HTML5 dragover handlers must read `drag` state from a ref, not useState.** The native `dragover` event fires immediately after `dragstart` — too fast for React to re-render with the new state. The dragover handler's closure still sees `drag === null`, returns early without calling `preventDefault`, and the browser permanently marks the drop as 「禁止」 (no drop target). Fix: `dragRef = useRef<DragState | null>(null)` written synchronously in `onDragStart`, read synchronously in `onDragOver`. A separate `dragSt` useState mirror still drives child visual state (opacity-40, ring colors) via re-render.
+
+- **`onDragOver` early-return when cursor is over the source MUST still call `preventDefault`.** During reorder live-preview the source card animates under the cursor; if its dragover handler skips `preventDefault` (because target === source), the browser flashes 「禁止」 every frame. Always `preventDefault + dropEffect = "move"` first, only THEN check source-id and skip state update.
+
+- **`onDragLeave` must NOT clear `dragOver` state.** Cursor crossing a 1px gap between cards fires dragleave → if you clear, `effectiveOrder` flips to base, framer-motion animates back, the next dragover (half a frame later) re-sets the state, animation kicks in again. Cards visibly bounce. Solution: make `onDragLeave` a no-op; `dragOver` only changes when a new target receives dragover, or when the drag ends (`onDragEnd` / `onDrop`).
+
+- **Drop event fires on whichever element the cursor sits on at release.** With live reorder preview, the source card animates under the cursor on back→front drags; `onDrop` then runs with `target === source` and the obvious `if (target.id === drag.ref.id) return` cancels the operation. Fix: cache the last legitimately hovered target (`id + type + mode + rect`) in `dragOverRef` during `onDragOver`. `onDrop` ignores `e.currentTarget` and uses the cached target, so dropping anywhere — even on the source post-animation — still applies the reorder.
+
+- **`backdrop-blur` is independent of `background-color` alpha.** Setting `bg-black/0` (fully transparent) still leaves the blur filter active — the video behind the caption looks "through a lens" even though the box is invisible. Tie the `backdrop-blur-*` class to `bgOpacity > 0` and the user actually sees the video crisply when they pick 0%.
+
+- **`?start=` in YouTube embed URL only accepts integers.** Saved `timestampSec: 5.646522` (decimal from `player.getCurrentTime()`) becomes `?start=5.646522` → YouTube silently treats it as invalid → starts from 0. Floor before building the URL: `Math.max(0, Math.floor(startSec))`.
+
+- **React `setState(sameValue)` won't trigger child key change.** The CorpusPhraseDetail timestamp button used `setSelectedInstance(c)` only. When clicked on the already-current instance the state didn't change, the iframe's `key={instance.id}:${seekNonce}` didn't change, the iframe didn't remount, the player stayed where it was. Always bump `seekNonce` alongside `setSelectedInstance` so the key changes unconditionally.
+
+- **CSP `img-src 'self'` / `media-src 'self'` does NOT cover Tauri's asset protocol.** `convertFileSrc()` produces `http://asset.localhost/...` on Windows and `asset://localhost/...` on Mac — neither matches `'self'`. Thumbnails + videos render blank with no obvious error. Explicit CSP must include `asset: http://asset.localhost https://asset.localhost` in both `img-src` and `media-src`.
+
+- **Overflow-scroll inside a layout-driven height requires `h-full`, not `flex-1`.** `flex-1` only applies when the parent is a flex container; inside a plain block parent it's a no-op. The element ends up content-sized and `overflow-y-auto` never kicks in. Use `h-full` (or wrap the parent in `flex`) so the element has a constrained height that overflows.
 
 ## Known limitations / TODO
 

@@ -154,7 +154,12 @@ export function Library() {
     startClient: { x: number; y: number };
   }>(null);
   const [dragSt, setDragSt] = useState<null | { type: "video" | "folder"; id: string }>(null);
-  const dragOverRef = useRef<null | { targetId: string; mode: DropMode }>(null);
+  const dragOverRef = useRef<null | {
+    targetId: string;
+    targetType: "video" | "folder";
+    mode: DropMode;
+    rect: DOMRect;
+  }>(null);
   const [dragOver, setDragOver] = useState<null | { targetId: string; mode: DropMode }>(null);
 
   // Folder UI state (T11 wires open animation; T10 wires merge animation)
@@ -356,7 +361,12 @@ export function Library() {
     const targetRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const overlap = overlapRatio(dragRect, targetRect);
     const mode = resolveDropMode(drag.ref.type, target.type, overlap);
-    dragOverRef.current = { targetId: target.id, mode };
+    dragOverRef.current = {
+      targetId: target.id,
+      targetType: target.type,
+      mode,
+      rect: targetRect,
+    };
     setDragOver({ targetId: target.id, mode });
   }
 
@@ -378,29 +388,39 @@ export function Library() {
     setDragOver(null);
   }
 
-  async function onDrop(
-    e: React.DragEvent,
-    target: { type: "video" | "folder"; id: string }
-  ) {
+  async function onDrop(e: React.DragEvent) {
     e.preventDefault();
     const drag = dragRef.current;
     const dragOverNow = dragOverRef.current;
-    if (!drag || !dragOverNow || drag.ref.id === target.id) {
+
+    const cleanup = () => {
       dragRef.current = null;
       dragOverRef.current = null;
       setDragSt(null);
       setDragOver(null);
+    };
+
+    // Use the LAST hovered target (cached in dragOverRef), not the DOM card
+    // that received this drop event. Why: live reorder preview can animate
+    // the source card under the cursor (especially when dragging back→front);
+    // the drop's e.currentTarget then resolves to the source itself and
+    // source === target would erroneously cancel the drop. The cached
+    // dragOverRef holds the last legitimately hovered target with its mode
+    // and rect, which is what the user actually meant to drop on.
+    if (!drag || !dragOverNow || dragOverNow.targetId === drag.ref.id) {
+      cleanup();
       return;
     }
+
+    const target = {
+      type: dragOverNow.targetType,
+      id: dragOverNow.targetId,
+    };
     const { mode } = dragOverNow;
     const source = drag.ref;
-    // Capture rects before clearing state (for merge animation use later).
     const sourceRect = drag.startRect;
-    const targetRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    dragRef.current = null;
-    dragOverRef.current = null;
-    setDragSt(null);
-    setDragOver(null);
+    const targetRect = dragOverNow.rect;
+    cleanup();
 
     switch (mode) {
       case "reorder": {
@@ -542,7 +562,7 @@ export function Library() {
                     onDragStart={(e) => onDragStart(e, { type: "video", id: v.id })}
                     onDragOver={(e) => onDragOver(e, { type: "video", id: v.id })}
                     onDragLeave={() => onDragLeave(v.id)}
-                    onDrop={(e) => onDrop(e, { type: "video", id: v.id })}
+                    onDrop={(e) => onDrop(e)}
                     onDragEnd={onDragEnd}
                     titleNode={highlightMatch(v.title, search)}
                     durationNode={v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined}
@@ -596,7 +616,7 @@ export function Library() {
                       onDragStart={(e) => onDragStart(e, { type: "video", id: v.id })}
                       onDragOver={(e) => onDragOver(e, { type: "video", id: v.id })}
                       onDragLeave={() => onDragLeave(v.id)}
-                      onDrop={(e) => onDrop(e, { type: "video", id: v.id })}
+                      onDrop={(e) => onDrop(e)}
                       onDragEnd={onDragEnd}
                       titleNode={highlightMatch(v.title, search)}
                       durationNode={v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined}
@@ -653,7 +673,7 @@ export function Library() {
                       onDragStart={(e) => onDragStart(e, { type: "folder", id: f.id })}
                       onDragOver={(e) => onDragOver(e, { type: "folder", id: f.id })}
                       onDragLeave={() => onDragLeave(f.id)}
-                      onDrop={(e) => onDrop(e, { type: "folder", id: f.id })}
+                      onDrop={(e) => onDrop(e)}
                       onDragEnd={onDragEnd}
                     />
                     </motion.div>

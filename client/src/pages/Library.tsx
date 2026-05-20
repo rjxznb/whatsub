@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -573,8 +574,12 @@ export function Library() {
                     activeAnalysisVideoId === v.id &&
                     ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
                   return (
-                    <VideoCard
+                    <motion.div
                       key={"v-" + v.id}
+                      layout
+                      transition={{ type: "spring", stiffness: 350, damping: 30 }}
+                    >
+                    <VideoCard
                       entry={v}
                       draggedId={dragSt?.id ?? null}
                       dropFeedback={
@@ -613,6 +618,7 @@ export function Library() {
                         </>
                       }
                     />
+                    </motion.div>
                   );
                 } else {
                   const f = (library.folders ?? []).find((x) => x.id === ref.id);
@@ -621,8 +627,12 @@ export function Library() {
                     .map((vid) => library.videos.find((v) => v.id === vid))
                     .filter((v): v is LibraryEntry => Boolean(v));
                   return (
-                    <FolderCard
+                    <motion.div
                       key={"f-" + f.id}
+                      layout
+                      transition={{ type: "spring", stiffness: 350, damping: 30 }}
+                    >
+                    <FolderCard
                       folder={f}
                       videos={inside}
                       draggedId={dragSt?.id ?? null}
@@ -640,6 +650,7 @@ export function Library() {
                       onDrop={(e) => onDrop(e, { type: "folder", id: f.id })}
                       onDragEnd={onDragEnd}
                     />
+                    </motion.div>
                   );
                 }
               })}

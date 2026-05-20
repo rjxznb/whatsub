@@ -23,7 +23,11 @@ import {
 import { formatTime } from "../utils/time";
 import { CaptionOverlay } from "./CaptionOverlay";
 import type { Subtitle } from "../llm/types";
-import type { CaptionStyle, Settings as AppSettings } from "../types/settings";
+import {
+  DEFAULT_CAPTION_STYLE,
+  type CaptionStyle,
+  type Settings as AppSettings,
+} from "../types/settings";
 
 interface Props {
   src: string;
@@ -49,6 +53,24 @@ interface Props {
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
+const CAPTION_COLOR_PALETTE = [
+  "#FFFFFF",
+  "#FFEB3B",
+  "#00BCD4",
+  "#4CAF50",
+  "#2196F3",
+  "#E91E63",
+  "#F44336",
+  "#000000",
+];
+
+const FONT_SCALE_OPTIONS: { label: string; value: number }[] = [
+  { label: "小", value: 0.75 },
+  { label: "中", value: 1 },
+  { label: "大", value: 1.25 },
+  { label: "特大", value: 1.5 },
+];
+
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
   {
     src,
@@ -58,7 +80,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     showCaptions,
     onToggleCaptions,
     captionStyle,
-    onChangeCaptionStyle: _onChangeCaptionStyle,
+    onChangeCaptionStyle,
   },
   ref
 ) {
@@ -564,8 +586,181 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         <ChevronLeft className="h-4 w-4" />
                         <span>字幕设置</span>
                       </button>
-                      <div className="px-4 py-3 text-xs text-white/40">
-                        (字幕样式控件将在 Task 5 实现)
+
+                      <div className="px-4 py-3 space-y-4">
+                        {/* Font color */}
+                        <div>
+                          <div className="text-xs text-white/60 mb-2">字体颜色</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {CAPTION_COLOR_PALETTE.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                data-testid={`font-color-${c}`}
+                                onClick={() =>
+                                  onChangeCaptionStyle({ captionFontColor: c })
+                                }
+                                className={
+                                  "h-6 w-6 rounded-full border border-white/20 transition-all " +
+                                  (captionStyle.fontColor.toUpperCase() === c.toUpperCase()
+                                    ? "ring-2 ring-white scale-110"
+                                    : "hover:scale-110")
+                                }
+                                style={{ backgroundColor: c }}
+                                aria-label={c}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Font scale */}
+                        <div>
+                          <div className="text-xs text-white/60 mb-2">字号</div>
+                          <div className="grid grid-cols-4 gap-1">
+                            {FONT_SCALE_OPTIONS.map(({ label, value }) => (
+                              <button
+                                key={value}
+                                type="button"
+                                data-testid={`font-scale-${value}`}
+                                onClick={() =>
+                                  onChangeCaptionStyle({ captionFontScale: value })
+                                }
+                                className={
+                                  "rounded px-2 py-1 text-xs transition-colors " +
+                                  (captionStyle.fontScale === value
+                                    ? "bg-white/25 text-white font-semibold"
+                                    : "bg-white/5 text-white/70 hover:bg-white/15")
+                                }
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Font opacity */}
+                        <div>
+                          <div className="flex items-center justify-between text-xs text-white/60 mb-1">
+                            <span>字体不透明度</span>
+                            <span className="tabular-nums">
+                              {Math.round(captionStyle.fontOpacity * 100)}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            data-testid="slider-font-opacity"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={captionStyle.fontOpacity}
+                            onChange={(e) =>
+                              onChangeCaptionStyle({
+                                captionFontOpacity: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full h-1 cursor-pointer appearance-none rounded-full bg-white/20 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+                          />
+                        </div>
+
+                        {/* Highlight toggle */}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-white/60">重点高亮</span>
+                          <button
+                            type="button"
+                            data-testid="toggle-highlights"
+                            onClick={() =>
+                              onChangeCaptionStyle({
+                                captionHighlightsEnabled: !captionStyle.highlightsEnabled,
+                              })
+                            }
+                            aria-pressed={captionStyle.highlightsEnabled}
+                            className={
+                              "relative h-5 w-9 rounded-full transition-colors " +
+                              (captionStyle.highlightsEnabled
+                                ? "bg-blue-500"
+                                : "bg-white/20")
+                            }
+                          >
+                            <span
+                              className={
+                                "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform " +
+                                (captionStyle.highlightsEnabled
+                                  ? "translate-x-4"
+                                  : "translate-x-0.5")
+                              }
+                            />
+                          </button>
+                        </div>
+
+                        <div className="h-px bg-white/10" />
+
+                        {/* Background color */}
+                        <div>
+                          <div className="text-xs text-white/60 mb-2">背景颜色</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {CAPTION_COLOR_PALETTE.map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                data-testid={`bg-color-${c}`}
+                                onClick={() =>
+                                  onChangeCaptionStyle({ captionBackgroundColor: c })
+                                }
+                                className={
+                                  "h-6 w-6 rounded-full border border-white/20 transition-all " +
+                                  (captionStyle.bgColor.toUpperCase() === c.toUpperCase()
+                                    ? "ring-2 ring-white scale-110"
+                                    : "hover:scale-110")
+                                }
+                                style={{ backgroundColor: c }}
+                                aria-label={c}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Background opacity */}
+                        <div>
+                          <div className="flex items-center justify-between text-xs text-white/60 mb-1">
+                            <span>背景不透明度</span>
+                            <span className="tabular-nums">
+                              {Math.round(captionStyle.bgOpacity * 100)}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            data-testid="slider-bg-opacity"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={captionStyle.bgOpacity}
+                            onChange={(e) =>
+                              onChangeCaptionStyle({
+                                captionBackgroundOpacity: parseFloat(e.target.value),
+                              })
+                            }
+                            className="w-full h-1 cursor-pointer appearance-none rounded-full bg-white/20 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+                          />
+                        </div>
+
+                        {/* Reset */}
+                        <button
+                          type="button"
+                          data-testid="reset-captions"
+                          onClick={() =>
+                            onChangeCaptionStyle({
+                              captionFontColor: DEFAULT_CAPTION_STYLE.fontColor,
+                              captionFontScale: DEFAULT_CAPTION_STYLE.fontScale,
+                              captionFontOpacity: DEFAULT_CAPTION_STYLE.fontOpacity,
+                              captionBackgroundColor: DEFAULT_CAPTION_STYLE.bgColor,
+                              captionBackgroundOpacity: DEFAULT_CAPTION_STYLE.bgOpacity,
+                              captionHighlightsEnabled: DEFAULT_CAPTION_STYLE.highlightsEnabled,
+                            })
+                          }
+                          className="w-full rounded-md bg-white/10 hover:bg-white/20 px-3 py-2 text-xs text-white transition-colors"
+                        >
+                          重置字幕设置
+                        </button>
                       </div>
                     </div>
                   )}

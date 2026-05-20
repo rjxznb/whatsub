@@ -63,3 +63,77 @@ describe("VideoPlayer gear menu", () => {
     expect(queryByTestId("gear-menu")).toBeNull();
   });
 });
+
+describe("VideoPlayer captions submenu", () => {
+  function openCaptions(onChange = vi.fn()) {
+    const utils = render(
+      <VideoPlayer
+        src=""
+        captionStyle={DEFAULT_CAPTION_STYLE}
+        onChangeCaptionStyle={onChange}
+      />
+    );
+    fireEvent.click(utils.getByTitle("播放速度 / 字幕设置"));
+    fireEvent.click(utils.getByTestId("menu-row-captions"));
+    return { ...utils, onChange };
+  }
+
+  it("selecting a font color calls onChangeCaptionStyle with captionFontColor", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("font-color-#FFEB3B"));
+    expect(onChange).toHaveBeenCalledWith({ captionFontColor: "#FFEB3B" });
+  });
+
+  it("selecting a background color calls onChangeCaptionStyle with captionBackgroundColor", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("bg-color-#2196F3"));
+    expect(onChange).toHaveBeenCalledWith({ captionBackgroundColor: "#2196F3" });
+  });
+
+  it("selecting a font scale calls onChangeCaptionStyle with captionFontScale", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("font-scale-1.25"));
+    expect(onChange).toHaveBeenCalledWith({ captionFontScale: 1.25 });
+  });
+
+  it("toggling highlights flips captionHighlightsEnabled", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("toggle-highlights"));
+    expect(onChange).toHaveBeenCalledWith({ captionHighlightsEnabled: false });
+  });
+
+  it("changing bg opacity slider patches captionBackgroundOpacity", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.change(getByTestId("slider-bg-opacity"), {
+      target: { value: "0.5" },
+    });
+    expect(onChange).toHaveBeenCalledWith({ captionBackgroundOpacity: 0.5 });
+  });
+
+  it("changing font opacity slider patches captionFontOpacity", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.change(getByTestId("slider-font-opacity"), {
+      target: { value: "0.6" },
+    });
+    expect(onChange).toHaveBeenCalledWith({ captionFontOpacity: 0.6 });
+  });
+
+  it("reset button patches all 6 caption fields to defaults", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("reset-captions"));
+    expect(onChange).toHaveBeenCalledWith({
+      captionFontColor: "#FFFFFF",
+      captionFontScale: 1,
+      captionFontOpacity: 1,
+      captionBackgroundColor: "#000000",
+      captionBackgroundOpacity: 0.7,
+      captionHighlightsEnabled: true,
+    });
+  });
+
+  it("captions submenu does not close after a control interaction", () => {
+    const { getByTestId } = openCaptions();
+    fireEvent.click(getByTestId("font-color-#FFEB3B"));
+    expect(getByTestId("captions-submenu")).toBeTruthy();
+  });
+});

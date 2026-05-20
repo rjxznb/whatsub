@@ -39,7 +39,7 @@ describe("FolderCard", () => {
       />
     );
     expect(getByText("Test Folder", { exact: false })).toBeTruthy();
-    expect(getByText("3")).toBeTruthy();
+    expect(getByText("3 个视频")).toBeTruthy();
   });
 
   it("fires onClick when not in a drag operation", () => {

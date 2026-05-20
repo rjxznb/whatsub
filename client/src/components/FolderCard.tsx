@@ -75,11 +75,13 @@ export function FolderCard({
           );
         })}
       </div>
-      <div className="p-2 flex items-center gap-2">
-        <span className="truncate font-medium text-sm text-zinc-100 flex-1">
+      <div className="p-2">
+        <div className="truncate text-sm font-medium text-zinc-100">
           📁 {folder.name}
-        </span>
-        <span className="text-zinc-500 text-xs tabular-nums">{folder.videoIds.length}</span>
+        </div>
+        <div className="mt-1 text-[10px] text-zinc-400 tabular-nums">
+          {folder.videoIds.length} 个视频
+        </div>
       </div>
       {dropFeedback?.mode === "reorder" && (
         <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-400 pointer-events-none" />

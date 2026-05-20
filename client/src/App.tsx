@@ -4,6 +4,7 @@ import { Library } from "./pages/Library";
 import { Player } from "./pages/Player";
 import { Settings } from "./pages/Settings";
 import { Corpus } from "./pages/Corpus";
+import { Vocab } from "./pages/Vocab";
 import { FirstRunGate } from "./components/FirstRunGate";
 import { LicenseGate } from "./components/LicenseGate";
 import { LicenseSessionGate } from "./components/LicenseSessionGate";
@@ -66,7 +67,7 @@ function App() {
               />
               <Route path="/player/:videoId" element={<Player />} />
               <Route path="/corpus" element={<Corpus />} />
-              <Route path="/vocab" element={<Navigate to="/corpus" replace />} />
+              <Route path="/vocab" element={<Vocab />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
             <DownloadQueueWidget />

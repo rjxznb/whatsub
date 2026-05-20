@@ -17,8 +17,6 @@ import { getVersion } from "@tauri-apps/api/app";
 
 export function Settings() {
   const email = useAuth((s) => s.email);
-  const hasActiveLicense = useAuth((s) => s.hasActiveLicense);
-  const logout = useAuth((s) => s.logout);
   const { settings, load, save } = useSettings();
   const [draft, setDraft] = useState<Settings>(settings);
   const [modelDownloaded, setModelDownloaded] = useState<Record<string, boolean>>({});
@@ -135,16 +133,7 @@ export function Settings() {
       <div className="max-w-2xl mx-auto p-6 space-y-8">
         <section className="p-4 bg-zinc-900 border border-zinc-800 rounded">
           <h2 className="font-semibold mb-1">账户</h2>
-          <div className="text-xs text-zinc-400">已登录: {email ?? '—'}</div>
-          <div className="text-xs text-zinc-400 mt-1">
-            {hasActiveLicense ? '✓ 已购买' : '未购买（购买后可见公共语料库）'}
-          </div>
-          <button
-            onClick={() => { void logout(); }}
-            className="mt-3 px-3 py-1 text-xs border border-zinc-600 rounded hover:bg-zinc-800"
-          >
-            退出登录
-          </button>
+          <div className="text-xs text-zinc-400">授权邮箱: {email ?? '—'}</div>
         </section>
 
         <section>

@@ -9,19 +9,31 @@ const SERVER_BASE: &str = "https://whatsub.eversay.cc/api/license";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BrowseItem {
-    #[serde(rename = "phraseNormalized")]
+    // Server's /browse returns SQL snake_case (phrase_normalized, etc.)
+    // straight from pg, but the desktop UI uses camelCase. Map both
+    // directions explicitly via serde so the JSON shape coming from the
+    // server deserialises and the JSON we hand to the React layer keeps
+    // its existing field names. meaning_zh + contribution_count default
+    // to None/0 because /browse's SELECT doesn't include them today —
+    // adding them server-side would be the proper fix.
+    #[serde(rename(deserialize = "phrase_normalized", serialize = "phraseNormalized"))]
     pub phrase_normalized: String,
-    #[serde(rename = "phraseRaw")]
+    #[serde(rename(deserialize = "phrase_raw", serialize = "phraseRaw"))]
     pub phrase_raw: String,
-    #[serde(rename = "meaningZh")]
+    #[serde(rename(deserialize = "meaning_zh", serialize = "meaningZh"), default)]
     pub meaning_zh: Option<String>,
+    #[serde(default)]
     pub tags: serde_json::Value,
-    #[serde(rename = "contributionCount")]
+    #[serde(rename(deserialize = "contribution_count", serialize = "contributionCount"), default)]
     pub contribution_count: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BrowseResponse {
+    // Server's /browse endpoint returns the array as `phrases`; the rest of
+    // the desktop UI uses `items` everywhere (matches MineResponse). Map
+    // both directions on serde so JS sees a single `items` key.
+    #[serde(rename(deserialize = "phrases", serialize = "items"))]
     pub items: Vec<BrowseItem>,
     pub total: i64,
 }
@@ -39,6 +51,8 @@ pub struct MineItem {
     pub source: serde_json::Value,
     #[serde(rename = "contributedAt")]
     pub contributed_at: i64,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -53,19 +67,25 @@ pub struct MineResponse {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ContributionDetail {
     pub id: i64,
-    #[serde(rename = "contextSentence")]
+    // Server's /lookup withScope returns raw SQL rows (snake_case); the
+    // React layer uses camelCase. Same two-way serde rename as BrowseItem.
+    #[serde(rename(deserialize = "context_sentence", serialize = "contextSentence"))]
     pub context_sentence: String,
     pub source: serde_json::Value,
-    #[serde(rename = "contributedAt")]
+    #[serde(rename(deserialize = "contributed_at", serialize = "contributedAt"))]
     pub contributed_at: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct PhraseDetail {
-    pub phrase: BrowseItem,
-    #[serde(rename = "publicContributions")]
+    // phrase is null when the looked-up phrase is a draft (filtered by
+    // public_corpus_version). Drafts shouldn't appear in /browse so the UI
+    // typically won't request one, but the wire shape allows null, so the
+    // type does too.
+    pub phrase: Option<BrowseItem>,
+    #[serde(rename(deserialize = "publicContributions", serialize = "publicContributions"))]
     pub public_contributions: Vec<ContributionDetail>,
-    #[serde(rename = "personalContributions")]
+    #[serde(rename(deserialize = "personalContributions", serialize = "personalContributions"))]
     pub personal_contributions: Vec<ContributionDetail>,
 }
 
@@ -81,6 +101,7 @@ fn require_token<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
 pub async fn corpus_browse<R: Runtime>(
     app: AppHandle<R>,
     scene: Option<String>,
+    tags: Option<Vec<String>>,
     page: Option<i64>,
     page_size: Option<i64>,
 ) -> Result<BrowseResponse, String> {
@@ -91,6 +112,11 @@ pub async fn corpus_browse<R: Runtime>(
         .header("Authorization", format!("Bearer {}", token));
     if let Some(s) = scene {
         req = req.query(&[("scene", s)]);
+    }
+    if let Some(ts) = tags {
+        if !ts.is_empty() {
+            req = req.query(&[("tags", ts.join(","))]);
+        }
     }
     if let Some(p) = page {
         req = req.query(&[("page", p.to_string())]);
@@ -109,9 +135,48 @@ pub async fn corpus_browse<R: Runtime>(
     serde_json::from_str::<BrowseResponse>(&body).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TagCount {
+    pub tag: String,
+    pub count: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TagsResponse {
+    pub tags: Vec<TagCount>,
+}
+
+#[tauri::command]
+pub async fn corpus_tags<R: Runtime>(
+    app: AppHandle<R>,
+    scope: Option<String>,
+) -> Result<TagsResponse, String> {
+    let token = require_token(&app)?;
+    let client = Client::new();
+    let mut req = client
+        .get(format!("{}/corpus/tags", SERVER_BASE))
+        .header("Authorization", format!("Bearer {}", token));
+    if let Some(s) = scope {
+        req = req.query(&[("scope", s)]);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        if resp.status().as_u16() == 403 {
+            return Err("license_required".to_string());
+        }
+        return Err(format!("http_{}", resp.status().as_u16()));
+    }
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    serde_json::from_str::<TagsResponse>(&body).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn corpus_mine<R: Runtime>(
     app: AppHandle<R>,
+    tags: Option<Vec<String>>,
     page: Option<i64>,
     page_size: Option<i64>,
 ) -> Result<MineResponse, String> {
@@ -120,6 +185,11 @@ pub async fn corpus_mine<R: Runtime>(
     let mut req = client
         .get(format!("{}/corpus/mine", SERVER_BASE))
         .header("Authorization", format!("Bearer {}", token));
+    if let Some(ts) = tags {
+        if !ts.is_empty() {
+            req = req.query(&[("tags", ts.join(","))]);
+        }
+    }
     if let Some(p) = page {
         req = req.query(&[("page", p.to_string())]);
     }

@@ -87,14 +87,18 @@ pub fn library_get(id: String) -> AppResult<Option<LibraryEntry>> {
     Ok(lib.videos.into_iter().find(|v| v.id == id))
 }
 
-#[tauri::command]
-pub fn library_upsert(entry: LibraryEntry) -> AppResult<()> {
-    let mut lib = read_index()?;
+fn upsert_in_memory(lib: &mut Library, entry: LibraryEntry) {
     if let Some(existing) = lib.videos.iter_mut().find(|v| v.id == entry.id) {
         *existing = entry;
     } else {
         lib.videos.push(entry);
     }
+}
+
+#[tauri::command]
+pub fn library_upsert(entry: LibraryEntry) -> AppResult<()> {
+    let mut lib = read_index()?;
+    upsert_in_memory(&mut lib, entry);
     write_index(&lib)
 }
 
@@ -110,6 +114,18 @@ pub fn library_delete(id: String) -> AppResult<()> {
     Ok(())
 }
 
+fn set_status_in_memory(
+    lib: &mut Library,
+    id: &str,
+    status: LibraryStatus,
+    error: Option<String>,
+) {
+    if let Some(entry) = lib.videos.iter_mut().find(|v| v.id == id) {
+        entry.status = status;
+        entry.last_error = error;
+    }
+}
+
 #[tauri::command]
 pub fn library_set_status(
     id: String,
@@ -117,10 +133,7 @@ pub fn library_set_status(
     error: Option<String>,
 ) -> AppResult<()> {
     let mut lib = read_index()?;
-    if let Some(entry) = lib.videos.iter_mut().find(|v| v.id == id) {
-        entry.status = status;
-        entry.last_error = error;
-    }
+    set_status_in_memory(&mut lib, &id, status, error);
     write_index(&lib)
 }
 
@@ -213,6 +226,10 @@ pub fn reveal_in_explorer(path: String) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
+    // PURE IN-MEMORY TESTS ONLY. Do NOT touch paths::library_index_path() —
+    // it resolves to %APPDATA%\whatsub\library.json (the user's real library
+    // index). An earlier version of this test module called fs::remove_file
+    // on it; running `cargo test` wiped the user's entire library. Never again.
     use super::*;
 
     fn sample(id: &str) -> LibraryEntry {
@@ -234,26 +251,34 @@ mod tests {
 
     #[test]
     fn upsert_creates_then_updates() {
-        let _ = fs::remove_file(paths::library_index_path().unwrap());
-
-        library_upsert(sample("a")).unwrap();
-        let lib = library_list().unwrap();
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("a"));
         assert_eq!(lib.videos.len(), 1);
 
         let mut updated = sample("a");
         updated.title = "Updated".into();
-        library_upsert(updated).unwrap();
-        let lib = library_list().unwrap();
+        upsert_in_memory(&mut lib, updated);
         assert_eq!(lib.videos.len(), 1);
         assert_eq!(lib.videos[0].title, "Updated");
     }
 
     #[test]
     fn set_status_updates_field() {
-        let _ = fs::remove_file(paths::library_index_path().unwrap());
-        library_upsert(sample("b")).unwrap();
-        library_set_status("b".into(), LibraryStatus::Ready, None).unwrap();
-        let entry = library_get("b".into()).unwrap().unwrap();
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("b"));
+        set_status_in_memory(&mut lib, "b", LibraryStatus::Ready, None);
+        let entry = lib.videos.iter().find(|v| v.id == "b").unwrap();
         assert_eq!(entry.status, LibraryStatus::Ready);
+        assert!(entry.last_error.is_none());
+    }
+
+    #[test]
+    fn set_status_carries_error_message() {
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("c"));
+        set_status_in_memory(&mut lib, "c", LibraryStatus::Failed, Some("boom".into()));
+        let entry = lib.videos.iter().find(|v| v.id == "c").unwrap();
+        assert_eq!(entry.status, LibraryStatus::Failed);
+        assert_eq!(entry.last_error.as_deref(), Some("boom"));
     }
 }

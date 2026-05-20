@@ -7,16 +7,19 @@ const KEY_PREFIX = 'phrase:';
 export function useCorpusPhrase<T>(phraseNormalized: string | null) {
   const [data, setData] = useState<T | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!phraseNormalized) { setData(null); return; }
+    if (!phraseNormalized) { setData(null); setError(null); return; }
     setRefreshing(true);
+    setError(null);
     try {
       const fresh = await invoke<T>('corpus_phrase_detail', { phrase: phraseNormalized });
       await setCachedData(`${KEY_PREFIX}${phraseNormalized}`, fresh);
       setData(fresh);
-    } catch {
-      // keep stale
+    } catch (e) {
+      console.error('[useCorpusPhrase] refresh failed', phraseNormalized, e);
+      setError(String(e));
     } finally {
       setRefreshing(false);
     }
@@ -34,7 +37,7 @@ export function useCorpusPhrase<T>(phraseNormalized: string | null) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phraseNormalized]);
 
-  return { data, refreshing, refresh };
+  return { data, refreshing, error, refresh };
 }
 
 export async function invalidatePhrase(phraseNormalized: string): Promise<void> {

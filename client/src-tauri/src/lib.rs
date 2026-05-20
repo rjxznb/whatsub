@@ -78,6 +78,7 @@ pub fn run() {
             commands::corpus::corpus_browse,
             commands::corpus::corpus_mine,
             commands::corpus::corpus_phrase_detail,
+            commands::corpus::corpus_tags,
             commands::corpus::corpus_versions,
         ])
         .run(tauri::generate_context!())

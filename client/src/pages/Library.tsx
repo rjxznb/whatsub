@@ -242,9 +242,16 @@ export function Library() {
           + Import
         </button>
         <Link
+          to="/vocab"
+          className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
+          title="本地词汇本（划字幕收藏的短语）"
+        >
+          ⭐ 词汇本
+        </Link>
+        <Link
           to="/corpus"
           className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
-          title="公共语料库"
+          title="公共语料库（云端）"
         >
           📚 语料库
         </Link>

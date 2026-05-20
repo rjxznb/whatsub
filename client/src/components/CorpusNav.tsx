@@ -1,31 +1,22 @@
-import { NavLink } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 
 interface Props {
   onRefresh?: () => void;
   refreshing?: boolean;
 }
 
-const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `px-3 py-1.5 text-sm rounded ${
-    isActive
-      ? 'bg-zinc-800 text-zinc-100'
-      : 'text-zinc-400 hover:text-zinc-200'
-  }`;
-
 export function CorpusNav({ onRefresh, refreshing }: Props) {
   return (
-    <header className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 bg-zinc-950">
-      <nav className="flex gap-2">
-        <NavLink to="/library" className={linkClass}>
-          字幕本
-        </NavLink>
-        <NavLink to="/corpus" className={linkClass}>
-          📚 语料库
-        </NavLink>
-        <NavLink to="/settings" className={linkClass}>
-          ⚙ 设置
-        </NavLink>
-      </nav>
+    <header className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800 bg-zinc-950">
+      <Link
+        to="/library"
+        title="返回 Library"
+        className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+      >
+        <ArrowLeft className="h-5 w-5" />
+      </Link>
+      <h1 className="text-lg font-semibold flex-1">语料库</h1>
       {onRefresh && (
         <button
           onClick={onRefresh}

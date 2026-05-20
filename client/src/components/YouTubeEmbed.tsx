@@ -32,12 +32,19 @@ interface Props {
 }
 
 export function YouTubeEmbed({ videoId, startSec = 0, className }: Props) {
-  const src = `https://www.youtube.com/embed/${videoId}?start=${startSec}&autoplay=1&rel=0`;
+  // youtube-nocookie.com is YouTube's "privacy-enhanced" embed host: skips
+  // cookies until the user clicks play, which sidesteps WebView2's
+  // Tracking Prevention storage-block spam and several "navigator.plugins
+  // undefined" embed-script crashes that come from the cookie/storage
+  // fallback path. Autoplay also dropped — Edge WebView2 blocks unmuted
+  // autoplay without a user gesture and the resulting failed-load can
+  // leave the iframe blank.
+  const src = `https://www.youtube-nocookie.com/embed/${videoId}?start=${startSec}&rel=0`;
   return (
     <iframe
       src={src}
       title={`YouTube ${videoId}`}
-      allow="autoplay; encrypted-media; picture-in-picture"
+      allow="encrypted-media; picture-in-picture; clipboard-write"
       allowFullScreen
       width="100%"
       height="360"

@@ -5,25 +5,33 @@ import {
   getCachedData, setCachedData,
 } from '../lib/corpusCache';
 
-export type Scope = { mode: 'mine' } | { mode: 'browse'; scene: string };
+export type Scope =
+  | { mode: 'mine'; tags: string[] }
+  | { mode: 'browse'; tags: string[] };
 
 interface VersionsResp { mine: number; public: number }
 
-function cacheKeyForScope(scope: Scope): string {
-  return scope.mode === 'mine' ? 'mineData' : `publicData:${scope.scene}`;
+function scopeId(scope: Scope): string {
+  // Sorted so [a,b] and [b,a] hit the same cache slot.
+  const tagSig = [...scope.tags].sort().join(',');
+  return `${scope.mode}:${tagSig}`;
 }
 
-function scopeId(scope: Scope): string {
-  return scope.mode === 'mine' ? 'mine' : scope.scene;
+function cacheKeyForScope(scope: Scope): string {
+  return scope.mode === 'mine'
+    ? `mineData:${[...scope.tags].sort().join(',')}`
+    : `publicData:${[...scope.tags].sort().join(',')}`;
 }
 
 export function useCorpusList<T>(scope: Scope) {
   const [data, setData] = useState<T | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const sid = scopeId(scope);
 
   const refresh = useCallback(async (force: boolean) => {
     setRefreshing(true);
+    setError(null);
     try {
       const serverV: VersionsResp = await invoke('corpus_versions');
       const versionKey = scope.mode === 'mine' ? 'mineVersion' : 'publicVersion';
@@ -33,13 +41,14 @@ export function useCorpusList<T>(scope: Scope) {
         return;
       }
       const fresh = scope.mode === 'mine'
-        ? await invoke<T>('corpus_mine', { pageSize: 100 })
-        : await invoke<T>('corpus_browse', { scene: (scope as { mode: 'browse'; scene: string }).scene, pageSize: 100 });
+        ? await invoke<T>('corpus_mine', { tags: scope.tags, pageSize: 100 })
+        : await invoke<T>('corpus_browse', { tags: scope.tags, pageSize: 100 });
       await setCachedData(cacheKeyForScope(scope), fresh);
       await setCachedVersion(versionKey, serverVal);
       setData(fresh);
-    } catch {
-      // Network/auth/license error → keep showing cached data if any.
+    } catch (e) {
+      console.error('[useCorpusList] refresh failed', scope, e);
+      setError(String(e));
     } finally {
       setRefreshing(false);
     }
@@ -57,5 +66,5 @@ export function useCorpusList<T>(scope: Scope) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sid]);
 
-  return { data, refreshing, refresh: () => refresh(true) };
+  return { data, refreshing, error, refresh: () => refresh(true) };
 }

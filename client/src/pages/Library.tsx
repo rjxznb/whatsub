@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -152,7 +152,7 @@ export function Library() {
     startRect: DOMRect;
     startClient: { x: number; y: number };
   }>(null);
-  const [dragSt, setDragSt] = useState<string | null>(null);
+  const [dragSt, setDragSt] = useState<null | { type: "video" | "folder"; id: string }>(null);
   const dragOverRef = useRef<null | { targetId: string; mode: DropMode }>(null);
   const [dragOver, setDragOver] = useState<null | { targetId: string; mode: DropMode }>(null);
 
@@ -210,6 +210,31 @@ export function Library() {
   const visible = library.videos.filter((v) =>
     v.title.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Live preview during reorder drag: insert source at the hover target's
+  // position so the grid visibly shifts neighbors. Only fires when:
+  //   - There is an active drag and a hovered target
+  //   - The hover mode is "reorder" (merge/add don't displace)
+  //   - The source currently lives at the top level (we can't preview
+  //     pulling a video out of a folder without rearranging its parent)
+  const baseOrder = library.topLevelOrder ?? [];
+  const effectiveOrder = useMemo(() => {
+    if (!dragSt || !dragOver || dragOver.mode !== "reorder") return baseOrder;
+    const sourceAtTopLevel = baseOrder.some(
+      (r) => r.type === dragSt.type && r.id === dragSt.id
+    );
+    if (!sourceAtTopLevel) return baseOrder;
+    const filtered = baseOrder.filter(
+      (r) => !(r.type === dragSt.type && r.id === dragSt.id)
+    );
+    const targetIdx = filtered.findIndex((r) => r.id === dragOver.targetId);
+    if (targetIdx === -1) return baseOrder;
+    const sourceRef =
+      dragSt.type === "video"
+        ? { type: "video" as const, id: dragSt.id }
+        : { type: "folder" as const, id: dragSt.id };
+    return [...filtered.slice(0, targetIdx), sourceRef, ...filtered.slice(targetIdx)];
+  }, [baseOrder, dragSt, dragOver]);
 
   function handleContextMenu(e: React.MouseEvent, entry: LibraryEntry) {
     e.preventDefault();
@@ -306,7 +331,7 @@ export function Library() {
       startRect,
       startClient: { x: e.clientX, y: e.clientY },
     };
-    setDragSt(ref.id);
+    setDragSt(ref);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", `${ref.type}:${ref.id}`);
   }
@@ -503,7 +528,7 @@ export function Library() {
                   <VideoCard
                     key={"v-" + v.id}
                     entry={v}
-                    draggedId={dragSt}
+                    draggedId={dragSt?.id ?? null}
                     dropFeedback={null}
                     onContextMenu={handleContextMenu}
                     onClick={() => navigate(`/player/${v.id}`)}
@@ -540,7 +565,7 @@ export function Library() {
                   />
                 );
               })
-            : (library.topLevelOrder ?? []).map((ref) => {
+            : effectiveOrder.map((ref) => {
                 if (ref.type === "video") {
                   const v = library.videos.find((x) => x.id === ref.id);
                   if (!v) return null;
@@ -551,7 +576,7 @@ export function Library() {
                     <VideoCard
                       key={"v-" + v.id}
                       entry={v}
-                      draggedId={dragSt}
+                      draggedId={dragSt?.id ?? null}
                       dropFeedback={
                         dragOver?.targetId === v.id ? { mode: dragOver.mode } : null
                       }
@@ -600,7 +625,7 @@ export function Library() {
                       key={"f-" + f.id}
                       folder={f}
                       videos={inside}
-                      draggedId={dragSt}
+                      draggedId={dragSt?.id ?? null}
                       dropFeedback={
                         dragOver?.targetId === f.id ? { mode: dragOver.mode } : null
                       }

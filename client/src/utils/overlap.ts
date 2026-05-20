@@ -16,6 +16,10 @@ export function overlapRatio(dragRect: DOMRect, targetRect: DOMRect): number {
   return dragArea > 0 ? intersection / dragArea : 0;
 }
 
+/** Overlap ratio at/above which a drop counts as "fully on top" rather than
+ *  "slid past the edge" — i.e. triggers merge/add instead of reorder. */
+export const MERGE_THRESHOLD = 0.7;
+
 /** What happens if the user drops `source` on `target` with this much overlap?
  *  Folders cannot be merged or nested, so folder sources / folder-target merge
  *  attempts fall back to reorder. */
@@ -24,7 +28,7 @@ export function resolveDropMode(
   targetType: "video" | "folder",
   overlap: number
 ): DropMode {
-  if (overlap >= 0.9) {
+  if (overlap >= MERGE_THRESHOLD) {
     if (sourceType === "video" && targetType === "video") return "merge";
     if (sourceType === "video" && targetType === "folder") return "add";
   }

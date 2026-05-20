@@ -34,20 +34,20 @@ describe("overlapRatio", () => {
 });
 
 describe("resolveDropMode", () => {
-  it("any pair with overlap < 0.9 is reorder", () => {
-    expect(resolveDropMode("video", "video", 0.89)).toBe("reorder");
+  it("any pair with overlap < 0.7 is reorder", () => {
+    expect(resolveDropMode("video", "video", 0.69)).toBe("reorder");
     expect(resolveDropMode("video", "folder", 0.5)).toBe("reorder");
     expect(resolveDropMode("folder", "video", 0.95)).toBe("reorder");
     expect(resolveDropMode("folder", "folder", 0.95)).toBe("reorder");
   });
 
-  it("video → video at ≥ 0.9 is merge", () => {
-    expect(resolveDropMode("video", "video", 0.9)).toBe("merge");
+  it("video → video at ≥ 0.7 is merge", () => {
+    expect(resolveDropMode("video", "video", 0.7)).toBe("merge");
     expect(resolveDropMode("video", "video", 1.0)).toBe("merge");
   });
 
-  it("video → folder at ≥ 0.9 is add", () => {
-    expect(resolveDropMode("video", "folder", 0.9)).toBe("add");
+  it("video → folder at ≥ 0.7 is add", () => {
+    expect(resolveDropMode("video", "folder", 0.7)).toBe("add");
   });
 
   it("folder source at high overlap falls back to reorder", () => {

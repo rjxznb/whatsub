@@ -9,7 +9,10 @@ export type Scope =
   | { mode: 'mine'; tags: string[] }
   | { mode: 'browse'; tags: string[] };
 
-interface VersionsResp { mine: number; public: number }
+// Older server builds returned only `mine` from /api/corpus/versions; both
+// fields are optional here + defaulted to 0 below so the missing-field case
+// degrades to "always refetch" instead of throwing.
+interface VersionsResp { mine?: number; public?: number }
 
 function scopeId(scope: Scope): string {
   // Sorted so [a,b] and [b,a] hit the same cache slot.
@@ -38,7 +41,7 @@ export function useCorpusList<T>(scope: Scope) {
       const serverV: VersionsResp = await invoke('corpus_versions');
       const versionKey = scope.mode === 'mine' ? 'mineVersion' : 'publicVersion';
       const cachedV = await getCachedVersion(versionKey);
-      const serverVal = scope.mode === 'mine' ? serverV.mine : serverV.public;
+      const serverVal = scope.mode === 'mine' ? (serverV.mine ?? 0) : (serverV.public ?? 0);
       // Shortcut only when the version matches AND we actually have data
       // for THIS scope's cache key. The version key is shared across all
       // tag-filter combos within a scope, but each combo gets its own

@@ -229,7 +229,16 @@ pub async fn corpus_phrase_detail<R: Runtime>(
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct VersionsResp {
+    /// Server-side timestamp of the user's latest contribution. Always present
+    /// in current server builds.
+    #[serde(default)]
     pub mine: i64,
+    /// Server-side timestamp of the latest published public corpus row.
+    /// `#[serde(default)]` so we tolerate older server builds that returned
+    /// only `mine` — they get a 0 here, the cache-version check then never
+    /// short-circuits for the public scope and we always refetch (correct,
+    /// just slightly more bandwidth).
+    #[serde(default)]
     pub public: i64,
 }
 

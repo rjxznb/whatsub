@@ -33,17 +33,26 @@ export function useCorpusList<T>(scope: Scope) {
     setRefreshing(true);
     setError(null);
     try {
+      const cacheKey = cacheKeyForScope(scope);
+      const cachedData = await getCachedData<T>(cacheKey);
       const serverV: VersionsResp = await invoke('corpus_versions');
       const versionKey = scope.mode === 'mine' ? 'mineVersion' : 'publicVersion';
       const cachedV = await getCachedVersion(versionKey);
       const serverVal = scope.mode === 'mine' ? serverV.mine : serverV.public;
-      if (!force && cachedV === serverVal && cachedV > 0) {
+      // Shortcut only when the version matches AND we actually have data
+      // for THIS scope's cache key. The version key is shared across all
+      // tag-filter combos within a scope, but each combo gets its own
+      // data slot — so a version-match without a data hit still needs a
+      // fetch (otherwise switching tag chips leaves the list stuck on
+      // null because there's no cached data for the new filter yet).
+      if (!force && cachedV === serverVal && cachedV > 0 && cachedData !== null) {
+        setData(cachedData);
         return;
       }
       const fresh = scope.mode === 'mine'
         ? await invoke<T>('corpus_mine', { tags: scope.tags, pageSize: 100 })
         : await invoke<T>('corpus_browse', { tags: scope.tags, pageSize: 100 });
-      await setCachedData(cacheKeyForScope(scope), fresh);
+      await setCachedData(cacheKey, fresh);
       await setCachedVersion(versionKey, serverVal);
       setData(fresh);
     } catch (e) {
@@ -57,6 +66,10 @@ export function useCorpusList<T>(scope: Scope) {
 
   useEffect(() => {
     let cancelled = false;
+    // Reset to null on scope change so the UI shows the loading state
+    // instead of the previous scope's stale data while the new fetch is
+    // in flight (also matters when Corpus.tsx's `key` prop remounts us).
+    setData(null);
     (async () => {
       const cached = await getCachedData<T>(cacheKeyForScope(scope));
       if (cached && !cancelled) setData(cached);

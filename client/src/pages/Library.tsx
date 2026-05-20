@@ -209,7 +209,7 @@ export function Library() {
     setMenu({ type: "folder", folder, x: e.clientX, y: e.clientY });
   }
 
-  function buildMenuItems(entry: LibraryEntry): ContextMenuItem[] {
+  function videoMenuItems(entry: LibraryEntry): ContextMenuItem[] {
     return [
       { label: "重命名", onClick: () => setRenaming(entry) },
       {
@@ -228,6 +228,62 @@ export function Library() {
         },
       },
     ];
+  }
+
+  function buildMenuItemsFor(menu: MenuState): ContextMenuItem[] {
+    switch (menu.type) {
+      case "video":
+        return videoMenuItems(menu.entry);
+      case "videoInFolder":
+        return [
+          {
+            label: "移出文件夹",
+            onClick: async () => {
+              try {
+                await moveVideoToFolder(menu.entry.id, null);
+              } catch (err) {
+                console.error("move out of folder failed", err);
+                await reload();
+              }
+            },
+          },
+          ...videoMenuItems(menu.entry),
+        ];
+      case "folder":
+        return [
+          {
+            label: "重命名",
+            onClick: () =>
+              setRenamingFolder({ id: menu.folder.id, currentName: menu.folder.name }),
+          },
+          {
+            label: "删除文件夹",
+            onClick: async () => {
+              try {
+                await deleteFolder(menu.folder.id);
+              } catch (err) {
+                console.error("delete folder failed", err);
+                await reload();
+              }
+            },
+          },
+        ];
+      case "empty":
+        return [
+          {
+            label: "新建文件夹",
+            onClick: async () => {
+              try {
+                const id = await createFolder();
+                setRenamingFolder({ id, currentName: "新建文件夹" });
+              } catch (err) {
+                console.error("create folder failed", err);
+                await reload();
+              }
+            },
+          },
+        ];
+    }
   }
 
   function onDragStart(e: React.DragEvent, ref: { type: "video" | "folder"; id: string }) {
@@ -337,10 +393,6 @@ export function Library() {
     }
   }
 
-  // Suppress unused action warnings for actions wired in later tasks
-  void createFolder;
-  void deleteFolder;
-
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <header className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800">
@@ -409,7 +461,14 @@ export function Library() {
           还没有视频。点击右上角 [+ Import] 导入第一个视频。
         </div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6">
+        <div
+          className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6"
+          onContextMenu={(e) => {
+            if (e.target !== e.currentTarget) return;
+            e.preventDefault();
+            setMenu({ type: "empty", x: e.clientX, y: e.clientY });
+          }}
+        >
           {search.trim().length > 0
             ? // Search mode: flatten, ignore folder grouping.
               visible.map((v) => {
@@ -633,7 +692,7 @@ export function Library() {
           x={menu.x}
           y={menu.y}
           onClose={() => setMenu(null)}
-          items={menu.type === "video" ? buildMenuItems(menu.entry) : []}
+          items={buildMenuItemsFor(menu)}
         />
       )}
 

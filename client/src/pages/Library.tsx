@@ -20,6 +20,10 @@ import {
 } from "../utils/importChecklistGate";
 import type { LibraryEntry } from "../types/library";
 
+// 公共语料库功能仍在打磨中。flip to true when ready 公开。
+// 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
+const CORPUS_NAV_ENABLED = false;
+
 // Phases where actual work (download / ffmpeg / whisper / LLM stream) is
 // happening right now. Library card uses this to distinguish "live run"
 // from "library entry stuck in analyzing because user left mid-stream".
@@ -248,13 +252,15 @@ export function Library() {
         >
           ⭐ 词汇本
         </Link>
-        <Link
-          to="/corpus"
-          className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
-          title="公共语料库（云端）"
-        >
-          📚 语料库
-        </Link>
+        {CORPUS_NAV_ENABLED && (
+          <Link
+            to="/corpus"
+            className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
+            title="公共语料库（云端）"
+          >
+            📚 语料库
+          </Link>
+        )}
         <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
           ⚙
         </Link>

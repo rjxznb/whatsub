@@ -81,7 +81,7 @@ export function FolderOpenView({
           </button>
         </div>
         <div
-          className="flex-1 overflow-y-auto p-5 grid grid-cols-2 md:grid-cols-3 gap-4"
+          className="flex-1 overflow-y-auto p-5 grid grid-cols-2 md:grid-cols-3 gap-4 auto-rows-min content-start"
           style={{
             opacity: open ? 1 : 0,
             transition: "opacity 200ms ease-out 150ms",

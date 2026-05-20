@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
@@ -14,6 +13,7 @@ import {
 } from "../components/LibraryTour";
 import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
+import { VideoCard } from "../components/VideoCard";
 import { formatTime } from "../utils/time";
 import {
   shouldShowImportChecklist,
@@ -308,80 +308,56 @@ export function Library() {
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6">
           {visible.map((v) => {
-            const isDragged = draggedId === v.id;
-            const isDragOver = dragOverId === v.id;
+            const isLive =
+              activeAnalysisVideoId === v.id &&
+              ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
             return (
-              <div
+              <VideoCard
                 key={v.id}
-                draggable
-                title={v.title}
+                entry={v}
+                draggedId={draggedId}
+                dropFeedback={dragOverId === v.id ? { mode: "reorder" } : null}
+                onContextMenu={handleContextMenu}
+                onClick={() => navigate(`/player/${v.id}`)}
                 onDragStart={(e) => onDragStart(e, v.id)}
                 onDragOver={(e) => onDragOver(e, v.id)}
                 onDragLeave={() => onDragLeave(v.id)}
                 onDrop={(e) => onDrop(e, v.id)}
                 onDragEnd={onDragEnd}
-                onClick={() => {
-                  if (!draggedId) navigate(`/player/${v.id}`);
-                }}
-                onContextMenu={(e) => handleContextMenu(e, v)}
-                className={
-                  "bg-zinc-900 border rounded-md overflow-hidden cursor-pointer select-none transition " +
-                  (isDragged
-                    ? "opacity-40 border-zinc-700"
-                    : isDragOver
-                    ? "border-blue-400 ring-2 ring-blue-400/30"
-                    : "border-zinc-800 hover:border-zinc-600")
-                }
-              >
-                <div className="aspect-video bg-zinc-800 relative pointer-events-none">
-                  {v.thumbnailPath && (
-                    <img
-                      src={convertFileSrc(v.thumbnailPath)}
-                      className="w-full h-full object-cover"
-                      draggable={false}
-                    />
-                  )}
-                  {v.status === "analyzing" && (() => {
-                    // Only show "解析中..." for the video that's CURRENTLY
-                    // being processed (active phase + matching id). Anything
-                    // else flagged "analyzing" is a stale entry whose run
-                    // got abandoned (user closed Player mid-stream, whisper
-                    // crashed during import, etc.) — call it out clearly so
-                    // the user doesn't think it's making progress in the
-                    // background. They can click the card to resume.
-                    const isLive =
-                      activeAnalysisVideoId === v.id &&
-                      ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
-                    return isLive ? (
-                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs">
-                        解析中...
-                      </div>
-                    ) : (
-                      <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center text-amber-300 text-xs gap-0.5">
-                        <span>未完成解析</span>
-                        <span className="text-[10px] text-zinc-300/80">
-                          点击继续
-                        </span>
-                      </div>
-                    );
-                  })()}
-                  {v.status === "failed" && (
-                    <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center">
-                      !
-                    </div>
-                  )}
-                </div>
-                <div className="p-3 pointer-events-none">
-                  <div className="text-sm font-medium truncate">
+                titleNode={
+                  <>
                     {highlightMatch(v.title, search)}
-                  </div>
-                  {v.durationSec > 0 && (
-                    <div className="mt-1 text-[10px] text-zinc-500">
-                      {formatTime(v.durationSec)}
-                    </div>
-                  )}
-                </div>
-              </div>
+                    {v.durationSec > 0 && (
+                      <span className="ml-1 text-[10px] text-zinc-500 font-normal">
+                        {formatTime(v.durationSec)}
+                      </span>
+                    )}
+                  </>
+                }
+                badge={
+                  <>
+                    {v.status === "analyzing" && (
+                      isLive ? (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs pointer-events-none">
+                          解析中...
+                        </div>
+                      ) : (
+                        <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center text-amber-300 text-xs gap-0.5 pointer-events-none">
+                          <span>未完成解析</span>
+                          <span className="text-[10px] text-zinc-300/80">
+                            点击继续
+                          </span>
+                        </div>
+                      )
+                    )}
+                    {v.status === "failed" && (
+                      <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center pointer-events-none">
+                        !
+                      </div>
+                    )}
+                  </>
+                }
+              />
             );
           })}
         </div>

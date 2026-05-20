@@ -64,7 +64,7 @@ describe("VideoPlayer gear menu", () => {
   });
 });
 
-describe("VideoPlayer captions submenu", () => {
+describe("VideoPlayer captions submenu (YouTube-style nested)", () => {
   function openCaptions(onChange = vi.fn()) {
     const utils = render(
       <VideoPlayer
@@ -78,44 +78,72 @@ describe("VideoPlayer captions submenu", () => {
     return { ...utils, onChange };
   }
 
-  it("selecting a font color calls onChangeCaptionStyle with captionFontColor", () => {
-    const { getByTestId, onChange } = openCaptions();
-    fireEvent.click(getByTestId("font-color-#FFEB3B"));
-    expect(onChange).toHaveBeenCalledWith({ captionFontColor: "#FFEB3B" });
+  it("captions level shows row for each setting with current value", () => {
+    const { getByTestId } = openCaptions();
+    expect(getByTestId("captions-row-fontColor")).toBeTruthy();
+    expect(getByTestId("captions-row-fontScale")).toBeTruthy();
+    expect(getByTestId("captions-row-fontOpacity")).toBeTruthy();
+    expect(getByTestId("captions-row-highlights")).toBeTruthy();
+    expect(getByTestId("captions-row-bgColor")).toBeTruthy();
+    expect(getByTestId("captions-row-bgOpacity")).toBeTruthy();
   });
 
-  it("selecting a background color calls onChangeCaptionStyle with captionBackgroundColor", () => {
+  it("font color row → deep submenu → pick yellow → patches + auto-back", () => {
     const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("captions-row-fontColor"));
+    expect(getByTestId("captions-fontColor-submenu")).toBeTruthy();
+    fireEvent.click(getByTestId("font-color-#FFEB3B"));
+    expect(onChange).toHaveBeenCalledWith({ captionFontColor: "#FFEB3B" });
+    // Auto-back to captions submenu after pick
+    expect(getByTestId("captions-submenu")).toBeTruthy();
+  });
+
+  it("bg color row → deep submenu → pick blue → patches captionBackgroundColor", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("captions-row-bgColor"));
+    expect(getByTestId("captions-bgColor-submenu")).toBeTruthy();
     fireEvent.click(getByTestId("bg-color-#2196F3"));
     expect(onChange).toHaveBeenCalledWith({ captionBackgroundColor: "#2196F3" });
   });
 
-  it("selecting a font scale calls onChangeCaptionStyle with captionFontScale", () => {
+  it("font scale row → deep submenu → pick large", () => {
     const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("captions-row-fontScale"));
+    expect(getByTestId("captions-fontScale-submenu")).toBeTruthy();
     fireEvent.click(getByTestId("font-scale-1.25"));
     expect(onChange).toHaveBeenCalledWith({ captionFontScale: 1.25 });
   });
 
-  it("toggling highlights flips captionHighlightsEnabled", () => {
+  it("font opacity row → deep submenu → pick 50%", () => {
     const { getByTestId, onChange } = openCaptions();
-    fireEvent.click(getByTestId("toggle-highlights"));
+    fireEvent.click(getByTestId("captions-row-fontOpacity"));
+    expect(getByTestId("captions-fontOpacity-submenu")).toBeTruthy();
+    fireEvent.click(getByTestId("font-opacity-0.5"));
+    expect(onChange).toHaveBeenCalledWith({ captionFontOpacity: 0.5 });
+  });
+
+  it("bg opacity row → deep submenu → pick 0%", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("captions-row-bgOpacity"));
+    expect(getByTestId("captions-bgOpacity-submenu")).toBeTruthy();
+    fireEvent.click(getByTestId("bg-opacity-0"));
+    expect(onChange).toHaveBeenCalledWith({ captionBackgroundOpacity: 0 });
+  });
+
+  it("highlights row → deep submenu → pick 隐藏", () => {
+    const { getByTestId, onChange } = openCaptions();
+    fireEvent.click(getByTestId("captions-row-highlights"));
+    expect(getByTestId("captions-highlights-submenu")).toBeTruthy();
+    fireEvent.click(getByTestId("highlights-off"));
     expect(onChange).toHaveBeenCalledWith({ captionHighlightsEnabled: false });
   });
 
-  it("changing bg opacity slider patches captionBackgroundOpacity", () => {
-    const { getByTestId, onChange } = openCaptions();
-    fireEvent.change(getByTestId("slider-bg-opacity"), {
-      target: { value: "0.5" },
-    });
-    expect(onChange).toHaveBeenCalledWith({ captionBackgroundOpacity: 0.5 });
-  });
-
-  it("changing font opacity slider patches captionFontOpacity", () => {
-    const { getByTestId, onChange } = openCaptions();
-    fireEvent.change(getByTestId("slider-font-opacity"), {
-      target: { value: "0.6" },
-    });
-    expect(onChange).toHaveBeenCalledWith({ captionFontOpacity: 0.6 });
+  it("deep submenu back button returns to captions level", () => {
+    const { getByTestId } = openCaptions();
+    fireEvent.click(getByTestId("captions-row-fontColor"));
+    expect(getByTestId("captions-fontColor-submenu")).toBeTruthy();
+    fireEvent.click(getByTestId("menu-back"));
+    expect(getByTestId("captions-submenu")).toBeTruthy();
   });
 
   it("reset button patches all 6 caption fields to defaults", () => {
@@ -129,11 +157,5 @@ describe("VideoPlayer captions submenu", () => {
       captionBackgroundOpacity: 0.7,
       captionHighlightsEnabled: true,
     });
-  });
-
-  it("captions submenu does not close after a control interaction", () => {
-    const { getByTestId } = openCaptions();
-    fireEvent.click(getByTestId("font-color-#FFEB3B"));
-    expect(getByTestId("captions-submenu")).toBeTruthy();
   });
 });

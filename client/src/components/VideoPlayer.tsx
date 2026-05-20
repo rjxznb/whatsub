@@ -9,6 +9,7 @@ import {
 import {
   Captions,
   CaptionsOff,
+  Check,
   ChevronLeft,
   ChevronRight,
   PanelRight,
@@ -53,23 +54,48 @@ interface Props {
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
-const CAPTION_COLOR_PALETTE = [
-  "#FFFFFF",
-  "#FFEB3B",
-  "#00BCD4",
-  "#4CAF50",
-  "#2196F3",
-  "#E91E63",
-  "#F44336",
-  "#000000",
+const CAPTION_COLOR_OPTIONS: { label: string; value: string }[] = [
+  { label: "白色", value: "#FFFFFF" },
+  { label: "黄色", value: "#FFEB3B" },
+  { label: "青色", value: "#00BCD4" },
+  { label: "绿色", value: "#4CAF50" },
+  { label: "蓝色", value: "#2196F3" },
+  { label: "品红色", value: "#E91E63" },
+  { label: "红色", value: "#F44336" },
+  { label: "黑色", value: "#000000" },
 ];
 
 const FONT_SCALE_OPTIONS: { label: string; value: number }[] = [
-  { label: "小", value: 0.75 },
-  { label: "中", value: 1 },
-  { label: "大", value: 1.25 },
-  { label: "特大", value: 1.5 },
+  { label: "小 (75%)", value: 0.75 },
+  { label: "中 (100%)", value: 1 },
+  { label: "大 (125%)", value: 1.25 },
+  { label: "特大 (150%)", value: 1.5 },
 ];
+
+const FONT_OPACITY_OPTIONS: { label: string; value: number }[] = [
+  { label: "25%", value: 0.25 },
+  { label: "50%", value: 0.5 },
+  { label: "75%", value: 0.75 },
+  { label: "100%", value: 1 },
+];
+
+const BG_OPACITY_OPTIONS: { label: string; value: number }[] = [
+  { label: "0%", value: 0 },
+  { label: "25%", value: 0.25 },
+  { label: "50%", value: 0.5 },
+  { label: "75%", value: 0.75 },
+  { label: "100%", value: 1 },
+];
+
+const HIGHLIGHT_OPTIONS: { label: string; value: boolean; testId: string }[] = [
+  { label: "显示", value: true, testId: "highlights-on" },
+  { label: "隐藏", value: false, testId: "highlights-off" },
+];
+
+function colorLabel(hex: string): string {
+  const upper = hex.toUpperCase();
+  return CAPTION_COLOR_OPTIONS.find((o) => o.value.toUpperCase() === upper)?.label ?? hex;
+}
 
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
   {
@@ -96,7 +122,17 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [menuView, setMenuView] = useState<"root" | "speed" | "captions" | null>(null);
+  type MenuView =
+    | "root"
+    | "speed"
+    | "captions"
+    | "captions.fontColor"
+    | "captions.fontScale"
+    | "captions.fontOpacity"
+    | "captions.highlights"
+    | "captions.bgColor"
+    | "captions.bgOpacity";
+  const [menuView, setMenuView] = useState<MenuView | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
@@ -513,7 +549,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
                 <div
                   data-testid="gear-menu"
-                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-black/80 backdrop-blur-md shadow-lg z-10"
+                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/70 backdrop-blur-xl shadow-lg z-10"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {menuView === "root" && (
@@ -581,187 +617,319 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("root")}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/80 hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>字幕设置</span>
                       </button>
 
-                      <div className="px-4 py-3 space-y-4">
-                        {/* Font color */}
-                        <div>
-                          <div className="text-xs text-white/60 mb-2">字体颜色</div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {CAPTION_COLOR_PALETTE.map((c) => (
-                              <button
-                                key={c}
-                                type="button"
-                                data-testid={`font-color-${c}`}
-                                onClick={() =>
-                                  onChangeCaptionStyle({ captionFontColor: c })
-                                }
-                                className={
-                                  "h-6 w-6 rounded-full border border-white/20 transition-all " +
-                                  (captionStyle.fontColor.toUpperCase() === c.toUpperCase()
-                                    ? "ring-2 ring-white scale-110"
-                                    : "hover:scale-110")
-                                }
-                                style={{ backgroundColor: c }}
-                                aria-label={c}
-                              />
-                            ))}
-                          </div>
-                        </div>
+                      <button
+                        type="button"
+                        data-testid="captions-row-fontColor"
+                        onClick={() => setMenuView("captions.fontColor")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>字体颜色</span>
+                        <span className="flex items-center gap-1 text-white/60">
+                          <span>{colorLabel(captionStyle.fontColor)}</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
 
-                        {/* Font scale */}
-                        <div>
-                          <div className="text-xs text-white/60 mb-2">字号</div>
-                          <div className="grid grid-cols-4 gap-1">
-                            {FONT_SCALE_OPTIONS.map(({ label, value }) => (
-                              <button
-                                key={value}
-                                type="button"
-                                data-testid={`font-scale-${value}`}
-                                onClick={() =>
-                                  onChangeCaptionStyle({ captionFontScale: value })
-                                }
-                                className={
-                                  "rounded px-2 py-1 text-xs transition-colors " +
-                                  (captionStyle.fontScale === value
-                                    ? "bg-white/25 text-white font-semibold"
-                                    : "bg-white/5 text-white/70 hover:bg-white/15")
-                                }
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                      <button
+                        type="button"
+                        data-testid="captions-row-fontScale"
+                        onClick={() => setMenuView("captions.fontScale")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>字号</span>
+                        <span className="flex items-center gap-1 text-white/60">
+                          <span>{Math.round(captionStyle.fontScale * 100)}%</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
 
-                        {/* Font opacity */}
-                        <div>
-                          <div className="flex items-center justify-between text-xs text-white/60 mb-1">
-                            <span>字体不透明度</span>
-                            <span className="tabular-nums">
-                              {Math.round(captionStyle.fontOpacity * 100)}%
-                            </span>
-                          </div>
-                          <input
-                            type="range"
-                            data-testid="slider-font-opacity"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={captionStyle.fontOpacity}
-                            onChange={(e) =>
-                              onChangeCaptionStyle({
-                                captionFontOpacity: parseFloat(e.target.value),
-                              })
-                            }
-                            className="w-full h-1 cursor-pointer appearance-none rounded-full bg-white/20 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
-                          />
-                        </div>
+                      <button
+                        type="button"
+                        data-testid="captions-row-fontOpacity"
+                        onClick={() => setMenuView("captions.fontOpacity")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>字体不透明度</span>
+                        <span className="flex items-center gap-1 text-white/60">
+                          <span>{Math.round(captionStyle.fontOpacity * 100)}%</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
 
-                        {/* Highlight toggle */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-white/60">重点高亮</span>
+                      <button
+                        type="button"
+                        data-testid="captions-row-highlights"
+                        onClick={() => setMenuView("captions.highlights")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>重点高亮</span>
+                        <span className="flex items-center gap-1 text-white/60">
+                          <span>{captionStyle.highlightsEnabled ? "显示" : "隐藏"}</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid="captions-row-bgColor"
+                        onClick={() => setMenuView("captions.bgColor")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>背景颜色</span>
+                        <span className="flex items-center gap-1 text-white/60">
+                          <span>{colorLabel(captionStyle.bgColor)}</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        data-testid="captions-row-bgOpacity"
+                        onClick={() => setMenuView("captions.bgOpacity")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>背景不透明度</span>
+                        <span className="flex items-center gap-1 text-white/60">
+                          <span>{Math.round(captionStyle.bgOpacity * 100)}%</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
+
+                      <div className="h-px bg-white/10 my-1" />
+
+                      <button
+                        type="button"
+                        data-testid="reset-captions"
+                        onClick={() =>
+                          onChangeCaptionStyle({
+                            captionFontColor: DEFAULT_CAPTION_STYLE.fontColor,
+                            captionFontScale: DEFAULT_CAPTION_STYLE.fontScale,
+                            captionFontOpacity: DEFAULT_CAPTION_STYLE.fontOpacity,
+                            captionBackgroundColor: DEFAULT_CAPTION_STYLE.bgColor,
+                            captionBackgroundOpacity: DEFAULT_CAPTION_STYLE.bgOpacity,
+                            captionHighlightsEnabled: DEFAULT_CAPTION_STYLE.highlightsEnabled,
+                          })
+                        }
+                        className="flex w-full items-center px-4 py-2.5 text-sm text-white/80 hover:bg-white/10 transition-colors"
+                      >
+                        重置字幕设置
+                      </button>
+                    </div>
+                  )}
+
+                  {menuView === "captions.fontColor" && (
+                    <div data-testid="captions-fontColor-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>字体颜色</span>
+                      </button>
+                      {CAPTION_COLOR_OPTIONS.map(({ label, value }) => {
+                        const selected =
+                          captionStyle.fontColor.toUpperCase() === value.toUpperCase();
+                        return (
                           <button
+                            key={value}
                             type="button"
-                            data-testid="toggle-highlights"
-                            onClick={() =>
-                              onChangeCaptionStyle({
-                                captionHighlightsEnabled: !captionStyle.highlightsEnabled,
-                              })
-                            }
-                            aria-pressed={captionStyle.highlightsEnabled}
-                            className={
-                              "relative h-5 w-9 rounded-full transition-colors " +
-                              (captionStyle.highlightsEnabled
-                                ? "bg-blue-500"
-                                : "bg-white/20")
-                            }
+                            data-testid={`font-color-${value}`}
+                            onClick={() => {
+                              onChangeCaptionStyle({ captionFontColor: value });
+                              setMenuView("captions");
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >
-                            <span
-                              className={
-                                "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform " +
-                                (captionStyle.highlightsEnabled
-                                  ? "translate-x-4"
-                                  : "translate-x-0.5")
-                              }
-                            />
-                          </button>
-                        </div>
-
-                        <div className="h-px bg-white/10" />
-
-                        {/* Background color */}
-                        <div>
-                          <div className="text-xs text-white/60 mb-2">背景颜色</div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {CAPTION_COLOR_PALETTE.map((c) => (
-                              <button
-                                key={c}
-                                type="button"
-                                data-testid={`bg-color-${c}`}
-                                onClick={() =>
-                                  onChangeCaptionStyle({ captionBackgroundColor: c })
-                                }
-                                className={
-                                  "h-6 w-6 rounded-full border border-white/20 transition-all " +
-                                  (captionStyle.bgColor.toUpperCase() === c.toUpperCase()
-                                    ? "ring-2 ring-white scale-110"
-                                    : "hover:scale-110")
-                                }
-                                style={{ backgroundColor: c }}
-                                aria-label={c}
-                              />
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Background opacity */}
-                        <div>
-                          <div className="flex items-center justify-between text-xs text-white/60 mb-1">
-                            <span>背景不透明度</span>
-                            <span className="tabular-nums">
-                              {Math.round(captionStyle.bgOpacity * 100)}%
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
                             </span>
-                          </div>
-                          <input
-                            type="range"
-                            data-testid="slider-bg-opacity"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={captionStyle.bgOpacity}
-                            onChange={(e) =>
-                              onChangeCaptionStyle({
-                                captionBackgroundOpacity: parseFloat(e.target.value),
-                              })
-                            }
-                            className="w-full h-1 cursor-pointer appearance-none rounded-full bg-white/20 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
-                          />
-                        </div>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                        {/* Reset */}
-                        <button
-                          type="button"
-                          data-testid="reset-captions"
-                          onClick={() =>
-                            onChangeCaptionStyle({
-                              captionFontColor: DEFAULT_CAPTION_STYLE.fontColor,
-                              captionFontScale: DEFAULT_CAPTION_STYLE.fontScale,
-                              captionFontOpacity: DEFAULT_CAPTION_STYLE.fontOpacity,
-                              captionBackgroundColor: DEFAULT_CAPTION_STYLE.bgColor,
-                              captionBackgroundOpacity: DEFAULT_CAPTION_STYLE.bgOpacity,
-                              captionHighlightsEnabled: DEFAULT_CAPTION_STYLE.highlightsEnabled,
-                            })
-                          }
-                          className="w-full rounded-md bg-white/10 hover:bg-white/20 px-3 py-2 text-xs text-white transition-colors"
-                        >
-                          重置字幕设置
-                        </button>
-                      </div>
+                  {menuView === "captions.fontScale" && (
+                    <div data-testid="captions-fontScale-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>字号</span>
+                      </button>
+                      {FONT_SCALE_OPTIONS.map(({ label, value }) => {
+                        const selected = captionStyle.fontScale === value;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            data-testid={`font-scale-${value}`}
+                            onClick={() => {
+                              onChangeCaptionStyle({ captionFontScale: value });
+                              setMenuView("captions");
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
+                            </span>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {menuView === "captions.fontOpacity" && (
+                    <div data-testid="captions-fontOpacity-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>字体不透明度</span>
+                      </button>
+                      {FONT_OPACITY_OPTIONS.map(({ label, value }) => {
+                        const selected =
+                          Math.round(captionStyle.fontOpacity * 100) ===
+                          Math.round(value * 100);
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            data-testid={`font-opacity-${value}`}
+                            onClick={() => {
+                              onChangeCaptionStyle({ captionFontOpacity: value });
+                              setMenuView("captions");
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
+                            </span>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {menuView === "captions.highlights" && (
+                    <div data-testid="captions-highlights-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>重点高亮</span>
+                      </button>
+                      {HIGHLIGHT_OPTIONS.map(({ label, value, testId }) => {
+                        const selected = captionStyle.highlightsEnabled === value;
+                        return (
+                          <button
+                            key={testId}
+                            type="button"
+                            data-testid={testId}
+                            onClick={() => {
+                              onChangeCaptionStyle({ captionHighlightsEnabled: value });
+                              setMenuView("captions");
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
+                            </span>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {menuView === "captions.bgColor" && (
+                    <div data-testid="captions-bgColor-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>背景颜色</span>
+                      </button>
+                      {CAPTION_COLOR_OPTIONS.map(({ label, value }) => {
+                        const selected =
+                          captionStyle.bgColor.toUpperCase() === value.toUpperCase();
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            data-testid={`bg-color-${value}`}
+                            onClick={() => {
+                              onChangeCaptionStyle({ captionBackgroundColor: value });
+                              setMenuView("captions");
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
+                            </span>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {menuView === "captions.bgOpacity" && (
+                    <div data-testid="captions-bgOpacity-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>背景不透明度</span>
+                      </button>
+                      {BG_OPACITY_OPTIONS.map(({ label, value }) => {
+                        const selected =
+                          Math.round(captionStyle.bgOpacity * 100) ===
+                          Math.round(value * 100);
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            data-testid={`bg-opacity-${value}`}
+                            onClick={() => {
+                              onChangeCaptionStyle({ captionBackgroundOpacity: value });
+                              setMenuView("captions");
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                          >
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
+                            </span>
+                            <span>{label}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

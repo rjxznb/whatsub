@@ -15,6 +15,7 @@ import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { VideoCard } from "../components/VideoCard";
 import { FolderCard } from "../components/FolderCard";
+import { FolderOpenView } from "../components/FolderOpenView";
 import { MergeAnimationLayer } from "../components/MergeAnimationLayer";
 import { overlapRatio, resolveDropMode, type DropMode } from "../utils/overlap";
 import { formatTime } from "../utils/time";
@@ -152,9 +153,6 @@ export function Library() {
     targetRect: DOMRect;
   }>(null);
   const [renamingFolder, setRenamingFolder] = useState<null | { id: string; currentName: string }>(null);
-
-  // Suppress unused-variable warnings for state setters used in later tasks
-  void openFolder;
 
   const [fileHover, setFileHover] = useState(false);
 
@@ -523,10 +521,9 @@ export function Library() {
                       dropFeedback={
                         dragOver?.targetId === f.id ? { mode: dragOver.mode } : null
                       }
-                      onClick={() => {
-                        // Capture origin rect for T11's open animation.
-                        // For now, just set openFolder; T11 wires the actual modal.
-                        setOpenFolder({ id: f.id, rect: new DOMRect(0, 0, 0, 0) });
+                      onClick={(e) => {
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setOpenFolder({ id: f.id, rect });
                       }}
                       onContextMenu={(e) => handleFolderContextMenu(e, f)}
                       onDragStart={(e) => onDragStart(e, { type: "folder", id: f.id })}
@@ -591,6 +588,30 @@ export function Library() {
                 await reload();
                 setMerge(null);
               }
+            }}
+          />
+        );
+      })()}
+
+      {openFolder && (() => {
+        const f = (library.folders ?? []).find((x) => x.id === openFolder.id);
+        if (!f) return null;
+        const inside = f.videoIds
+          .map((vid) => library.videos.find((v) => v.id === vid))
+          .filter((v): v is LibraryEntry => Boolean(v));
+        return (
+          <FolderOpenView
+            folder={f}
+            videos={inside}
+            originRect={openFolder.rect}
+            onClose={() => setOpenFolder(null)}
+            onVideoClick={(id) => {
+              setOpenFolder(null);
+              navigate(`/player/${id}`);
+            }}
+            onVideoContextMenu={(e, v) => {
+              e.preventDefault();
+              setMenu({ type: "videoInFolder", entry: v, folderId: f.id, x: e.clientX, y: e.clientY });
             }}
           />
         );

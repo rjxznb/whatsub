@@ -7,7 +7,7 @@ interface Props {
   videos: LibraryEntry[];
   draggedId: string | null;
   dropFeedback: null | { mode: "reorder" | "merge" | "add" };
-  onClick: () => void;
+  onClick: (e: React.MouseEvent) => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
@@ -47,9 +47,9 @@ export function FolderCard({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
-      onClick={() => {
+      onClick={(e) => {
         if (draggedId) return;
-        onClick();
+        onClick(e);
       }}
       onContextMenu={onContextMenu}
       title={folder.name}

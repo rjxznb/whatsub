@@ -22,8 +22,11 @@ pub struct BrowseItem {
     pub phrase_raw: String,
     #[serde(rename(deserialize = "meaning_zh", serialize = "meaningZh"), default)]
     pub meaning_zh: Option<String>,
-    #[serde(rename(deserialize = "key_notes", serialize = "keyNotes"), default)]
-    pub key_notes: Option<String>,
+    // 2026-05-20 schema migration: corpus_phrases.key_notes was dropped and
+    // moved to corpus_contributions.usage_note. /lookup withScope now sends
+    // `usage_note` on the phrase object. Map to `usageNote` for the JS layer.
+    #[serde(rename(deserialize = "usage_note", serialize = "usageNote"), default)]
+    pub usage_note: Option<String>,
     #[serde(default)]
     pub tags: serde_json::Value,
     #[serde(rename(deserialize = "contribution_count", serialize = "contributionCount"), default)]

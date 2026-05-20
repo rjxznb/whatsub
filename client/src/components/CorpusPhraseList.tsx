@@ -31,14 +31,14 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect }: Props) {
 
   if (error && !data) {
     return (
-      <div className="p-4 text-red-300 text-xs w-64 border-r border-zinc-800 break-all">
+      <div className="p-4 text-red-300 text-xs w-64 h-full border-r border-zinc-800 break-all">
         加载失败：{error}
       </div>
     );
   }
   if (!data) {
     return (
-      <div className="p-4 text-zinc-500 text-sm w-64 border-r border-zinc-800">
+      <div className="p-4 text-zinc-500 text-sm w-64 h-full border-r border-zinc-800">
         {refreshing ? '加载中…' : '初始化…'}
       </div>
     );
@@ -46,12 +46,12 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect }: Props) {
   const items = data.items;
   if (items.length === 0) {
     return (
-      <div className="p-4 text-zinc-500 text-sm w-64 border-r border-zinc-800">暂无</div>
+      <div className="p-4 text-zinc-500 text-sm w-64 h-full border-r border-zinc-800">暂无</div>
     );
   }
 
   return (
-    <ul className="w-64 border-r border-zinc-800 overflow-y-auto min-w-0">
+    <ul className="w-64 h-full border-r border-zinc-800 overflow-y-auto min-w-0">
       {items.map((item) => (
         <li
           key={item.phraseNormalized}

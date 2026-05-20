@@ -88,14 +88,38 @@ export function Corpus() {
             onClear={clearTags}
             invalidateNonce={refreshKey}
           />
-          <div key={`${refreshKey}:${mode}:${tags.join(',')}`} className="flex flex-1 overflow-hidden">
-            <CorpusPhraseList
-              mode={mode}
-              tags={tags}
-              selected={phrase}
-              onSelect={setPhrase}
-            />
-            <CorpusPhraseDetail phraseNormalized={phrase} />
+          {/* a = public list (left)  ·  b = detail (center)  ·  c = personal list (right)
+            * 公共 mode: viewport shows a + b, c parked off-screen right.
+            * 我的 mode: row translates left by one-list-width — a slides off-screen
+            *           left, b shifts to fill from x=0, c slides into the right slot. */}
+          <div key={refreshKey} className="flex-1 overflow-hidden">
+            <div
+              className="flex h-full transition-transform duration-300 ease-out"
+              style={{
+                width: 'calc(100% + 16rem)',
+                transform: mode === 'mine' ? 'translateX(-16rem)' : 'translateX(0)',
+              }}
+            >
+              <div className="w-64 shrink-0 h-full">
+                <CorpusPhraseList
+                  mode="browse"
+                  tags={mode === 'browse' ? tags : []}
+                  selected={mode === 'browse' ? phrase : null}
+                  onSelect={setPhrase}
+                />
+              </div>
+              <div className="flex-1 min-w-0 h-full">
+                <CorpusPhraseDetail phraseNormalized={phrase} />
+              </div>
+              <div className="w-64 shrink-0 h-full border-l border-zinc-800">
+                <CorpusPhraseList
+                  mode="mine"
+                  tags={mode === 'mine' ? tags : []}
+                  selected={mode === 'mine' ? phrase : null}
+                  onSelect={setPhrase}
+                />
+              </div>
+            </div>
           </div>
         </>
       ) : (

@@ -108,13 +108,13 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
   }, [detail?.phrase?.phraseRaw]);
 
   if (!phraseNormalized) {
-    return <div className="flex-1 p-6 text-zinc-500">选择一个短语查看例句出处</div>;
+    return <div className="h-full p-6 text-zinc-500">选择一个短语查看例句出处</div>;
   }
   if (error && !detail) {
-    return <div className="flex-1 p-6 text-red-300 text-sm break-all">加载失败：{error}</div>;
+    return <div className="h-full p-6 text-red-300 text-sm break-all">加载失败：{error}</div>;
   }
   if (!detail || !detail.phrase) {
-    return <div className="flex-1 p-6 text-zinc-500">加载中…</div>;
+    return <div className="h-full p-6 text-zinc-500">加载中…</div>;
   }
 
   // All instances (public first, then personal) flattened into one carousel
@@ -198,7 +198,7 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
 
 
   return (
-    <div className="flex-1 p-4 overflow-y-auto space-y-4 min-w-0">
+    <div className="h-full p-4 overflow-y-auto space-y-4 min-w-0">
       <div>
         <div className="flex items-center gap-2 flex-wrap">
           <h2 className="text-xl font-semibold">{detail.phrase.phraseRaw}</h2>

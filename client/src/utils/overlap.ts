@@ -17,8 +17,11 @@ export function overlapRatio(dragRect: DOMRect, targetRect: DOMRect): number {
 }
 
 /** Overlap ratio at/above which a drop counts as "fully on top" rather than
- *  "slid past the edge" — i.e. triggers merge/add instead of reorder. */
-export const MERGE_THRESHOLD = 0.7;
+ *  "slid past the edge" — i.e. triggers merge/add instead of reorder.
+ *  0.85 = cursor must land in the inner ~40% of the target card. Outer
+ *  ~60% (the bulk of the target) stays in reorder so natural drops put
+ *  the dragged card next to the target rather than merging on contact. */
+export const MERGE_THRESHOLD = 0.85;
 
 /** What happens if the user drops `source` on `target` with this much overlap?
  *  Folders cannot be merged or nested, so folder sources / folder-target merge

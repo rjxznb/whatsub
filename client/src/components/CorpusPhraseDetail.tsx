@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Play, ChevronLeft, ChevronRight, Volume2 } from 'lucide-react';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useCorpusPhrase } from '../hooks/useCorpusPhrase';
 import { useSpeech } from '../hooks/useSpeech';
 import { lookupPhonetic } from '../llm/phonetic';
@@ -174,7 +175,19 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
               </button>
             )}
             {c.source.title && (
-              <span className="text-xs text-zinc-500 truncate">{c.source.title}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openUrl(c.source.url).catch((err) =>
+                    console.error('open source url failed', err)
+                  );
+                }}
+                title={`在浏览器打开 ${c.source.url}`}
+                className="text-xs text-zinc-400 hover:text-blue-300 hover:underline truncate text-left max-w-full"
+              >
+                {c.source.title}
+              </button>
             )}
           </div>
         )}

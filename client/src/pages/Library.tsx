@@ -360,9 +360,15 @@ export function Library() {
     setDragOver({ targetId: target.id, mode });
   }
 
-  function onDragLeave(id: string) {
-    if (dragOverRef.current?.targetId === id) dragOverRef.current = null;
-    setDragOver((cur) => (cur?.targetId === id ? null : cur));
+  function onDragLeave(_id: string) {
+    // Intentionally do nothing. dragLeave fires every time the cursor crosses
+    // out of an element — including into a 1px gap between cards or across a
+    // ring border. Clearing dragOver here makes effectiveOrder snap back to
+    // baseOrder on every gap crossing, which the framer-motion `layout` prop
+    // happily animates → visible "来回来去动" oscillation.
+    //
+    // Instead, the next dragover on a different target overwrites the entry,
+    // and dragEnd (drop / esc / leave-window) clears it via onDragEnd().
   }
 
   function onDragEnd() {

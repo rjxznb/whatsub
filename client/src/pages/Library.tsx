@@ -14,12 +14,14 @@ import {
 import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { VideoCard } from "../components/VideoCard";
+import { FolderCard } from "../components/FolderCard";
+import { overlapRatio, resolveDropMode, type DropMode } from "../utils/overlap";
 import { formatTime } from "../utils/time";
 import {
   shouldShowImportChecklist,
   markImportChecklistShown,
 } from "../utils/importChecklistGate";
-import type { LibraryEntry } from "../types/library";
+import type { LibraryEntry, LibraryFolder } from "../types/library";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
@@ -69,15 +71,27 @@ function highlightMatch(text: string, query: string): ReactNode {
   return segments;
 }
 
-interface MenuState {
-  x: number;
-  y: number;
-  entry: LibraryEntry;
-}
+type MenuState =
+  | { type: "video"; entry: LibraryEntry; x: number; y: number }
+  | { type: "folder"; folder: LibraryFolder; x: number; y: number }
+  | { type: "videoInFolder"; entry: LibraryEntry; folderId: string; x: number; y: number }
+  | { type: "empty"; x: number; y: number };
 
 export function Library() {
   const navigate = useNavigate();
-  const { library, reload, remove, rename, reorder, reveal } = useLibrary();
+  const {
+    library,
+    reload,
+    remove,
+    rename,
+    reveal,
+    setTopLevelOrder,
+    createFolder,
+    deleteFolder,
+    renameFolder,
+    moveVideoToFolder,
+    mergeIntoFolder,
+  } = useLibrary();
   // Pull these as a tuple so the component re-renders when either changes —
   // we just need to know "which video is the one currently being worked on,
   // and is it active right now?" to pick the card label.
@@ -119,8 +133,30 @@ export function Library() {
   }, [navCollapsed]);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
-  const [draggedId, setDraggedId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  // Overlap-based drag state
+  const [drag, setDrag] = useState<null | {
+    ref: { type: "video" | "folder"; id: string };
+    startRect: DOMRect;
+    startClient: { x: number; y: number };
+  }>(null);
+  const [dragOver, setDragOver] = useState<null | { targetId: string; mode: DropMode }>(null);
+
+  // Folder UI state (T11 wires open animation; T10 wires merge animation)
+  const [openFolder, setOpenFolder] = useState<null | { id: string; rect: DOMRect }>(null);
+  const [merge, setMerge] = useState<null | {
+    source: string;
+    target: string;
+    sourceRect: DOMRect;
+    targetRect: DOMRect;
+  }>(null);
+  const [renamingFolder, setRenamingFolder] = useState<null | { id: string; currentName: string }>(null);
+
+  // Suppress unused-variable warnings for state setters used in later tasks
+  void openFolder;
+  void merge;
+  void setMerge;
+
   const [fileHover, setFileHover] = useState(false);
 
   useEffect(() => {
@@ -168,7 +204,12 @@ export function Library() {
 
   function handleContextMenu(e: React.MouseEvent, entry: LibraryEntry) {
     e.preventDefault();
-    setMenu({ x: e.clientX, y: e.clientY, entry });
+    setMenu({ type: "video", entry, x: e.clientX, y: e.clientY });
+  }
+
+  function handleFolderContextMenu(e: React.MouseEvent, folder: LibraryFolder) {
+    e.preventDefault();
+    setMenu({ type: "folder", folder, x: e.clientX, y: e.clientY });
   }
 
   function buildMenuItems(entry: LibraryEntry): ContextMenuItem[] {
@@ -192,51 +233,122 @@ export function Library() {
     ];
   }
 
-  function onDragStart(e: React.DragEvent, id: string) {
-    setDraggedId(id);
+  function onDragStart(e: React.DragEvent, ref: { type: "video" | "folder"; id: string }) {
+    const card = e.currentTarget as HTMLElement;
+    const startRect = card.getBoundingClientRect();
+    setDrag({
+      ref,
+      startRect,
+      startClient: { x: e.clientX, y: e.clientY },
+    });
     e.dataTransfer.effectAllowed = "move";
-    // Set a payload so the drop event fires.
-    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.setData("text/plain", `${ref.type}:${ref.id}`);
   }
 
-  function onDragOver(e: React.DragEvent, id: string) {
-    if (!draggedId || draggedId === id) return;
+  function onDragOver(
+    e: React.DragEvent,
+    target: { type: "video" | "folder"; id: string }
+  ) {
+    if (!drag || drag.ref.id === target.id) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    setDragOverId(id);
+    const dx = e.clientX - drag.startClient.x;
+    const dy = e.clientY - drag.startClient.y;
+    const dragRect = new DOMRect(
+      drag.startRect.left + dx,
+      drag.startRect.top + dy,
+      drag.startRect.width,
+      drag.startRect.height
+    );
+    const targetRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const overlap = overlapRatio(dragRect, targetRect);
+    const mode = resolveDropMode(drag.ref.type, target.type, overlap);
+    setDragOver({ targetId: target.id, mode });
   }
 
   function onDragLeave(id: string) {
-    setDragOverId((cur) => (cur === id ? null : cur));
-  }
-
-  function onDrop(e: React.DragEvent, targetId: string) {
-    e.preventDefault();
-    const sourceId = draggedId;
-    setDraggedId(null);
-    setDragOverId(null);
-    if (!sourceId || sourceId === targetId) return;
-
-    // Build new order: remove source, insert before target.
-    const ids = library.videos.map((v) => v.id);
-    const filtered = ids.filter((id) => id !== sourceId);
-    const targetIdx = filtered.indexOf(targetId);
-    if (targetIdx === -1) return;
-    const newOrder = [
-      ...filtered.slice(0, targetIdx),
-      sourceId,
-      ...filtered.slice(targetIdx),
-    ];
-    reorder(newOrder).catch((e) => {
-      console.error("reorder failed", e);
-      reload();
-    });
+    setDragOver((cur) => (cur?.targetId === id ? null : cur));
   }
 
   function onDragEnd() {
-    setDraggedId(null);
-    setDragOverId(null);
+    setDrag(null);
+    setDragOver(null);
   }
+
+  async function onDrop(
+    e: React.DragEvent,
+    target: { type: "video" | "folder"; id: string }
+  ) {
+    e.preventDefault();
+    if (!drag || !dragOver || drag.ref.id === target.id) {
+      setDrag(null);
+      setDragOver(null);
+      return;
+    }
+    const { mode } = dragOver;
+    const source = drag.ref;
+    // Capture rects before clearing state (for merge animation use later).
+    const sourceRect = drag.startRect;
+    const targetRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setDrag(null);
+    setDragOver(null);
+
+    switch (mode) {
+      case "reorder": {
+        const refs = (library.topLevelOrder ?? []).filter(
+          (r) => !(r.type === source.type && r.id === source.id)
+        );
+        const targetIdx = refs.findIndex(
+          (r) => r.type === target.type && r.id === target.id
+        );
+        if (targetIdx === -1) return;
+        const sourceRef =
+          source.type === "video"
+            ? { type: "video" as const, id: source.id }
+            : { type: "folder" as const, id: source.id };
+        const newRefs = [
+          ...refs.slice(0, targetIdx),
+          sourceRef,
+          ...refs.slice(targetIdx),
+        ];
+        try {
+          await setTopLevelOrder(newRefs);
+        } catch (err) {
+          console.error("reorder failed", err);
+          await reload();
+        }
+        break;
+      }
+      case "add": {
+        try {
+          await moveVideoToFolder(source.id, target.id);
+        } catch (err) {
+          console.error("move to folder failed", err);
+          await reload();
+        }
+        break;
+      }
+      case "merge": {
+        // Set merge state — Task 10 will render MergeAnimationLayer to handle the animation
+        // and the subsequent mergeIntoFolder + rename dialog. For now (T9), just call the
+        // backend immediately so reordering still progresses functionally.
+        try {
+          const folderId = await mergeIntoFolder([target.id, source.id]);
+          setRenamingFolder({ id: folderId, currentName: "新建文件夹" });
+        } catch (err) {
+          console.error("merge failed", err);
+          await reload();
+        }
+        // Animation hook-up handled in T10; we'll set the merge state then.
+        void sourceRect; void targetRect; // unused yet
+        break;
+      }
+    }
+  }
+
+  // Suppress unused action warnings for actions wired in later tasks
+  void createFolder;
+  void deleteFolder;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -301,59 +413,138 @@ export function Library() {
         </div>
       </header>
 
-      {visible.length === 0 ? (
+      {visible.length === 0 && search.trim().length === 0 && (library.topLevelOrder ?? []).length === 0 ? (
         <div className="text-center text-zinc-500 mt-32 text-sm">
           还没有视频。点击右上角 [+ Import] 导入第一个视频。
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6">
-          {visible.map((v) => {
-            const isLive =
-              activeAnalysisVideoId === v.id &&
-              ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
-            return (
-              <VideoCard
-                key={v.id}
-                entry={v}
-                draggedId={draggedId}
-                dropFeedback={dragOverId === v.id ? { mode: "reorder" } : null}
-                onContextMenu={handleContextMenu}
-                onClick={() => navigate(`/player/${v.id}`)}
-                onDragStart={(e) => onDragStart(e, v.id)}
-                onDragOver={(e) => onDragOver(e, v.id)}
-                onDragLeave={() => onDragLeave(v.id)}
-                onDrop={(e) => onDrop(e, v.id)}
-                onDragEnd={onDragEnd}
-                titleNode={highlightMatch(v.title, search)}
-                durationNode={
-                  v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined
+          {search.trim().length > 0
+            ? // Search mode: flatten, ignore folder grouping.
+              visible.map((v) => {
+                const isLive =
+                  activeAnalysisVideoId === v.id &&
+                  ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
+                return (
+                  <VideoCard
+                    key={"v-" + v.id}
+                    entry={v}
+                    draggedId={drag?.ref.id ?? null}
+                    dropFeedback={null}
+                    onContextMenu={handleContextMenu}
+                    onClick={() => navigate(`/player/${v.id}`)}
+                    onDragStart={(e) => onDragStart(e, { type: "video", id: v.id })}
+                    onDragOver={(e) => onDragOver(e, { type: "video", id: v.id })}
+                    onDragLeave={() => onDragLeave(v.id)}
+                    onDrop={(e) => onDrop(e, { type: "video", id: v.id })}
+                    onDragEnd={onDragEnd}
+                    titleNode={highlightMatch(v.title, search)}
+                    durationNode={v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined}
+                    badge={
+                      <>
+                        {v.status === "analyzing" && (
+                          isLive ? (
+                            <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs pointer-events-none">
+                              解析中...
+                            </div>
+                          ) : (
+                            <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center text-amber-300 text-xs gap-0.5 pointer-events-none">
+                              <span>未完成解析</span>
+                              <span className="text-[10px] text-zinc-300/80">
+                                点击继续
+                              </span>
+                            </div>
+                          )
+                        )}
+                        {v.status === "failed" && (
+                          <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center pointer-events-none">
+                            !
+                          </div>
+                        )}
+                      </>
+                    }
+                  />
+                );
+              })
+            : (library.topLevelOrder ?? []).map((ref) => {
+                if (ref.type === "video") {
+                  const v = library.videos.find((x) => x.id === ref.id);
+                  if (!v) return null;
+                  const isLive =
+                    activeAnalysisVideoId === v.id &&
+                    ACTIVE_ANALYSIS_PHASES.has(activeAnalysisPhase);
+                  return (
+                    <VideoCard
+                      key={"v-" + v.id}
+                      entry={v}
+                      draggedId={drag?.ref.id ?? null}
+                      dropFeedback={
+                        dragOver?.targetId === v.id ? { mode: dragOver.mode } : null
+                      }
+                      onContextMenu={handleContextMenu}
+                      onClick={() => navigate(`/player/${v.id}`)}
+                      onDragStart={(e) => onDragStart(e, { type: "video", id: v.id })}
+                      onDragOver={(e) => onDragOver(e, { type: "video", id: v.id })}
+                      onDragLeave={() => onDragLeave(v.id)}
+                      onDrop={(e) => onDrop(e, { type: "video", id: v.id })}
+                      onDragEnd={onDragEnd}
+                      titleNode={highlightMatch(v.title, search)}
+                      durationNode={v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined}
+                      badge={
+                        <>
+                          {v.status === "analyzing" && (
+                            isLive ? (
+                              <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs pointer-events-none">
+                                解析中...
+                              </div>
+                            ) : (
+                              <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center text-amber-300 text-xs gap-0.5 pointer-events-none">
+                                <span>未完成解析</span>
+                                <span className="text-[10px] text-zinc-300/80">
+                                  点击继续
+                                </span>
+                              </div>
+                            )
+                          )}
+                          {v.status === "failed" && (
+                            <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center pointer-events-none">
+                              !
+                            </div>
+                          )}
+                        </>
+                      }
+                    />
+                  );
+                } else {
+                  const f = (library.folders ?? []).find((x) => x.id === ref.id);
+                  if (!f) return null;
+                  const inside = f.videoIds
+                    .map((vid) => library.videos.find((v) => v.id === vid))
+                    .filter((v): v is LibraryEntry => Boolean(v));
+                  return (
+                    <FolderCard
+                      key={"f-" + f.id}
+                      folder={f}
+                      videos={inside}
+                      draggedId={drag?.ref.id ?? null}
+                      dropFeedback={
+                        dragOver?.targetId === f.id ? { mode: dragOver.mode } : null
+                      }
+                      onClick={() => {
+                        // Capture origin rect for T11's open animation.
+                        // For now, just set openFolder; T11 wires the actual modal.
+                        setOpenFolder({ id: f.id, rect: new DOMRect(0, 0, 0, 0) });
+                      }}
+                      onContextMenu={(e) => handleFolderContextMenu(e, f)}
+                      onDragStart={(e) => onDragStart(e, { type: "folder", id: f.id })}
+                      onDragOver={(e) => onDragOver(e, { type: "folder", id: f.id })}
+                      onDragLeave={() => onDragLeave(f.id)}
+                      onDrop={(e) => onDrop(e, { type: "folder", id: f.id })}
+                      onDragEnd={onDragEnd}
+                    />
+                  );
                 }
-                badge={
-                  <>
-                    {v.status === "analyzing" && (
-                      isLive ? (
-                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs pointer-events-none">
-                          解析中...
-                        </div>
-                      ) : (
-                        <div className="absolute inset-0 bg-black/55 flex flex-col items-center justify-center text-amber-300 text-xs gap-0.5 pointer-events-none">
-                          <span>未完成解析</span>
-                          <span className="text-[10px] text-zinc-300/80">
-                            点击继续
-                          </span>
-                        </div>
-                      )
-                    )}
-                    {v.status === "failed" && (
-                      <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center pointer-events-none">
-                        !
-                      </div>
-                    )}
-                  </>
-                }
-              />
-            );
-          })}
+              })}
         </div>
       )}
 
@@ -401,8 +592,8 @@ export function Library() {
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={buildMenuItems(menu.entry)}
           onClose={() => setMenu(null)}
+          items={menu.type === "video" ? buildMenuItems(menu.entry) : []}
         />
       )}
 
@@ -413,6 +604,22 @@ export function Library() {
             rename(renaming.id, newTitle).catch((e) => alert(`重命名失败：${e}`));
           }}
           onClose={() => setRenaming(null)}
+        />
+      )}
+
+      {renamingFolder && (
+        <RenameDialog
+          title="重命名文件夹"
+          initialTitle={renamingFolder.currentName}
+          onConfirm={async (name) => {
+            try {
+              await renameFolder(renamingFolder.id, name);
+            } catch (err) {
+              console.error("rename folder failed", err);
+              await reload();
+            }
+          }}
+          onClose={() => setRenamingFolder(null)}
         />
       )}
     </div>

@@ -347,9 +347,15 @@ export function Library() {
     target: { type: "video" | "folder"; id: string }
   ) {
     const drag = dragRef.current;
-    if (!drag || drag.ref.id === target.id) return;
+    if (!drag) return;
+    // Always allow the drop (preventDefault) — even when the cursor lands on
+    // the source itself. During back→front reorder, live preview can slide
+    // the source under the cursor; skipping preventDefault there flashes the
+    // browser's "禁止" cursor. We still skip the state update for over-source
+    // so dragOver doesn't churn.
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
+    if (drag.ref.id === target.id) return;
     const dx = e.clientX - drag.startClient.x;
     const dy = e.clientY - drag.startClient.y;
     const dragRect = new DOMRect(

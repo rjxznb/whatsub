@@ -65,7 +65,12 @@ export function CaptionOverlay({ subtitle, style, onPositionChange }: Props) {
       <div
         data-caption-box
         className={
-          "max-w-[90%] rounded-md px-4 py-2 text-center backdrop-blur-sm shadow-lg " +
+          "max-w-[90%] rounded-md px-4 py-2 text-center shadow-lg " +
+          // backdrop-blur is independent of the bg color alpha — at bgOpacity 0
+          // the blur was still active, making the video behind look "through a
+          // lens". Turn the blur off when the user has explicitly chosen a
+          // fully transparent background so the video stays crisp.
+          (style.bgOpacity > 0 ? "backdrop-blur-sm " : "") +
           (onPositionChange
             ? "pointer-events-auto cursor-move select-none"
             : "")

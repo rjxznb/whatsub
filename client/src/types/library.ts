@@ -15,15 +15,26 @@ export interface LibraryEntry {
   createdAt: string;
   status: LibraryStatus;
   lastError: string | null;
-  /** Absolute path to the dir holding source.mp4 / transcript.srt / analysis.json.
-   *  Frozen at import time. Optional for entries created before this field existed. */
   videoDir?: string;
-  /** Translation style chosen at import time. Drives the system prompt for
-   *  this entry's analysis. Optional for legacy entries — Player falls back
-   *  to settings.translationStyle then to "colloquial". */
   analysisStyle?: TranslationStyle;
 }
 
+export interface LibraryFolder {
+  id: string;
+  name: string;
+  /** Order of videos inside this folder. */
+  videoIds: string[];
+  createdAt: string;
+}
+
+export type LibraryItemRef =
+  | { type: "video"; id: string }
+  | { type: "folder"; id: string };
+
 export interface Library {
   videos: LibraryEntry[];
+  /** Optional in backward-compat read; first save populates it. */
+  folders?: LibraryFolder[];
+  /** Optional in backward-compat read; first save populates it. */
+  topLevelOrder?: LibraryItemRef[];
 }

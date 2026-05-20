@@ -9,6 +9,8 @@ import {
 import {
   Captions,
   CaptionsOff,
+  ChevronLeft,
+  ChevronRight,
   PanelRight,
   PanelRightClose,
   Pause,
@@ -72,7 +74,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [showSpeed, setShowSpeed] = useState(false);
+  const [menuView, setMenuView] = useState<"root" | "speed" | "captions" | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [hoverX, setHoverX] = useState(0);
@@ -229,7 +231,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     const v = resolveVideo();
     if (v) v.playbackRate = s;
     setSpeed(s);
-    setShowSpeed(false);
   }
 
   function handleVolumeInput(e: React.ChangeEvent<HTMLInputElement>) {
@@ -463,39 +464,113 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
           <div className="flex-1" />
 
-          {/* Speed */}
+          {/* Combined settings menu — speed + captions */}
           <div className="relative">
             <button
               type="button"
-              onClick={() => setShowSpeed((v) => !v)}
-              title="播放速度"
+              onClick={() => setMenuView((v) => (v ? null : "root"))}
+              title="播放速度 / 字幕设置"
               className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/20 transition-colors"
             >
               <Settings className="h-6 w-6" />
             </button>
-            {speed !== 1 && (
+            {speed !== 1 && menuView === null && (
               <span className="absolute top-0 right-0 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-bold text-white pointer-events-none">
                 {speed}x
               </span>
             )}
-            {showSpeed && (
-              <div className="absolute bottom-full right-0 mb-2 overflow-hidden rounded-lg border border-white/10 bg-black/90 py-1 backdrop-blur shadow-lg z-10 min-w-[110px]">
-                {SPEED_OPTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => changeSpeed(s)}
-                    className={
-                      "block w-full px-4 py-1.5 text-left text-xs transition-colors " +
-                      (s === speed
-                        ? "text-blue-400 font-semibold"
-                        : "text-white/80 hover:bg-white/10")
-                    }
-                  >
-                    {s === 1 ? "Normal" : `${s}x`}
-                  </button>
-                ))}
-              </div>
+
+            {menuView !== null && (
+              <>
+                {/* Outside-click capture layer */}
+                <div
+                  data-testid="menu-outside-capture"
+                  className="fixed inset-0 z-[5]"
+                  onClick={() => setMenuView(null)}
+                />
+
+                <div
+                  data-testid="gear-menu"
+                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-black/80 backdrop-blur-md shadow-lg z-10"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {menuView === "root" && (
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-row-speed"
+                        onClick={() => setMenuView("speed")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>播放速度</span>
+                        <span className="flex items-center gap-1 text-white/70">
+                          <span>{speed === 1 ? "1x" : `${speed}x`}</span>
+                          <ChevronRight className="h-4 w-4" />
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="menu-row-captions"
+                        onClick={() => setMenuView("captions")}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                      >
+                        <span>字幕设置</span>
+                        <ChevronRight className="h-4 w-4 text-white/70" />
+                      </button>
+                    </div>
+                  )}
+
+                  {menuView === "speed" && (
+                    <div data-testid="speed-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("root")}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/80 hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>播放速度</span>
+                      </button>
+                      {SPEED_OPTIONS.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          data-testid={`speed-${s}`}
+                          onClick={() => {
+                            changeSpeed(s);
+                            setMenuView(null);
+                          }}
+                          className={
+                            "block w-full px-4 py-1.5 text-left text-sm transition-colors " +
+                            (s === speed
+                              ? "text-blue-400 font-semibold"
+                              : "text-white/80 hover:bg-white/10")
+                          }
+                        >
+                          {s === 1 ? "Normal" : `${s}x`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {menuView === "captions" && (
+                    <div data-testid="captions-submenu" className="py-1">
+                      <button
+                        type="button"
+                        data-testid="menu-back"
+                        onClick={() => setMenuView("root")}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/80 hover:bg-white/10 transition-colors border-b border-white/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                        <span>字幕设置</span>
+                      </button>
+                      <div className="px-4 py-3 text-xs text-white/40">
+                        (字幕样式控件将在 Task 5 实现)
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
 

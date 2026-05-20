@@ -554,7 +554,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
                 <div
                   data-testid="gear-menu"
-                  className="absolute bottom-full right-0 mb-2 w-[320px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/30 backdrop-blur-2xl shadow-lg z-10"
+                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/30 backdrop-blur-2xl shadow-lg z-10"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {menuView === "root" && (

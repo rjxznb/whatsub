@@ -54,7 +54,7 @@ export function FolderCard({
       onContextMenu={onContextMenu}
       title={folder.name}
       className={
-        "relative cursor-pointer select-none rounded-md overflow-hidden bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-transform " +
+        "relative cursor-pointer select-none rounded-md overflow-hidden bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-transform scale-90 " +
         (isDragged ? "opacity-40 " : "") +
         ring
       }

@@ -324,15 +324,9 @@ export function Library() {
                 onDragLeave={() => onDragLeave(v.id)}
                 onDrop={(e) => onDrop(e, v.id)}
                 onDragEnd={onDragEnd}
-                titleNode={
-                  <>
-                    {highlightMatch(v.title, search)}
-                    {v.durationSec > 0 && (
-                      <span className="ml-1 text-[10px] text-zinc-500 font-normal">
-                        {formatTime(v.durationSec)}
-                      </span>
-                    )}
-                  </>
+                titleNode={highlightMatch(v.title, search)}
+                durationNode={
+                  v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined
                 }
                 badge={
                   <>

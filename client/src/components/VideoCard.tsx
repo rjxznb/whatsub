@@ -19,6 +19,8 @@ interface Props {
   onDragEnd: () => void;
   /** Optional node to render as the card title. Defaults to entry.title plain text. */
   titleNode?: ReactNode;
+  /** Optional node rendered below the title as the duration line. */
+  durationNode?: ReactNode;
   /** Optional overlay slot used by the parent for "在后台解析" badges,
    *  vocab-attached indicators, etc. */
   badge?: ReactNode;
@@ -36,6 +38,7 @@ export function VideoCard({
   onDrop,
   onDragEnd,
   titleNode,
+  durationNode,
   badge,
 }: Props) {
   const isDragged = draggedId === entry.id;
@@ -51,6 +54,7 @@ export function VideoCard({
   return (
     <div
       draggable
+      title={entry.title}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -62,22 +66,28 @@ export function VideoCard({
       }}
       onContextMenu={(e) => onContextMenu(e, entry)}
       className={
-        "relative cursor-pointer group rounded overflow-hidden bg-zinc-900 border border-zinc-800 transition-transform " +
+        "relative cursor-pointer group select-none rounded-md overflow-hidden bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-transform " +
         (isDragged ? "opacity-40 " : "") +
         ring
       }
     >
-      {entry.thumbnailPath && (
-        <img
-          src={convertFileSrc(entry.thumbnailPath)}
-          alt=""
-          className="w-full aspect-video object-cover"
-        />
-      )}
-      <div className="p-2 text-xs">
-        <div className="truncate font-medium text-zinc-100">
+      <div className="aspect-video bg-zinc-800 relative">
+        {entry.thumbnailPath && (
+          <img
+            draggable={false}
+            src={convertFileSrc(entry.thumbnailPath)}
+            alt=""
+            className="w-full h-full object-cover"
+          />
+        )}
+      </div>
+      <div className="p-2">
+        <div className="text-sm truncate font-medium text-zinc-100">
           {titleNode ?? entry.title}
         </div>
+        {durationNode && (
+          <div className="mt-1 text-[10px] text-zinc-400">{durationNode}</div>
+        )}
       </div>
       {dropFeedback?.mode === "reorder" && (
         <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-400 pointer-events-none" />

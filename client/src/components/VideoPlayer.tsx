@@ -21,6 +21,7 @@ import {
 import { formatTime } from "../utils/time";
 import { CaptionOverlay } from "./CaptionOverlay";
 import type { Subtitle } from "../llm/types";
+import type { CaptionStyle, Settings as AppSettings } from "../types/settings";
 
 interface Props {
   src: string;
@@ -36,12 +37,27 @@ interface Props {
   showCaptions?: boolean;
   /** Called when the user toggles the caption overlay. */
   onToggleCaptions?: () => void;
+  /** Resolved caption visual style. Drives CaptionOverlay rendering and the
+   *  captions submenu's current-selection state. */
+  captionStyle: CaptionStyle;
+  /** Patch one or more caption-style Settings fields. Caller persists via
+   *  useSettings().save(). */
+  onChangeCaptionStyle: (patch: Partial<AppSettings>) => void;
 }
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
-  { src, panelOpen, onTogglePanel, currentSubtitle, showCaptions, onToggleCaptions },
+  {
+    src,
+    panelOpen,
+    onTogglePanel,
+    currentSubtitle,
+    showCaptions,
+    onToggleCaptions,
+    captionStyle,
+    onChangeCaptionStyle: _onChangeCaptionStyle,
+  },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -318,7 +334,12 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
       {/* Bilingual caption overlay — sits above where the controls render,
           stays visible regardless of control auto-hide. */}
-      {showCaptions && <CaptionOverlay subtitle={currentSubtitle ?? null} />}
+      {showCaptions && (
+        <CaptionOverlay
+          subtitle={currentSubtitle ?? null}
+          style={captionStyle}
+        />
+      )}
 
       {/* 2x boost indicator (top-center, while ←/→ held) */}
       {boost2x && (

@@ -23,6 +23,8 @@ import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
 import { dedupSubtitles } from "../store/analysis";
 import { runInBackground, takeOverBackground } from "../store/backgroundAnalyses";
+import { captionStyleFromSettings } from "../types/settings";
+import type { Settings } from "../types/settings";
 import type { AnalysisResult, Subtitle, SrtCue } from "../llm/types";
 
 type Tab = "subtitles" | "keyPhrases";
@@ -40,7 +42,14 @@ export function Player() {
     const n = Number(raw);
     return Number.isFinite(n) && n >= 0 ? n : null;
   })();
-  const { settings } = useSettings();
+  const { settings, save: saveSettings } = useSettings();
+  const captionStyle = useMemo(
+    () => captionStyleFromSettings(settings),
+    [settings]
+  );
+  const onChangeCaptionStyle = (patch: Partial<Settings>) => {
+    void saveSettings({ ...settings, ...patch });
+  };
   const { library, reload } = useLibrary();
   const analysis = useAnalysis();
   const vocab = useVocabulary();
@@ -652,6 +661,8 @@ export function Player() {
               }
               showCaptions={showCaptions}
               onToggleCaptions={() => setShowCaptions((v) => !v)}
+              captionStyle={captionStyle}
+              onChangeCaptionStyle={onChangeCaptionStyle}
             />
           )}
         </div>

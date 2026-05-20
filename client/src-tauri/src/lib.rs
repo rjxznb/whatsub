@@ -80,6 +80,12 @@ pub fn run() {
             commands::corpus::corpus_phrase_detail,
             commands::corpus::corpus_tags,
             commands::corpus::corpus_versions,
+            commands::library::library_create_folder,
+            commands::library::library_delete_folder,
+            commands::library::library_rename_folder,
+            commands::library::library_move_video_to_folder,
+            commands::library::library_merge_into_folder,
+            commands::library::library_set_top_level_order,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

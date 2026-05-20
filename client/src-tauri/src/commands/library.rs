@@ -252,6 +252,220 @@ pub fn reveal_in_explorer(path: String) -> AppResult<()> {
     Ok(())
 }
 
+// === ID + timestamp helpers ===
+
+fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn new_id(prefix: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(now.as_secs().to_le_bytes());
+    hasher.update(now.subsec_nanos().to_le_bytes());
+    let hex = hex::encode(hasher.finalize());
+    format!("{}{}", prefix, &hex[..10])
+}
+
+// === Pure in-memory helpers (Tauri commands below call these + write_index) ===
+
+fn create_folder_in_memory(lib: &mut Library, name: Option<String>) -> String {
+    let id = new_id("f-");
+    let folder = LibraryFolder {
+        id: id.clone(),
+        name: name.unwrap_or_else(|| "新建文件夹".to_string()),
+        video_ids: Vec::new(),
+        created_at: now_iso(),
+    };
+    lib.folders.push(folder);
+    lib.top_level_order
+        .push(LibraryItemRef::Folder { id: id.clone() });
+    id
+}
+
+fn delete_folder_in_memory(lib: &mut Library, folder_id: &str) -> Result<(), String> {
+    let folder_idx = lib
+        .folders
+        .iter()
+        .position(|f| f.id == folder_id)
+        .ok_or_else(|| format!("folder {} not found", folder_id))?;
+    let folder = lib.folders.remove(folder_idx);
+    let pos = lib
+        .top_level_order
+        .iter()
+        .position(|r| matches!(r, LibraryItemRef::Folder { id } if id == folder_id));
+    if let Some(pos) = pos {
+        lib.top_level_order.remove(pos);
+    }
+    for vid in folder.video_ids {
+        lib.top_level_order
+            .push(LibraryItemRef::Video { id: vid });
+    }
+    Ok(())
+}
+
+fn rename_folder_in_memory(
+    lib: &mut Library,
+    folder_id: &str,
+    name: String,
+) -> Result<(), String> {
+    let folder = lib
+        .folders
+        .iter_mut()
+        .find(|f| f.id == folder_id)
+        .ok_or_else(|| format!("folder {} not found", folder_id))?;
+    folder.name = name;
+    Ok(())
+}
+
+fn move_video_to_folder_in_memory(
+    lib: &mut Library,
+    video_id: &str,
+    target_folder_id: Option<&str>,
+    insert_at: Option<usize>,
+) -> Result<(), String> {
+    for folder in lib.folders.iter_mut() {
+        folder.video_ids.retain(|v| v != video_id);
+    }
+    lib.top_level_order
+        .retain(|r| !matches!(r, LibraryItemRef::Video { id } if id == video_id));
+
+    match target_folder_id {
+        Some(fid) => {
+            let folder = lib
+                .folders
+                .iter_mut()
+                .find(|f| f.id == fid)
+                .ok_or_else(|| format!("folder {} not found", fid))?;
+            let pos = insert_at
+                .unwrap_or(folder.video_ids.len())
+                .min(folder.video_ids.len());
+            folder.video_ids.insert(pos, video_id.to_string());
+        }
+        None => {
+            let pos = insert_at
+                .unwrap_or(lib.top_level_order.len())
+                .min(lib.top_level_order.len());
+            lib.top_level_order
+                .insert(pos, LibraryItemRef::Video { id: video_id.to_string() });
+        }
+    }
+    Ok(())
+}
+
+fn merge_into_folder_in_memory(
+    lib: &mut Library,
+    video_ids: Vec<String>,
+    name: Option<String>,
+) -> Result<String, String> {
+    if video_ids.len() < 2 {
+        return Err("merge requires at least 2 videos".into());
+    }
+    let insert_pos = lib
+        .top_level_order
+        .iter()
+        .position(|r| matches!(r, LibraryItemRef::Video { id } if id == &video_ids[0]))
+        .unwrap_or(lib.top_level_order.len());
+
+    for vid in &video_ids {
+        for folder in lib.folders.iter_mut() {
+            folder.video_ids.retain(|v| v != vid);
+        }
+        lib.top_level_order
+            .retain(|r| !matches!(r, LibraryItemRef::Video { id } if id == vid));
+    }
+
+    let insert_pos = insert_pos.min(lib.top_level_order.len());
+
+    let folder_id = new_id("f-");
+    lib.folders.push(LibraryFolder {
+        id: folder_id.clone(),
+        name: name.unwrap_or_else(|| "新建文件夹".to_string()),
+        video_ids,
+        created_at: now_iso(),
+    });
+    lib.top_level_order
+        .insert(insert_pos, LibraryItemRef::Folder { id: folder_id.clone() });
+    Ok(folder_id)
+}
+
+fn set_top_level_order_in_memory(
+    lib: &mut Library,
+    refs: Vec<LibraryItemRef>,
+) -> Result<(), String> {
+    for r in &refs {
+        match r {
+            LibraryItemRef::Video { id } => {
+                if !lib.videos.iter().any(|v| &v.id == id) {
+                    return Err(format!("unknown video id {}", id));
+                }
+            }
+            LibraryItemRef::Folder { id } => {
+                if !lib.folders.iter().any(|f| &f.id == id) {
+                    return Err(format!("unknown folder id {}", id));
+                }
+            }
+        }
+    }
+    lib.top_level_order = refs;
+    Ok(())
+}
+
+// === Tauri commands wrapping the helpers ===
+
+#[tauri::command]
+pub fn library_create_folder(name: Option<String>) -> AppResult<String> {
+    let mut lib = read_index()?;
+    let id = create_folder_in_memory(&mut lib, name);
+    write_index(&lib)?;
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn library_delete_folder(folder_id: String) -> AppResult<()> {
+    let mut lib = read_index()?;
+    delete_folder_in_memory(&mut lib, &folder_id)?;
+    write_index(&lib)
+}
+
+#[tauri::command]
+pub fn library_rename_folder(folder_id: String, name: String) -> AppResult<()> {
+    let mut lib = read_index()?;
+    rename_folder_in_memory(&mut lib, &folder_id, name)?;
+    write_index(&lib)
+}
+
+#[tauri::command]
+pub fn library_move_video_to_folder(
+    video_id: String,
+    target_folder_id: Option<String>,
+    insert_at: Option<usize>,
+) -> AppResult<()> {
+    let mut lib = read_index()?;
+    move_video_to_folder_in_memory(&mut lib, &video_id, target_folder_id.as_deref(), insert_at)?;
+    write_index(&lib)
+}
+
+#[tauri::command]
+pub fn library_merge_into_folder(
+    video_ids: Vec<String>,
+    name: Option<String>,
+) -> AppResult<String> {
+    let mut lib = read_index()?;
+    let id = merge_into_folder_in_memory(&mut lib, video_ids, name)?;
+    write_index(&lib)?;
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn library_set_top_level_order(refs: Vec<LibraryItemRef>) -> AppResult<()> {
+    let mut lib = read_index()?;
+    set_top_level_order_in_memory(&mut lib, refs)?;
+    write_index(&lib)
+}
+
 #[cfg(test)]
 mod tests {
     // PURE IN-MEMORY TESTS ONLY. Do NOT touch paths::library_index_path() —
@@ -346,5 +560,108 @@ mod tests {
         assert_eq!(lib.videos.len(), 0);
         assert!(lib.folders.is_empty());
         assert!(lib.top_level_order.is_empty());
+    }
+
+    #[test]
+    fn create_folder_appends_to_top_level() {
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("v1"));
+        lib.top_level_order = vec![LibraryItemRef::Video { id: "v1".into() }];
+        let folder_id = create_folder_in_memory(&mut lib, Some("Test".into()));
+        assert_eq!(lib.folders.len(), 1);
+        assert_eq!(lib.folders[0].name, "Test");
+        assert_eq!(lib.folders[0].video_ids.len(), 0);
+        assert_eq!(lib.top_level_order.len(), 2);
+        match &lib.top_level_order[1] {
+            LibraryItemRef::Folder { id } => assert_eq!(id, &folder_id),
+            _ => panic!("expected folder ref at end"),
+        }
+    }
+
+    #[test]
+    fn merge_into_folder_pulls_videos_from_top_level() {
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("v1"));
+        upsert_in_memory(&mut lib, sample("v2"));
+        upsert_in_memory(&mut lib, sample("v3"));
+        lib.top_level_order = vec![
+            LibraryItemRef::Video { id: "v1".into() },
+            LibraryItemRef::Video { id: "v2".into() },
+            LibraryItemRef::Video { id: "v3".into() },
+        ];
+        let folder_id = merge_into_folder_in_memory(
+            &mut lib,
+            vec!["v2".into(), "v3".into()],
+            Some("Pair".into()),
+        )
+        .unwrap();
+        assert_eq!(lib.top_level_order.len(), 2);
+        match &lib.top_level_order[0] {
+            LibraryItemRef::Video { id } => assert_eq!(id, "v1"),
+            _ => panic!(),
+        }
+        match &lib.top_level_order[1] {
+            LibraryItemRef::Folder { id } => assert_eq!(id, &folder_id),
+            _ => panic!(),
+        }
+        assert_eq!(lib.folders[0].video_ids, vec!["v2".to_string(), "v3".into()]);
+    }
+
+    #[test]
+    fn move_video_to_folder_then_back() {
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("v1"));
+        upsert_in_memory(&mut lib, sample("v2"));
+        let folder_id = create_folder_in_memory(&mut lib, None);
+        lib.top_level_order = vec![
+            LibraryItemRef::Video { id: "v1".into() },
+            LibraryItemRef::Video { id: "v2".into() },
+            LibraryItemRef::Folder { id: folder_id.clone() },
+        ];
+        move_video_to_folder_in_memory(&mut lib, "v1", Some(&folder_id), None).unwrap();
+        assert_eq!(lib.folders[0].video_ids, vec!["v1".to_string()]);
+        assert!(!lib
+            .top_level_order
+            .iter()
+            .any(|r| matches!(r, LibraryItemRef::Video { id } if id == "v1")));
+
+        move_video_to_folder_in_memory(&mut lib, "v1", None, None).unwrap();
+        assert_eq!(lib.folders[0].video_ids.len(), 0);
+        assert!(lib
+            .top_level_order
+            .iter()
+            .any(|r| matches!(r, LibraryItemRef::Video { id } if id == "v1")));
+    }
+
+    #[test]
+    fn delete_folder_returns_videos_to_top_level_end() {
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("v1"));
+        upsert_in_memory(&mut lib, sample("v2"));
+        upsert_in_memory(&mut lib, sample("v3"));
+        let folder_id =
+            merge_into_folder_in_memory(&mut lib, vec!["v2".into(), "v3".into()], None).unwrap();
+        lib.top_level_order
+            .insert(0, LibraryItemRef::Video { id: "v1".into() });
+        delete_folder_in_memory(&mut lib, &folder_id).unwrap();
+        assert_eq!(lib.folders.len(), 0);
+        assert_eq!(lib.top_level_order.len(), 3);
+        let ids: Vec<_> = lib
+            .top_level_order
+            .iter()
+            .filter_map(|r| match r {
+                LibraryItemRef::Video { id } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["v1", "v2", "v3"]);
+    }
+
+    #[test]
+    fn rename_folder_updates_name() {
+        let mut lib = Library::default();
+        let folder_id = create_folder_in_memory(&mut lib, Some("Old".into()));
+        rename_folder_in_memory(&mut lib, &folder_id, "New".into()).unwrap();
+        assert_eq!(lib.folders[0].name, "New");
     }
 }

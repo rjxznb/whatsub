@@ -61,7 +61,7 @@ export function FolderOpenView({
   return (
     <div className="fixed inset-0 z-50">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity duration-250"
+        className="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity duration-200"
         style={{ opacity: open ? 1 : 0 }}
         onClick={onClose}
       />

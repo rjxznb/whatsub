@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' tauri: http://ipc.localhost; img-src 'self' data: https://*.ytimg.com; media-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' http://ipc.localhost ipc: tauri: https://whatsub.eversay.cc http://localhost:1420 ws://localhost:1420",
+      "csp": "default-src 'self' tauri: http://ipc.localhost; img-src 'self' data: asset: https://asset.localhost https://*.ytimg.com; media-src 'self' asset: https://asset.localhost; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; connect-src 'self' http://ipc.localhost ipc: tauri: https://whatsub.eversay.cc http://localhost:1420 ws://localhost:1420",
       "assetProtocol": {
         "enable": true,
         "scope": [

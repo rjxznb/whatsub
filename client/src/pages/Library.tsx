@@ -15,6 +15,7 @@ import { ContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { RenameDialog } from "../components/RenameDialog";
 import { VideoCard } from "../components/VideoCard";
 import { FolderCard } from "../components/FolderCard";
+import { MergeAnimationLayer } from "../components/MergeAnimationLayer";
 import { overlapRatio, resolveDropMode, type DropMode } from "../utils/overlap";
 import { formatTime } from "../utils/time";
 import {
@@ -154,8 +155,6 @@ export function Library() {
 
   // Suppress unused-variable warnings for state setters used in later tasks
   void openFolder;
-  void merge;
-  void setMerge;
 
   const [fileHover, setFileHover] = useState(false);
 
@@ -329,18 +328,12 @@ export function Library() {
         break;
       }
       case "merge": {
-        // Set merge state — Task 10 will render MergeAnimationLayer to handle the animation
-        // and the subsequent mergeIntoFolder + rename dialog. For now (T9), just call the
-        // backend immediately so reordering still progresses functionally.
-        try {
-          const folderId = await mergeIntoFolder([target.id, source.id]);
-          setRenamingFolder({ id: folderId, currentName: "新建文件夹" });
-        } catch (err) {
-          console.error("merge failed", err);
-          await reload();
-        }
-        // Animation hook-up handled in T10; we'll set the merge state then.
-        void sourceRect; void targetRect; // unused yet
+        setMerge({
+          source: source.id,
+          target: target.id,
+          sourceRect,
+          targetRect,
+        });
         break;
       }
     }
@@ -576,6 +569,32 @@ export function Library() {
           onClose={() => setImportInitial(null)}
         />
       )}
+
+      {merge && (() => {
+        const src = library.videos.find((v) => v.id === merge.source);
+        const tgt = library.videos.find((v) => v.id === merge.target);
+        if (!src || !tgt) return null;
+        return (
+          <MergeAnimationLayer
+            source={src}
+            target={tgt}
+            sourceRect={merge.sourceRect}
+            targetRect={merge.targetRect}
+            onDone={async () => {
+              try {
+                // Order: target first, source second — target was the "base" being dropped onto.
+                const folderId = await mergeIntoFolder([merge.target, merge.source]);
+                setMerge(null);
+                setRenamingFolder({ id: folderId, currentName: "新建文件夹" });
+              } catch (err) {
+                console.error("merge failed", err);
+                await reload();
+                setMerge(null);
+              }
+            }}
+          />
+        );
+      })()}
 
       {fileHover && (
         <div className="fixed inset-0 bg-blue-500/10 border-4 border-dashed border-blue-400 rounded-lg flex items-center justify-center z-40 pointer-events-none">

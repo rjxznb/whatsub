@@ -300,6 +300,30 @@ body::-webkit-scrollbar-corner,
   border: none;
 }
 
+/* ── Library merge-into-folder animation (Task 10) ──────────────────────
+   Three keyframes drive the 750ms "blue Apple-folder pop" sequence when
+   two video cards are drag-merged:
+   Phase A (0–300ms) — both image clones scale-down + translate toward midpoint.
+   Phase B (300–550ms) — clones continue fading; blue folder pops at midpoint.
+   CSS custom properties --toX / --toY are set inline per-clone so each
+   travels the correct vector regardless of card position. */
+@keyframes mergeClonePhaseA {
+  0%   { transform: translate(0, 0) scale(1); opacity: 1; }
+  100% { transform: translate(var(--toX), var(--toY)) scale(0.55); opacity: 0.8; }
+}
+
+@keyframes mergeClonePhaseB {
+  0%   { opacity: 0.8; }
+  100% { opacity: 0; }
+}
+
+@keyframes mergeFolderPop {
+  0%   { transform: scale(0); }
+  60%  { transform: scale(1.08); }
+  80%  { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+
 /* Vocab draft underline — used by VocabHighlight when the entry is a
    localStorage draft (user typed notes but never explicitly saved).
    The native CSS `border-dashed` renders very short, dense dashes (~2px

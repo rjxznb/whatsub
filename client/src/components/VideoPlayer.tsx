@@ -554,7 +554,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
                 <div
                   data-testid="gear-menu"
-                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/30 backdrop-blur-2xl shadow-lg z-10"
+                  className="absolute bottom-full right-0 mb-2 w-[320px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/30 backdrop-blur-2xl shadow-lg z-10"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {menuView === "root" && (
@@ -563,7 +563,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-row-speed"
                         onClick={() => setMenuView("speed")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>播放速度</span>
                         <span className="flex items-center gap-1 text-white/70">
@@ -575,7 +575,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-row-captions"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>字幕设置</span>
                         <ChevronRight className="h-4 w-4 text-white/70" />
@@ -589,30 +589,31 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("root")}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-sm text-white/80 hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
-                        <ChevronLeft className="h-4 w-4" />
+                        <ChevronLeft className="h-5 w-5" />
                         <span>播放速度</span>
                       </button>
-                      {SPEED_OPTIONS.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          data-testid={`speed-${s}`}
-                          onClick={() => {
-                            changeSpeed(s);
-                            setMenuView(null);
-                          }}
-                          className={
-                            "block w-full px-4 py-1.5 text-left text-sm transition-colors " +
-                            (s === speed
-                              ? "text-blue-400 font-semibold"
-                              : "text-white/80 hover:bg-white/10")
-                          }
-                        >
-                          {s === 1 ? "Normal" : `${s}x`}
-                        </button>
-                      ))}
+                      {SPEED_OPTIONS.map((s) => {
+                        const selected = s === speed;
+                        return (
+                          <button
+                            key={s}
+                            type="button"
+                            data-testid={`speed-${s}`}
+                            onClick={() => {
+                              changeSpeed(s);
+                              setMenuView(null);
+                            }}
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
+                          >
+                            <span className="w-4 inline-flex justify-center">
+                              {selected && <Check className="h-4 w-4" />}
+                            </span>
+                            <span>{s === 1 ? "Normal" : `${s}x`}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -622,7 +623,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("root")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>字幕设置</span>
@@ -632,7 +633,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="captions-row-fontColor"
                         onClick={() => setMenuView("captions.fontColor")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>字体颜色</span>
                         <span className="flex items-center gap-1 text-white/60">
@@ -645,7 +646,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="captions-row-fontScale"
                         onClick={() => setMenuView("captions.fontScale")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>字号</span>
                         <span className="flex items-center gap-1 text-white/60">
@@ -658,7 +659,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="captions-row-fontOpacity"
                         onClick={() => setMenuView("captions.fontOpacity")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>字体不透明度</span>
                         <span className="flex items-center gap-1 text-white/60">
@@ -671,7 +672,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="captions-row-highlights"
                         onClick={() => setMenuView("captions.highlights")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>重点高亮</span>
                         <span className="flex items-center gap-1 text-white/60">
@@ -684,7 +685,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="captions-row-bgColor"
                         onClick={() => setMenuView("captions.bgColor")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>背景颜色</span>
                         <span className="flex items-center gap-1 text-white/60">
@@ -697,7 +698,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="captions-row-bgOpacity"
                         onClick={() => setMenuView("captions.bgOpacity")}
-                        className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-white hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-base text-white hover:bg-white/10 transition-colors"
                       >
                         <span>背景不透明度</span>
                         <span className="flex items-center gap-1 text-white/60">
@@ -721,7 +722,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             captionHighlightsEnabled: DEFAULT_CAPTION_STYLE.highlightsEnabled,
                           })
                         }
-                        className="flex w-full items-center px-4 py-2.5 text-sm text-white/80 hover:bg-white/10 transition-colors"
+                        className="flex w-full items-center px-4 py-2.5 text-base text-white/80 hover:bg-white/10 transition-colors"
                       >
                         重置字幕设置
                       </button>
@@ -734,7 +735,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>字体颜色</span>
@@ -750,7 +751,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             onClick={() => {
                               onChangeCaptionStyle({ captionFontColor: value });
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
                           >
                             <span className="w-4 inline-flex justify-center">
                               {selected && <Check className="h-4 w-4" />}
@@ -768,7 +769,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>字号</span>
@@ -783,7 +784,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             onClick={() => {
                               onChangeCaptionStyle({ captionFontScale: value });
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
                           >
                             <span className="w-4 inline-flex justify-center">
                               {selected && <Check className="h-4 w-4" />}
@@ -801,7 +802,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>字体不透明度</span>
@@ -818,7 +819,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             onClick={() => {
                               onChangeCaptionStyle({ captionFontOpacity: value });
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
                           >
                             <span className="w-4 inline-flex justify-center">
                               {selected && <Check className="h-4 w-4" />}
@@ -836,7 +837,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>重点高亮</span>
@@ -851,7 +852,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             onClick={() => {
                               onChangeCaptionStyle({ captionHighlightsEnabled: value });
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
                           >
                             <span className="w-4 inline-flex justify-center">
                               {selected && <Check className="h-4 w-4" />}
@@ -869,7 +870,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>背景颜色</span>
@@ -885,7 +886,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             onClick={() => {
                               onChangeCaptionStyle({ captionBackgroundColor: value });
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
                           >
                             <span className="w-4 inline-flex justify-center">
                               {selected && <Check className="h-4 w-4" />}
@@ -903,7 +904,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                         type="button"
                         data-testid="menu-back"
                         onClick={() => setMenuView("captions")}
-                        className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-white hover:bg-white/10 transition-colors border-b border-white/10"
+                        className="flex w-full items-center gap-2 px-3 py-2.5 text-base text-white hover:bg-white/10 transition-colors border-b border-white/10"
                       >
                         <ChevronLeft className="h-4 w-4" />
                         <span>背景不透明度</span>
@@ -920,7 +921,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             onClick={() => {
                               onChangeCaptionStyle({ captionBackgroundOpacity: value });
                             }}
-                            className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
+                            className="flex w-full items-center gap-3 px-4 py-2 text-base text-white hover:bg-white/10 transition-colors"
                           >
                             <span className="w-4 inline-flex justify-center">
                               {selected && <Check className="h-4 w-4" />}

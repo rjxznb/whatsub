@@ -112,6 +112,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [duration, setDuration] = useState(0);
@@ -153,6 +154,28 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     if (typeof ref === "function") return null; // can't read from function ref
     return ref.current;
   }, [ref]);
+
+  // Sync the hover-preview video's currentTime so it shows the frame at the
+  // cursor position. Throttled to one update per animation frame so rapid
+  // mousemove doesn't pile up seek requests faster than the decoder can serve.
+  useEffect(() => {
+    if (hoverTime === null) return;
+    const pv = previewVideoRef.current;
+    if (!pv) return;
+    let cancelled = false;
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      try {
+        pv.currentTime = hoverTime;
+      } catch {
+        /* video not ready yet — next hover tick will retry */
+      }
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [hoverTime]);
 
   // Auto-hide controls 3s after last mouse move while playing.
   const resetHideTimer = useCallback(() => {
@@ -459,14 +482,32 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
             className="absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-blue-400 opacity-0 group-hover/progress:opacity-100 transition-opacity shadow"
             style={{ left: `calc(${progressPct}% - 6px)` }}
           />
-          {hoverTime !== null && (
-            <div
-              className="absolute -translate-x-1/2 rounded bg-black/80 px-1.5 py-0.5 text-[10px] text-white pointer-events-none"
-              style={{ left: `${hoverX}px`, bottom: "100%", marginBottom: "6px" }}
-            >
-              {formatTime(hoverTime)}
+          {/* Hover preview: thumbnail + time tooltip above the progress bar.
+              The hidden <video> stays mounted (only displays when hoverTime
+              is set) so we pay the metadata-load cost once, not per-hover. */}
+          <div
+            className="absolute -translate-x-1/2 pointer-events-none flex flex-col items-center gap-1"
+            style={{
+              left: `${hoverX}px`,
+              bottom: "100%",
+              marginBottom: "10px",
+              display: hoverTime !== null ? "flex" : "none",
+            }}
+          >
+            <div className="w-40 aspect-video rounded overflow-hidden border border-white/20 bg-black shadow-xl">
+              <video
+                ref={previewVideoRef}
+                src={src}
+                muted
+                playsInline
+                preload="auto"
+                className="w-full h-full object-cover"
+              />
             </div>
-          )}
+            <div className="rounded bg-black/80 px-1.5 py-0.5 text-[10px] text-white tabular-nums">
+              {hoverTime !== null ? formatTime(hoverTime) : ""}
+            </div>
+          </div>
         </div>
 
         {/* Controls row */}

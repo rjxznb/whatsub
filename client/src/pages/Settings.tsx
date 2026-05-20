@@ -16,7 +16,6 @@ import { SiteIcon } from "../components/SiteIcon";
 import { getVersion } from "@tauri-apps/api/app";
 
 export function Settings() {
-  const email = useAuth((s) => s.email);
   const { settings, load, save } = useSettings();
   const [draft, setDraft] = useState<Settings>(settings);
   const [modelDownloaded, setModelDownloaded] = useState<Record<string, boolean>>({});
@@ -131,11 +130,6 @@ export function Settings() {
       </header>
 
       <div className="max-w-2xl mx-auto p-6 space-y-8">
-        <section className="p-4 bg-zinc-900 border border-zinc-800 rounded">
-          <h2 className="font-semibold mb-1">账户</h2>
-          <div className="text-xs text-zinc-400">授权邮箱: {email ?? '—'}</div>
-        </section>
-
         <section>
           <h2 className="font-semibold mb-3">翻译服务</h2>
           <VendorSection draft={draft} setDraft={setDraft} />
@@ -324,8 +318,6 @@ export function Settings() {
         <LicenseSection />
 
         <UpdateSection />
-
-        <YtDlpSection />
 
       </div>
     </div>
@@ -906,6 +898,7 @@ function formatRelativeTime(ts: number): string {
 
 function LicenseSection() {
   const license = useLicense();
+  const email = useAuth((s) => s.email);
 
   if (license.mode !== 'ACTIVE' || !license.state) return null;
 
@@ -918,6 +911,9 @@ function LicenseSection() {
     <section className="border-t border-zinc-800 pt-6">
       <h2 className="font-semibold mb-3">软件授权</h2>
       <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
+        <Row label="授权邮箱">
+          <span className="text-zinc-300">{email ?? '—'}</span>
+        </Row>
         <Row label="授权码">
           <span className="font-mono text-emerald-300">{license.state.key}</span>
         </Row>
@@ -944,110 +940,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <span className="text-zinc-500 w-20 shrink-0">{label}</span>
       <span className="flex-1 min-w-0 truncate">{children}</span>
     </div>
-  );
-}
-
-/**
- * yt-dlp version display + runtime update button. Decoupled from the
- * whatsub release cycle: whenever YouTube changes their player JS /
- * signature algorithm, the bundled yt-dlp may break — user clicks
- * "更新到最新" here to fetch a fresh binary into AppData. The pipeline
- * picks it up automatically on the next import.
- */
-interface YtDlpStatus {
-  version: string;
-  source: "appdata" | "bundled";
-}
-function YtDlpSection() {
-  const [status, setStatus] = useState<YtDlpStatus | null>(null);
-  const [loading, setLoading] = useState<"idle" | "loading" | "updating">("idle");
-  const [error, setError] = useState<string | null>(null);
-
-  async function refresh() {
-    setLoading("loading");
-    setError(null);
-    try {
-      const s = await invoke<YtDlpStatus>("yt_dlp_get_status");
-      setStatus(s);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading("idle");
-    }
-  }
-
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function doUpdate() {
-    setLoading("updating");
-    setError(null);
-    try {
-      const s = await invoke<YtDlpStatus>("yt_dlp_update");
-      setStatus(s);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading("idle");
-    }
-  }
-
-  return (
-    <section className="border-t border-zinc-800 pt-6">
-      <h2 className="font-semibold mb-1">yt-dlp 二进制</h2>
-      <p className="text-xs text-zinc-500 leading-relaxed mb-3">
-        yt-dlp 是从 YouTube / B站 / Ins 等站点下载视频的工具。
-        YouTube 经常更新 player JS / 签名算法,**老版本 yt-dlp 会失效或变慢**。
-        如果下载越来越卡或报「Unable to extract」错误,点下面的「更新」即可。
-        更新后的版本独立存在 AppData,不受 whatsub 自身升级影响。
-      </p>
-      <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-sm text-zinc-400 tabular-nums">
-          {loading === "loading"
-            ? "读取中..."
-            : status
-            ? `v${status.version}`
-            : "未知"}
-        </span>
-        {status && (
-          <span
-            className={
-              "text-[11px] px-1.5 py-0.5 rounded " +
-              (status.source === "appdata"
-                ? "bg-blue-500/15 text-blue-300 border border-blue-500/30"
-                : "bg-zinc-700 text-zinc-300")
-            }
-          >
-            {status.source === "appdata" ? "已用户更新" : "内置版本"}
-          </span>
-        )}
-        <button
-          onClick={() => void doUpdate()}
-          disabled={loading !== "idle"}
-          className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 disabled:opacity-50 text-black text-sm rounded font-medium"
-        >
-          {loading === "updating" ? "下载中..." : "更新到最新"}
-        </button>
-        <button
-          onClick={() => void refresh()}
-          disabled={loading !== "idle"}
-          className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm rounded disabled:opacity-50"
-        >
-          重新检测
-        </button>
-      </div>
-      {error && (
-        <div className="mt-2 text-xs text-rose-300 break-all">
-          ✗ {error}
-        </div>
-      )}
-      <p className="text-[11px] text-zinc-600 mt-2">
-        提示:更新需要联网,下载源 https://github.com/yt-dlp/yt-dlp/releases/latest
-        ,国内用户可能需要梯子。更新失败不影响内置版本。
-      </p>
-    </section>
   );
 }
 

@@ -88,14 +88,15 @@ describe("VideoPlayer captions submenu (YouTube-style nested)", () => {
     expect(getByTestId("captions-row-bgOpacity")).toBeTruthy();
   });
 
-  it("font color row → deep submenu → pick yellow → patches + auto-back", () => {
-    const { getByTestId, onChange } = openCaptions();
+  it("font color row → deep submenu → pick yellow → patches + stays in deep submenu", () => {
+    const { getByTestId, queryByTestId, onChange } = openCaptions();
     fireEvent.click(getByTestId("captions-row-fontColor"));
     expect(getByTestId("captions-fontColor-submenu")).toBeTruthy();
     fireEvent.click(getByTestId("font-color-#FFEB3B"));
     expect(onChange).toHaveBeenCalledWith({ captionFontColor: "#FFEB3B" });
-    // Auto-back to captions submenu after pick
-    expect(getByTestId("captions-submenu")).toBeTruthy();
+    // Stays on deep submenu so user can pick another option to compare
+    expect(getByTestId("captions-fontColor-submenu")).toBeTruthy();
+    expect(queryByTestId("captions-submenu")).toBeNull();
   });
 
   it("bg color row → deep submenu → pick blue → patches captionBackgroundColor", () => {

@@ -530,7 +530,12 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
               title="播放速度 / 字幕设置"
               className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-white/20 transition-colors"
             >
-              <Settings className="h-6 w-6" />
+              <Settings
+                className={
+                  "h-6 w-6 transition-transform duration-200 ease-out " +
+                  (menuView !== null ? "rotate-[30deg]" : "rotate-0")
+                }
+              />
             </button>
             {speed !== 1 && menuView === null && (
               <span className="absolute top-0 right-0 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-500 px-1 text-[9px] font-bold text-white pointer-events-none">
@@ -549,7 +554,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
                 <div
                   data-testid="gear-menu"
-                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/70 backdrop-blur-xl shadow-lg z-10"
+                  className="absolute bottom-full right-0 mb-2 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-zinc-900/30 backdrop-blur-2xl shadow-lg z-10"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {menuView === "root" && (
@@ -744,7 +749,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             data-testid={`font-color-${value}`}
                             onClick={() => {
                               onChangeCaptionStyle({ captionFontColor: value });
-                              setMenuView("captions");
                             }}
                             className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >
@@ -778,7 +782,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             data-testid={`font-scale-${value}`}
                             onClick={() => {
                               onChangeCaptionStyle({ captionFontScale: value });
-                              setMenuView("captions");
                             }}
                             className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >
@@ -814,7 +817,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             data-testid={`font-opacity-${value}`}
                             onClick={() => {
                               onChangeCaptionStyle({ captionFontOpacity: value });
-                              setMenuView("captions");
                             }}
                             className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >
@@ -848,7 +850,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             data-testid={testId}
                             onClick={() => {
                               onChangeCaptionStyle({ captionHighlightsEnabled: value });
-                              setMenuView("captions");
                             }}
                             className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >
@@ -883,7 +884,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             data-testid={`bg-color-${value}`}
                             onClick={() => {
                               onChangeCaptionStyle({ captionBackgroundColor: value });
-                              setMenuView("captions");
                             }}
                             className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >
@@ -919,7 +919,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
                             data-testid={`bg-opacity-${value}`}
                             onClick={() => {
                               onChangeCaptionStyle({ captionBackgroundOpacity: value });
-                              setMenuView("captions");
                             }}
                             className="flex w-full items-center gap-3 px-4 py-2 text-sm text-white hover:bg-white/10 transition-colors"
                           >

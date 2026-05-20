@@ -11,15 +11,23 @@ interface Props {
   y: number;
   items: ContextMenuItem[];
   onClose: () => void;
+  /** When provided, mousedowns inside this element do NOT auto-close the menu.
+   *  Use this when the anchor that opens the menu also needs to toggle it
+   *  closed on re-click — otherwise the outside-click handler fires first and
+   *  the anchor's onClick reopens. */
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
-export function ContextMenu({ x, y, items, onClose }: Props) {
+export function ContextMenu({ x, y, items, onClose, anchorRef }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click or Escape
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (!ref.current?.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (ref.current?.contains(target)) return;
+      if (anchorRef?.current?.contains(target)) return;
+      onClose();
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -30,7 +38,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
   // Clamp position so the menu doesn't overflow the viewport.
   const adjustedX = Math.min(x, window.innerWidth - 200);

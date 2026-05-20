@@ -61,6 +61,7 @@ export function Player() {
   const [tab, setTab] = useState<Tab>("subtitles");
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null);
+  const exportButtonRef = useRef<HTMLButtonElement>(null);
   const [showExportVideo, setShowExportVideo] = useState(false);
   const [autoScrollSubtitle, setAutoScrollSubtitle] = useState<boolean>(() => {
     const saved =
@@ -89,6 +90,7 @@ export function Player() {
   // Resizable split between video pane (left) and subtitle pane (right).
   // Persisted as a percentage in localStorage; clamped to 25%-80%.
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const [splitDragging, setSplitDragging] = useState(false);
   const [splitPct, setSplitPct] = useState<number>(() => {
     const saved =
       typeof window !== "undefined" ? window.localStorage.getItem("playerSplitPct") : null;
@@ -114,6 +116,7 @@ export function Player() {
     e.preventDefault();
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
+    setSplitDragging(true);
     const onMove = (ev: MouseEvent) => {
       const rect = splitContainerRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -123,6 +126,7 @@ export function Player() {
     const onUp = () => {
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      setSplitDragging(false);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
@@ -626,12 +630,17 @@ export function Player() {
         <div className="flex-1 truncate text-sm">{entry?.title ?? videoId}</div>
         <button
           type="button"
+          ref={exportButtonRef}
           disabled={!canExport}
           onClick={(e) => {
+            if (exportMenu) {
+              setExportMenu(null);
+              return;
+            }
             const r = e.currentTarget.getBoundingClientRect();
             setExportMenu({ x: r.right - 200, y: r.bottom + 4 });
           }}
-          title={canExport ? "导出字幕为 SRT" : "字幕分析完成后可导出"}
+          title={canExport ? "导出字幕或视频" : "字幕分析完成后可导出"}
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
         >
           <FileOutput className="h-4 w-4" />
@@ -647,8 +656,11 @@ export function Player() {
 
       <div ref={splitContainerRef} className="flex-1 flex min-h-0">
         <div
-          style={panelOpen ? { width: `${splitPct}%` } : { width: "100%" }}
-          className="shrink-0"
+          style={{ width: panelOpen ? `${splitPct}%` : "100%" }}
+          className={
+            "shrink-0 " +
+            (splitDragging ? "" : "transition-[width] duration-300 ease-out")
+          }
         >
           {videoSrc && (
             <VideoPlayer
@@ -666,15 +678,26 @@ export function Player() {
             />
           )}
         </div>
-        {panelOpen && (
-          <>
-            <div
-              onMouseDown={startSplitDrag}
-              onDoubleClick={() => setSplitPct(58)}
-              title="拖动调整比例 · 双击重置 58%"
-              className="w-1 bg-zinc-800 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize shrink-0 transition-colors"
-            />
-            <div className="flex-1 flex flex-col min-h-0">
+        <div
+          onMouseDown={panelOpen ? startSplitDrag : undefined}
+          onDoubleClick={panelOpen ? () => setSplitPct(58) : undefined}
+          title={panelOpen ? "拖动调整比例 · 双击重置 58%" : undefined}
+          style={{ width: panelOpen ? "4px" : "0px" }}
+          className={
+            "shrink-0 overflow-hidden bg-zinc-800 " +
+            (panelOpen ? "hover:bg-blue-400 active:bg-blue-500 cursor-col-resize " : "pointer-events-none ") +
+            (splitDragging ? "" : "transition-[width,background-color] duration-300 ease-out")
+          }
+        />
+        <div
+          style={{
+            width: panelOpen ? `calc(${100 - splitPct}% - 4px)` : "0px",
+          }}
+          className={
+            "shrink-0 overflow-hidden flex flex-col min-h-0 " +
+            (splitDragging ? "" : "transition-[width] duration-300 ease-out")
+          }
+        >
           <div className="flex border-b border-zinc-800 text-sm items-center">
             {(["subtitles", "keyPhrases"] as Tab[]).map((t) => (
               <button
@@ -754,9 +777,7 @@ export function Player() {
               />
             )}
           </div>
-            </div>
-          </>
-        )}
+        </div>
       </div>
 
       {exportMenu && (
@@ -764,6 +785,7 @@ export function Player() {
           x={exportMenu.x}
           y={exportMenu.y}
           onClose={() => setExportMenu(null)}
+          anchorRef={exportButtonRef}
           items={[
             { label: "导出英文字幕 (.en.srt)", onClick: () => void exportOne("en") },
             { label: "导出中文字幕 (.zh.srt)", onClick: () => void exportOne("zh") },

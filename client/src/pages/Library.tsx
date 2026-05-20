@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -22,7 +23,8 @@ import type { LibraryEntry } from "../types/library";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
-const CORPUS_NAV_ENABLED = false;
+// 本地开发期间手动 flip 到 true,提交前记得改回 false 再 commit。
+const CORPUS_NAV_ENABLED = true;
 
 // Phases where actual work (download / ffmpeg / whisper / LLM stream) is
 // happening right now. Library card uses this to distinguish "live run"
@@ -101,6 +103,20 @@ export function Library() {
     }
   }
   const [search, setSearch] = useState("");
+  const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("libraryNavCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("libraryNavCollapsed", navCollapsed ? "1" : "0");
+    } catch {
+      /* localStorage unavailable — collapse will reset next session, harmless */
+    }
+  }, [navCollapsed]);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -245,25 +261,44 @@ export function Library() {
         >
           + Import
         </button>
-        <Link
-          to="/vocab"
-          className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
-          title="本地词汇本（划字幕收藏的短语）"
+        <button
+          type="button"
+          onClick={() => setNavCollapsed((v) => !v)}
+          title={navCollapsed ? "展开导航" : "收起导航"}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
         >
-          ⭐ 词汇本
-        </Link>
-        {CORPUS_NAV_ENABLED && (
+          {navCollapsed ? (
+            <ChevronsLeft className="h-4 w-4" />
+          ) : (
+            <ChevronsRight className="h-4 w-4" />
+          )}
+        </button>
+        <div
+          className={
+            "flex items-center gap-3 overflow-hidden transition-[max-width,opacity] duration-300 ease-out " +
+            (navCollapsed ? "max-w-0 opacity-0" : "max-w-[400px] opacity-100")
+          }
+        >
           <Link
-            to="/corpus"
-            className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm"
-            title="公共语料库（云端）"
+            to="/vocab"
+            className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm whitespace-nowrap"
+            title="本地词汇本（划字幕收藏的短语）"
           >
-            📚 语料库
+            ⭐ 词汇本
           </Link>
-        )}
-        <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
-          ⚙
-        </Link>
+          {CORPUS_NAV_ENABLED && (
+            <Link
+              to="/corpus"
+              className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm whitespace-nowrap"
+              title="公共语料库（云端）"
+            >
+              📚 语料库
+            </Link>
+          )}
+          <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
+            ⚙
+          </Link>
+        </div>
       </header>
 
       {visible.length === 0 ? (

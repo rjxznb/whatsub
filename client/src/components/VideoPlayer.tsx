@@ -420,6 +420,9 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         <CaptionOverlay
           subtitle={currentSubtitle ?? null}
           style={captionStyle}
+          onPositionChange={(offsetX, offsetY) =>
+            onChangeCaptionStyle({ captionOffsetX: offsetX, captionOffsetY: offsetY })
+          }
         />
       )}
 

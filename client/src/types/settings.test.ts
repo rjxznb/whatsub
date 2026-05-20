@@ -24,6 +24,8 @@ describe("caption style defaults", () => {
       bgColor: "#000000",
       bgOpacity: 0.7,
       highlightsEnabled: true,
+      offsetX: 0,
+      offsetY: 0,
     });
   });
 });
@@ -58,6 +60,8 @@ describe("captionStyleFromSettings", () => {
       bgColor: "#2196F3",
       bgOpacity: 0.5,
       highlightsEnabled: false,
+      offsetX: 0,
+      offsetY: 0,
     });
   });
 });

@@ -91,6 +91,10 @@ export interface Settings {
    *  When false, English text + Chinese translation render plain. The
    *  right-side SubtitleList is unaffected. Default true. */
   captionHighlightsEnabled?: boolean;
+  /** Caption box pixel offset from its default centered-bottom position.
+   *  Default 0/0. Set by user drag on the overlay. */
+  captionOffsetX?: number;
+  captionOffsetY?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -112,6 +116,8 @@ export const DEFAULT_SETTINGS: Settings = {
   captionBackgroundColor: "#000000",
   captionBackgroundOpacity: 0.7,
   captionHighlightsEnabled: true,
+  captionOffsetX: 0,
+  captionOffsetY: 0,
 };
 
 /** Projection of caption-related Settings fields with defaults applied.
@@ -123,6 +129,8 @@ export interface CaptionStyle {
   bgColor: string;
   bgOpacity: number;
   highlightsEnabled: boolean;
+  offsetX: number;
+  offsetY: number;
 }
 
 export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
@@ -132,6 +140,8 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   bgColor: "#000000",
   bgOpacity: 0.7,
   highlightsEnabled: true,
+  offsetX: 0,
+  offsetY: 0,
 };
 
 export function captionStyleFromSettings(s: Settings): CaptionStyle {
@@ -143,5 +153,7 @@ export function captionStyleFromSettings(s: Settings): CaptionStyle {
     bgOpacity: s.captionBackgroundOpacity ?? DEFAULT_CAPTION_STYLE.bgOpacity,
     highlightsEnabled:
       s.captionHighlightsEnabled ?? DEFAULT_CAPTION_STYLE.highlightsEnabled,
+    offsetX: s.captionOffsetX ?? DEFAULT_CAPTION_STYLE.offsetX,
+    offsetY: s.captionOffsetY ?? DEFAULT_CAPTION_STYLE.offsetY,
   };
 }

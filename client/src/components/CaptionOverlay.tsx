@@ -1,18 +1,30 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Subtitle } from "../llm/types";
 import type { CaptionStyle } from "../types/settings";
 
 interface Props {
   subtitle: Subtitle | null;
   style: CaptionStyle;
+  /** Called on mouseup after a drag with the new pixel offsets relative to
+   *  the caption box's default position. Optional — when omitted, the box
+   *  cannot be moved. */
+  onPositionChange?: (offsetX: number, offsetY: number) => void;
 }
 
 /**
  * Cinema-style bilingual subtitle box rendered over the video. Visual style
  * (colors / font scale / opacity / highlight on-off) is driven by props so
  * the gear-menu can re-style in real-time without reading the store here.
+ * The box itself is draggable: mousedown + drag updates a transient local
+ * offset; on release the final offset is forwarded via onPositionChange
+ * for the caller to persist.
  */
-export function CaptionOverlay({ subtitle, style }: Props) {
+export function CaptionOverlay({ subtitle, style, onPositionChange }: Props) {
+  // Transient pixel delta during an active drag. While set, this overrides
+  // the offsetX/Y from props. On mouseup we forward to onPositionChange and
+  // clear this — the parent then re-renders with the new style offsets.
+  const [dragDelta, setDragDelta] = useState<null | { x: number; y: number }>(null);
+
   if (!subtitle) return null;
 
   const bgRgba = hexToRgba(style.bgColor, style.bgOpacity);
@@ -20,12 +32,49 @@ export function CaptionOverlay({ subtitle, style }: Props) {
   const enStyle = { ...textStyle, fontSize: `${1.25 * style.fontScale}rem` };
   const zhStyle = { ...textStyle, fontSize: `${1 * style.fontScale}rem` };
 
+  const offsetX = dragDelta?.x ?? style.offsetX;
+  const offsetY = dragDelta?.y ?? style.offsetY;
+
+  function onMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    if (!onPositionChange) return;
+    e.preventDefault();
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+    const startOffsetX = style.offsetX;
+    const startOffsetY = style.offsetY;
+    let currentX = startOffsetX;
+    let currentY = startOffsetY;
+
+    const onMove = (ev: MouseEvent) => {
+      currentX = startOffsetX + (ev.clientX - startMouseX);
+      currentY = startOffsetY + (ev.clientY - startMouseY);
+      setDragDelta({ x: currentX, y: currentY });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      onPositionChange(currentX, currentY);
+      setDragDelta(null);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   return (
     <div className="absolute inset-x-0 bottom-20 px-6 flex justify-center pointer-events-none z-10">
       <div
         data-caption-box
-        className="max-w-[90%] rounded-md px-4 py-2 text-center backdrop-blur-sm shadow-lg"
-        style={{ backgroundColor: bgRgba }}
+        className={
+          "max-w-[90%] rounded-md px-4 py-2 text-center backdrop-blur-sm shadow-lg " +
+          (onPositionChange
+            ? "pointer-events-auto cursor-move select-none"
+            : "")
+        }
+        style={{
+          backgroundColor: bgRgba,
+          transform: `translate(${offsetX}px, ${offsetY}px)`,
+        }}
+        onMouseDown={onMouseDown}
       >
         <div data-caption-en className="leading-snug font-medium" style={enStyle}>
           {renderEnglish(subtitle, style.highlightsEnabled)}

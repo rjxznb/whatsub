@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -136,12 +136,24 @@ export function Library() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
 
-  // Overlap-based drag state
-  const [drag, setDrag] = useState<null | {
+  // Overlap-based drag state.
+  //
+  // The dragstart → first-dragover gap is too short for React's setState to
+  // propagate. If we only used useState, the first dragover handler reads a
+  // stale `drag === null` from its closure, returns early without calling
+  // preventDefault, and the browser permanently marks the drag as "禁止"
+  // (no drop target). Using a ref lets dragover read the latest value
+  // synchronously the same tick dragstart writes it.
+  //
+  // The mirrored `dragSt` useState exists only so child cards re-render with
+  // the `draggedId` prop and apply the opacity-40 styling. Visual-only.
+  const dragRef = useRef<null | {
     ref: { type: "video" | "folder"; id: string };
     startRect: DOMRect;
     startClient: { x: number; y: number };
   }>(null);
+  const [dragSt, setDragSt] = useState<string | null>(null);
+  const dragOverRef = useRef<null | { targetId: string; mode: DropMode }>(null);
   const [dragOver, setDragOver] = useState<null | { targetId: string; mode: DropMode }>(null);
 
   // Folder UI state (T11 wires open animation; T10 wires merge animation)
@@ -289,11 +301,12 @@ export function Library() {
   function onDragStart(e: React.DragEvent, ref: { type: "video" | "folder"; id: string }) {
     const card = e.currentTarget as HTMLElement;
     const startRect = card.getBoundingClientRect();
-    setDrag({
+    dragRef.current = {
       ref,
       startRect,
       startClient: { x: e.clientX, y: e.clientY },
-    });
+    };
+    setDragSt(ref.id);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", `${ref.type}:${ref.id}`);
   }
@@ -302,6 +315,7 @@ export function Library() {
     e: React.DragEvent,
     target: { type: "video" | "folder"; id: string }
   ) {
+    const drag = dragRef.current;
     if (!drag || drag.ref.id === target.id) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
@@ -316,15 +330,19 @@ export function Library() {
     const targetRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const overlap = overlapRatio(dragRect, targetRect);
     const mode = resolveDropMode(drag.ref.type, target.type, overlap);
+    dragOverRef.current = { targetId: target.id, mode };
     setDragOver({ targetId: target.id, mode });
   }
 
   function onDragLeave(id: string) {
+    if (dragOverRef.current?.targetId === id) dragOverRef.current = null;
     setDragOver((cur) => (cur?.targetId === id ? null : cur));
   }
 
   function onDragEnd() {
-    setDrag(null);
+    dragRef.current = null;
+    dragOverRef.current = null;
+    setDragSt(null);
     setDragOver(null);
   }
 
@@ -333,17 +351,23 @@ export function Library() {
     target: { type: "video" | "folder"; id: string }
   ) {
     e.preventDefault();
-    if (!drag || !dragOver || drag.ref.id === target.id) {
-      setDrag(null);
+    const drag = dragRef.current;
+    const dragOverNow = dragOverRef.current;
+    if (!drag || !dragOverNow || drag.ref.id === target.id) {
+      dragRef.current = null;
+      dragOverRef.current = null;
+      setDragSt(null);
       setDragOver(null);
       return;
     }
-    const { mode } = dragOver;
+    const { mode } = dragOverNow;
     const source = drag.ref;
     // Capture rects before clearing state (for merge animation use later).
     const sourceRect = drag.startRect;
     const targetRect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setDrag(null);
+    dragRef.current = null;
+    dragOverRef.current = null;
+    setDragSt(null);
     setDragOver(null);
 
     switch (mode) {
@@ -479,7 +503,7 @@ export function Library() {
                   <VideoCard
                     key={"v-" + v.id}
                     entry={v}
-                    draggedId={drag?.ref.id ?? null}
+                    draggedId={dragSt}
                     dropFeedback={null}
                     onContextMenu={handleContextMenu}
                     onClick={() => navigate(`/player/${v.id}`)}
@@ -527,7 +551,7 @@ export function Library() {
                     <VideoCard
                       key={"v-" + v.id}
                       entry={v}
-                      draggedId={drag?.ref.id ?? null}
+                      draggedId={dragSt}
                       dropFeedback={
                         dragOver?.targetId === v.id ? { mode: dragOver.mode } : null
                       }
@@ -576,7 +600,7 @@ export function Library() {
                       key={"f-" + f.id}
                       folder={f}
                       videos={inside}
-                      draggedId={drag?.ref.id ?? null}
+                      draggedId={dragSt}
                       dropFeedback={
                         dragOver?.targetId === f.id ? { mode: dragOver.mode } : null
                       }

@@ -51,6 +51,18 @@ pub struct LibraryEntry {
     /// the frontend doesn't require a Rust enum bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_style: Option<String>,
+
+    /// Unix ms — set when entry was last successfully uploaded to /api/library/sync
+    /// (Plan 3, 2026-05-21). Undefined = never synced or unsynced from cloud.
+    /// v1 only YouTube sources get a value; others stay None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<i64>,
+
+    /// Friendly error message from the LAST sync attempt that failed.
+    /// Cleared on next successful sync. Used by SyncButton in the UI
+    /// to render the ✗ state + show the message in a tooltip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -488,6 +500,8 @@ mod tests {
             last_error: None,
             video_dir: None,
             analysis_style: None,
+            synced_at: None,
+            sync_error: None,
         }
     }
 

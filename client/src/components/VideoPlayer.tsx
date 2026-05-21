@@ -104,85 +104,47 @@ function colorLabel(hex: string): string {
   return CAPTION_COLOR_OPTIONS.find((o) => o.value.toUpperCase() === upper)?.label ?? hex;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const clean = hex.replace(/^#/, "");
-  const r = parseInt(clean.slice(0, 2), 16);
-  const g = parseInt(clean.slice(2, 4), 16);
-  const b = parseInt(clean.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
-}
-
-/** Compositing pass for PiP: draws the bilingual caption onto the same
- *  canvas that holds the video frame. Visual approximation of CaptionOverlay
- *  (Tailwind DOM) but inside canvas — fonts smaller, no highlight spans,
- *  bg + text styles tracked. The native PiP window has no DOM, so all of
- *  this has to be 2d API. */
-function drawCaptionOnCanvas(
-  ctx: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  subtitle: { text: string; translation: string },
-  style: CaptionStyle,
-): void {
-  if (!subtitle.text && !subtitle.translation) return;
-  // Reference font size = 4% of video height × user's scale slider.
-  const baseEn = Math.max(14, Math.round(height * 0.04 * style.fontScale));
-  const baseZh = Math.max(12, Math.round(height * 0.032 * style.fontScale));
-  const padX = Math.round(baseEn * 0.7);
-  const padY = Math.round(baseEn * 0.45);
-  const gap = Math.round(baseEn * 0.25);
-
-  ctx.save();
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-
-  // Measure both lines independently
-  ctx.font = `600 ${baseEn}px sans-serif`;
-  const enWidth = subtitle.text ? ctx.measureText(subtitle.text).width : 0;
-  ctx.font = `400 ${baseZh}px sans-serif`;
-  const zhWidth = subtitle.translation ? ctx.measureText(subtitle.translation).width : 0;
-
-  const blockWidth = Math.min(width * 0.9, Math.max(enWidth, zhWidth) + padX * 2);
-  const blockHeight = padY * 2 + baseEn + (subtitle.translation ? gap + baseZh : 0);
-  const blockX = (width - blockWidth) / 2;
-  const blockY = height - blockHeight - Math.round(height * 0.08);
-
-  // Background (rounded rect approximation via fillRect when radius is 0,
-  // otherwise use roundRect if supported by the canvas).
-  if (style.bgOpacity > 0) {
-    ctx.fillStyle = hexToRgba(style.bgColor, style.bgOpacity);
-    const radius = Math.min(10, blockHeight / 4);
-    const r = ctx as CanvasRenderingContext2D & {
-      roundRect?: (x: number, y: number, w: number, h: number, radii: number) => void;
-    };
-    if (typeof r.roundRect === "function") {
-      ctx.beginPath();
-      r.roundRect(blockX, blockY, blockWidth, blockHeight, radius);
-      ctx.fill();
-    } else {
-      ctx.fillRect(blockX, blockY, blockWidth, blockHeight);
+/** Build a WebVTT cue text string for a Subtitle:
+ *  - English line wraps highlight phrases as `<c.h>...</c.h>` for ::cue(.h)
+ *    styling in App.css to render an amber background (matches CaptionOverlay).
+ *  - Followed by a newline + the Chinese translation when present.
+ *
+ *  Non-overlapping wrap algorithm: find each highlight word's first position,
+ *  sort ascending, drop overlaps. Single-pass string build so positional
+ *  indices stay valid (don't try to wrap in-place — early wraps shift later
+ *  indices and the math gets brittle). */
+function buildVttText(s: Subtitle): string {
+  const text = s.text || "";
+  let en = text;
+  if (s.highlightWords && s.highlightWords.length > 0) {
+    type Match = { start: number; end: number; word: string };
+    const matches: Match[] = [];
+    for (const w of s.highlightWords) {
+      if (!w) continue;
+      const idx = text.indexOf(w);
+      if (idx === -1) continue;
+      matches.push({ start: idx, end: idx + w.length, word: w });
     }
+    matches.sort((a, b) => a.start - b.start);
+    const nonOverlapping: Match[] = [];
+    let lastEnd = 0;
+    for (const m of matches) {
+      if (m.start >= lastEnd) {
+        nonOverlapping.push(m);
+        lastEnd = m.end;
+      }
+    }
+    let out = "";
+    let cursor = 0;
+    for (const m of nonOverlapping) {
+      out += text.slice(cursor, m.start);
+      out += `<c.h>${m.word}</c.h>`;
+      cursor = m.end;
+    }
+    out += text.slice(cursor);
+    en = out;
   }
-
-  // Foreground text — fontColor + fontOpacity composed into rgba so the
-  // overall layer respects the alpha.
-  ctx.fillStyle = hexToRgba(style.fontColor, style.fontOpacity);
-  const centerX = blockX + blockWidth / 2;
-
-  if (subtitle.text) {
-    ctx.font = `600 ${baseEn}px sans-serif`;
-    ctx.fillText(subtitle.text, centerX, blockY + padY + baseEn);
-  }
-  if (subtitle.translation) {
-    ctx.font = `400 ${baseZh}px sans-serif`;
-    ctx.fillText(
-      subtitle.translation,
-      centerX,
-      blockY + padY + baseEn + gap + baseZh,
-    );
-  }
-
-  ctx.restore();
+  return s.translation ? `${en}\n${s.translation}` : en;
 }
 
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
@@ -201,13 +163,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const containerRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
-  // PiP rig — canvas painted with video + subtitle, captureStream() → hidden
-  // <video> for the actual PiP request. Native pip on the main <video>
-  // wouldn't carry the subtitle overlay (PiP only renders the video element
-  // itself, not DOM overlays), so we composite onto a canvas first.
-  const pipCanvasRef = useRef<HTMLCanvasElement>(null);
-  const pipVideoRef = useRef<HTMLVideoElement>(null);
-  const pipStreamRef = useRef<MediaStream | null>(null);
   const [pipActive, setPipActive] = useState(false);
   // Static blurred-grayscale poster of the source video, shown over the main
   // <video> while PiP is active. Captured (via drawImage→toDataURL) once at
@@ -375,75 +330,93 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, volume, muted, ended]);
 
-  // ---------- Picture-in-Picture rig ----------
+  // ---------- Picture-in-Picture (native, via the source <video>) ----------
   //
-  // Paint loop: video frame → canvas, then bilingual caption text → canvas.
-  // Runs only while pipActive. Cancelled on unmount or PiP exit. The captionStyle
-  // / currentSubtitle deps drive a fresh paint loop after each style/cue change.
-  useEffect(() => {
-    if (!pipActive) return;
-    const canvas = pipCanvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    const mainVid = resolveVideo();
-    if (!canvas || !ctx || !mainVid) return;
-    let raf = 0;
-    const paint = () => {
-      // Sync canvas size to source video's intrinsic resolution (lazy: only
-      // on first paint when video metadata is ready).
-      if (canvas.width !== mainVid.videoWidth || canvas.height !== mainVid.videoHeight) {
-        if (mainVid.videoWidth > 0 && mainVid.videoHeight > 0) {
-          canvas.width = mainVid.videoWidth;
-          canvas.height = mainVid.videoHeight;
-        }
-      }
-      try {
-        ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
-      } catch {
-        /* drawImage can throw if source not yet ready — silently retry next frame */
-      }
-      if (showCaptions && currentSubtitle) {
-        drawCaptionOnCanvas(ctx, canvas.width, canvas.height, currentSubtitle, captionStyle);
-      }
-      raf = requestAnimationFrame(paint);
-    };
-    raf = requestAnimationFrame(paint);
-    return () => cancelAnimationFrame(raf);
-  }, [pipActive, currentSubtitle, captionStyle, showCaptions, resolveVideo]);
+  // Earlier this was a canvas + captureStream rig so we could composite
+  // subtitles onto the PiP frames. But that broke play/pause/seek inside
+  // the PiP window (MediaStream from canvas is not seekable) AND highlight
+  // spans weren't rendered. Native PiP on the source element gives all
+  // three (controls + seekbar + currentTime) for free; we render subtitles
+  // via the standard TextTrack API which Chromium displays inside the
+  // PiP window directly. Highlight spans use WebVTT `<c.h>...</c.h>`
+  // markup styled by `::cue(.h)` in App.css.
+  //
+  // Cue management: one rolling cue replaced on every currentSubtitle
+  // change. Times mirror the cue's own start/end so seeking in the PiP
+  // window auto-hides/shows correctly — Player.tsx pushes a new
+  // currentSubtitle on time-update anyway, so we always have an in-range
+  // cue for the current moment.
+  const pipTrackRef = useRef<TextTrack | null>(null);
 
-  // PiP teardown: when system PiP window closes (user hits the ✕ on the
-  // floating window or another video takes over), sync our local state +
-  // stop the captureStream.
   useEffect(() => {
-    const pipVid = pipVideoRef.current;
-    if (!pipVid) return;
+    const mainVid = resolveVideo();
+    if (!mainVid) return;
+    let track = Array.from(mainVid.textTracks).find(
+      (t) => t.label === "whatsub-pip"
+    );
+    if (!track) {
+      track = mainVid.addTextTrack("subtitles", "whatsub-pip", "zh");
+    }
+    track.mode = "hidden";
+    pipTrackRef.current = track;
+  }, [resolveVideo, src]);
+
+  useEffect(() => {
+    const track = pipTrackRef.current;
+    if (!track) return;
+    while (track.cues && track.cues.length > 0) {
+      track.removeCue(track.cues[0]);
+    }
+    if (pipActive && showCaptions && currentSubtitle) {
+      try {
+        const start = Math.max(0, currentSubtitle.time);
+        const end = Math.max(start + 0.5, currentSubtitle.endTime || start + 30);
+        const cue = new VTTCue(start, end, buildVttText(currentSubtitle));
+        track.addCue(cue);
+      } catch (e) {
+        console.warn("vtt cue failed", e);
+      }
+    }
+    track.mode = pipActive && showCaptions ? "showing" : "hidden";
+  }, [currentSubtitle, pipActive, showCaptions]);
+
+  // PiP teardown: when the system PiP window closes (user hits ✕ on the
+  // floating window, video ends, another video takes over) sync local state
+  // and restore the main element's muted flag.
+  useEffect(() => {
+    const mainVid = resolveVideo();
+    if (!mainVid) return;
     const onLeave = () => {
       setPipActive(false);
       setPipPosterUrl(null);
-      pipStreamRef.current?.getTracks().forEach((t) => t.stop());
-      pipStreamRef.current = null;
-      // Restore main video's muted state to whatever the user had before
-      // PiP started (we muted it on entry to avoid double-audio).
-      const mainVid = resolveVideo();
-      if (mainVid && pipPrevMutedRef.current !== null) {
+      if (pipPrevMutedRef.current !== null) {
         mainVid.muted = pipPrevMutedRef.current;
         pipPrevMutedRef.current = null;
       }
     };
-    pipVid.addEventListener("leavepictureinpicture", onLeave);
-    return () => pipVid.removeEventListener("leavepictureinpicture", onLeave);
-  }, []);
+    mainVid.addEventListener("leavepictureinpicture", onLeave);
+    return () => mainVid.removeEventListener("leavepictureinpicture", onLeave);
+  }, [resolveVideo, src]);
 
-  // Close the PiP window when the whatsub window closes — otherwise the
-  // floating PiP can survive the source webview destruction on some
-  // Chromium builds, leaving an orphaned floating frame.
+  // Close the PiP window when the whatsub window closes — preventDefault
+  // the Tauri close, exit PiP, then call close() ourselves. Doing this
+  // synchronously-then-await ensures the PiP window dies before the
+  // webview is destroyed; otherwise the floating PiP can outlive the
+  // source page on some WebView2 builds, leaving an un-closable orphan
+  // (the bug surfacing as "下面还有一个 whatsub 程序怎么都关不上了").
   useEffect(() => {
     const win = getCurrentWindow();
     let unlisten: undefined | (() => void);
     win
-      .onCloseRequested(() => {
-        if (document.pictureInPictureElement) {
-          document.exitPictureInPicture().catch(() => {});
-        }
+      .onCloseRequested(async (event) => {
+        if (!document.pictureInPictureElement) return;
+        event.preventDefault();
+        try {
+          await document.exitPictureInPicture();
+        } catch { /* best-effort */ }
+        try {
+          await win.close();
+        } catch { /* harness already closing */ }
       })
       .then((u) => {
         unlisten = u;
@@ -462,17 +435,17 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
   async function togglePip() {
     const mainVid = resolveVideo();
-    const pipVid = pipVideoRef.current;
-    const canvas = pipCanvasRef.current;
-    if (!mainVid || !pipVid || !canvas) return;
+    if (!mainVid) return;
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
         return;
       }
-      // Capture the current frame as the static "封面" overlay shown over
-      // the main player while PiP runs. Done off a one-shot scratch canvas
-      // (not pipCanvasRef which is locked to the captureStream).
+      // Capture current frame as the blurred-grayscale poster shown over
+      // the main player while PiP runs. Native PiP on Chromium replaces
+      // the in-page video with a "Picture in Picture" placeholder; our
+      // overlay sits on top of that and gives the user a visual
+      // confirmation the content has been handed off.
       try {
         const poster = document.createElement("canvas");
         poster.width = mainVid.videoWidth || 1280;
@@ -483,70 +456,17 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
           setPipPosterUrl(poster.toDataURL("image/jpeg", 0.6));
         }
       } catch (err) {
-        // toDataURL throws if the canvas is tainted (CORS). Skip the
-        // poster overlay — PiP will still work, the user just won't see
-        // the blurred backdrop. Better than blocking PiP entirely.
         console.warn("pip poster capture failed (canvas tainted?)", err);
         setPipPosterUrl(null);
       }
-      // Seed canvas size — important: captureStream needs nonzero size.
-      canvas.width = mainVid.videoWidth || 1280;
-      canvas.height = mainVid.videoHeight || 720;
-      // Prime the stream with one frame BEFORE requesting PiP — otherwise
-      // captureStream emits no frames until the rAF paint loop catches up,
-      // and the PiP window opens on a black canvas for the first ~50ms.
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        try {
-          ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
-        } catch { /* not ready — paint loop will retry */ }
-      }
-      const canvasStream = canvas.captureStream(30);
-      // Pull audio from the source video so the PiP window has sound. The
-      // canvas stream carries video frames only — without this, PiP would
-      // be silent and the main element would keep emitting audio in parallel
-      // (which is what the user complained about: "原播放器还在播放").
-      let combined: MediaStream = canvasStream;
-      try {
-        type Capturable = HTMLVideoElement & {
-          captureStream?: () => MediaStream;
-          mozCaptureStream?: () => MediaStream;
-        };
-        const cv = mainVid as Capturable;
-        const grab = cv.captureStream?.bind(cv) ?? cv.mozCaptureStream?.bind(cv);
-        const mainStream = grab?.();
-        if (mainStream) {
-          combined = new MediaStream([
-            ...canvasStream.getVideoTracks(),
-            ...mainStream.getAudioTracks(),
-          ]);
-        }
-      } catch (err) {
-        console.warn("audio capture from main video failed", err);
-      }
-      pipStreamRef.current = combined;
-      pipVid.srcObject = combined;
-      // Audio plays from the PiP window; main element gets muted below so
-      // we don't double-output. Set unmuted BEFORE play() while the user
-      // gesture is still active (Chromium autoplay policy).
-      pipVid.muted = false;
-      pipPrevMutedRef.current = mainVid.muted;
-      mainVid.muted = true;
-      await pipVid.play();
-      await pipVid.requestPictureInPicture();
+      // Native PiP on the source element. Audio + seekbar + play/pause
+      // all wire through Chromium's PiP controls automatically.
+      await mainVid.requestPictureInPicture();
       setPipActive(true);
     } catch (e) {
       console.error("pip toggle failed", e);
-      // Restore main video state if entry failed midway
-      const mainVid2 = resolveVideo();
-      if (mainVid2 && pipPrevMutedRef.current !== null) {
-        mainVid2.muted = pipPrevMutedRef.current;
-        pipPrevMutedRef.current = null;
-      }
       setPipActive(false);
       setPipPosterUrl(null);
-      pipStreamRef.current?.getTracks().forEach((t) => t.stop());
-      pipStreamRef.current = null;
     }
   }
 
@@ -710,8 +630,10 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
       )}
 
       {/* Bilingual caption overlay — sits above where the controls render,
-          stays visible regardless of control auto-hide. */}
-      {showCaptions && (
+          stays visible regardless of control auto-hide. Hidden during PiP
+          since the floating PiP window carries its own caption via TextTrack;
+          the main player is showing the blurred poster anyway. */}
+      {showCaptions && !pipActive && (
         <CaptionOverlay
           subtitle={currentSubtitle ?? null}
           style={captionStyle}
@@ -1330,22 +1252,6 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         </div>
       </div>
 
-      {/* PiP rig — kept off-screen but in DOM. Chromium refuses to PiP a
-          display:none video, so we position them off-screen at 1×1 px. */}
-      <canvas
-        ref={pipCanvasRef}
-        width={1}
-        height={1}
-        className="absolute pointer-events-none opacity-0"
-        style={{ left: -9999, top: -9999, width: 1, height: 1 }}
-      />
-      <video
-        ref={pipVideoRef}
-        muted
-        playsInline
-        className="absolute pointer-events-none opacity-0"
-        style={{ left: -9999, top: -9999, width: 1, height: 1 }}
-      />
     </div>
   );
 });

@@ -7,6 +7,17 @@
 @import "@fontsource/charis-sil/400.css";
 @import "@fontsource/charis-sil/700.css";
 
+/* Picture-in-Picture caption highlight. VTTCue text built by buildVttText()
+   in VideoPlayer.tsx wraps highlight phrases in `<c.h>...</c.h>` — this
+   selector colors that class amber to match CaptionOverlay's in-page
+   span styling. Chromium's PiP window picks up these ::cue() rules so
+   the highlight renders inside the floating PiP frame. */
+::cue(.h) {
+  background-color: #fbbf24;
+  color: #1c1917;
+  font-weight: 600;
+}
+
 .font-ipa {
   font-family: "Charis SIL", "Gentium Plus", "Noto Sans", "Segoe UI", serif;
   font-feature-settings: "kern" 1;

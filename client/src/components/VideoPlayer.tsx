@@ -209,6 +209,10 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const pipVideoRef = useRef<HTMLVideoElement>(null);
   const pipStreamRef = useRef<MediaStream | null>(null);
   const [pipActive, setPipActive] = useState(false);
+  // Static blurred-grayscale poster of the source video, shown over the main
+  // <video> while PiP is active. Captured (via drawImage→toDataURL) once at
+  // PiP entry, cleared at exit.
+  const [pipPosterUrl, setPipPosterUrl] = useState<string | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [duration, setDuration] = useState(0);
@@ -411,6 +415,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     if (!pipVid) return;
     const onLeave = () => {
       setPipActive(false);
+      setPipPosterUrl(null);
       pipStreamRef.current?.getTracks().forEach((t) => t.stop());
       pipStreamRef.current = null;
     };
@@ -455,9 +460,37 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         await document.exitPictureInPicture();
         return;
       }
+      // Capture the current frame as the static "封面" overlay shown over
+      // the main player while PiP runs. Done off a one-shot scratch canvas
+      // (not pipCanvasRef which is locked to the captureStream).
+      try {
+        const poster = document.createElement("canvas");
+        poster.width = mainVid.videoWidth || 1280;
+        poster.height = mainVid.videoHeight || 720;
+        const pctx = poster.getContext("2d");
+        if (pctx) {
+          pctx.drawImage(mainVid, 0, 0, poster.width, poster.height);
+          setPipPosterUrl(poster.toDataURL("image/jpeg", 0.6));
+        }
+      } catch (err) {
+        // toDataURL throws if the canvas is tainted (CORS). Skip the
+        // poster overlay — PiP will still work, the user just won't see
+        // the blurred backdrop. Better than blocking PiP entirely.
+        console.warn("pip poster capture failed (canvas tainted?)", err);
+        setPipPosterUrl(null);
+      }
       // Seed canvas size — important: captureStream needs nonzero size.
       canvas.width = mainVid.videoWidth || 1280;
       canvas.height = mainVid.videoHeight || 720;
+      // Prime the stream with one frame BEFORE requesting PiP — otherwise
+      // captureStream emits no frames until the rAF paint loop catches up,
+      // and the PiP window opens on a black canvas for the first ~50ms.
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        try {
+          ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
+        } catch { /* not ready — paint loop will retry */ }
+      }
       const stream = canvas.captureStream(30);
       pipStreamRef.current = stream;
       pipVid.srcObject = stream;
@@ -468,6 +501,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     } catch (e) {
       console.error("pip toggle failed", e);
       setPipActive(false);
+      setPipPosterUrl(null);
       pipStreamRef.current?.getTracks().forEach((t) => t.stop());
       pipStreamRef.current = null;
     }
@@ -605,6 +639,11 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
       <video
         ref={ref}
         src={src}
+        // CORS-anonymous load so the PiP rig's canvas.drawImage() on this
+        // element doesn't taint the canvas → captureStream(30) returns
+        // actual frames instead of black. Tauri 2 asset protocol sends
+        // Access-Control-Allow-Origin: *, so CORS load succeeds.
+        crossOrigin="anonymous"
         className="h-full w-full object-contain bg-black cursor-pointer"
         onTimeUpdate={onTimeUpdate}
         onLoadedMetadata={onLoadedMetadata}
@@ -614,6 +653,18 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         onEnded={onEndedEv}
         onClick={togglePlay}
       />
+      {/* While PiP is active, hide the live video behind a blurred / grayscale
+          freeze frame captured at the moment of toggle — the user wanted the
+          source player to read as "已经送到画中画了" rather than show duplicate
+          live video. */}
+      {pipActive && pipPosterUrl && (
+        <img
+          src={pipPosterUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-contain bg-black pointer-events-none"
+          style={{ filter: "blur(24px) grayscale(1)" }}
+        />
+      )}
 
       {/* Bilingual caption overlay — sits above where the controls render,
           stays visible regardless of control auto-hide. */}

@@ -95,6 +95,7 @@ export function Corpus() {
                   tags={mode === 'browse' ? tags : []}
                   selected={mode === 'browse' ? phrase : null}
                   onSelect={setPhrase}
+                  autoSelectFirst={mode === 'browse'}
                 />
               </div>
               <div className="flex-1 min-w-0 h-full">
@@ -106,6 +107,7 @@ export function Corpus() {
                   tags={mode === 'mine' ? tags : []}
                   selected={mode === 'mine' ? phrase : null}
                   onSelect={setPhrase}
+                  autoSelectFirst={mode === 'mine'}
                 />
               </div>
             </div>

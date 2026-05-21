@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useCorpusList } from '../hooks/useCorpusList';
 
 interface MineItem {
@@ -22,12 +23,27 @@ interface Props {
   tags: string[];
   selected: string | null;
   onSelect: (phraseNormalized: string) => void;
+  /** When true, the first item in the list is auto-selected as soon as
+   *  data arrives and nothing else is already selected. Caller passes
+   *  this only on the currently-visible list so we don't auto-select on
+   *  the parked sibling. */
+  autoSelectFirst?: boolean;
 }
 
-export function CorpusPhraseList({ mode, tags, selected, onSelect }: Props) {
+export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFirst }: Props) {
   const { data, error, refreshing } = useCorpusList<BrowseResp | MineResp>(
     mode === 'mine' ? { mode: 'mine', tags } : { mode: 'browse', tags },
   );
+
+  // Auto-select the first phrase when entering the page or when the active
+  // list refreshes — so users don't land on a blank detail panel.
+  useEffect(() => {
+    if (!autoSelectFirst || selected) return;
+    const items = data?.items;
+    if (items && items.length > 0) {
+      onSelect(items[0].phraseNormalized);
+    }
+  }, [autoSelectFirst, selected, data, onSelect]);
 
   if (error && !data) {
     return (

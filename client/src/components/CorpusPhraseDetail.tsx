@@ -108,7 +108,9 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
   }, [detail?.phrase?.phraseRaw]);
 
   if (!phraseNormalized) {
-    return <div className="h-full p-6 text-zinc-500">选择一个短语查看例句出处</div>;
+    // With auto-select-first on the active list, this only fires when the
+    // list itself is empty — the user has no phrases in this scope yet.
+    return <div className="h-full p-6 text-zinc-500">暂无短语</div>;
   }
   if (error && !detail) {
     return <div className="h-full p-6 text-red-300 text-sm break-all">加载失败：{error}</div>;

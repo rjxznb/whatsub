@@ -3,11 +3,13 @@ import { CorpusPhraseList } from '../components/CorpusPhraseList';
 import { CorpusPhraseDetail } from '../components/CorpusPhraseDetail';
 import { CorpusNav } from '../components/CorpusNav';
 import { CorpusTagChips } from '../components/CorpusTagChips';
+import { CorpusTour } from '../components/CorpusTour';
 import { invalidateAll } from '../lib/corpusCache';
 import { useAuth } from '../store/auth';
 import { useLicense } from '../store/license';
 
 type Mode = 'browse' | 'mine';
+type TourStep = 'welcome' | 'refresh' | null;
 
 export function Corpus() {
   const [mode, setMode] = useState<Mode>('browse');
@@ -21,6 +23,20 @@ export function Corpus() {
   const licenseKey = useLicense((s) => s.state?.key ?? null);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState('');
+
+  // First-visit onboarding tour. localStorage gate so it only fires once
+  // per machine; explains the browser-plugin → desktop-sync workflow.
+  const [tourStep, setTourStep] = useState<TourStep>(() => {
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem('corpusTourSeen') ? null : 'welcome';
+  });
+  function dismissTour() {
+    setTourStep(null);
+    window.localStorage.setItem('corpusTourSeen', '1');
+  }
+  function advanceTour() {
+    setTourStep('refresh');
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -135,6 +151,15 @@ export function Corpus() {
             )}
           </div>
         </div>
+      )}
+      {/* First-visit tour — only after auth resolves so the refresh button
+          (which it anchors to in step 2) is actually in the DOM. */}
+      {tourStep && status === 'authed' && (
+        <CorpusTour
+          step={tourStep}
+          onAdvance={advanceTour}
+          onDismiss={dismissTour}
+        />
       )}
     </div>
   );

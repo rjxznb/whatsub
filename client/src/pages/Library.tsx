@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Cloud } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
@@ -26,6 +26,7 @@ import {
 } from "../utils/importChecklistGate";
 import type { LibraryEntry, LibraryFolder } from "../types/library";
 import { SyncButton } from "../components/LibraryCard/SyncButton";
+import { CloudSyncManager } from "../components/CloudSyncManager";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
@@ -137,6 +138,7 @@ export function Library() {
   }, [navCollapsed]);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
+  const [showCloudManager, setShowCloudManager] = useState(false);
 
   // Overlap-based drag state.
   //
@@ -501,6 +503,14 @@ export function Library() {
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
         <button
+          onClick={() => setShowCloudManager(true)}
+          className="inline-flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2.5 py-1.5 rounded hover:bg-white/5 transition-colors"
+          title="管理云端同步的库条目"
+        >
+          <Cloud className="h-4 w-4" />
+          云同步详情
+        </button>
+        <button
           data-tour="import-button"
           onClick={() => {
             if (shouldShowImportChecklist()) {
@@ -806,6 +816,13 @@ export function Library() {
           y={menu.y}
           onClose={() => setMenu(null)}
           items={buildMenuItemsFor(menu)}
+        />
+      )}
+
+      {showCloudManager && (
+        <CloudSyncManager
+          onClose={() => setShowCloudManager(false)}
+          onChanged={reload}
         />
       )}
 

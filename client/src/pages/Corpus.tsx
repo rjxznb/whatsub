@@ -89,34 +89,24 @@ export function Corpus() {
                 transform: mode === 'mine' ? 'translateX(-16rem)' : 'translateX(0)',
               }}
             >
-              <div className="w-64 shrink-0 h-full flex flex-col">
-                <div className="px-3 py-2 border-b border-zinc-800 text-xs font-medium text-zinc-300 bg-zinc-950 shrink-0">
-                  📚 公共短语
-                </div>
-                <div className="flex-1 min-h-0">
-                  <CorpusPhraseList
-                    mode="browse"
-                    tags={mode === 'browse' ? tags : []}
-                    selected={mode === 'browse' ? phrase : null}
-                    onSelect={setPhrase}
-                  />
-                </div>
+              <div className="w-64 shrink-0 h-full">
+                <CorpusPhraseList
+                  mode="browse"
+                  tags={mode === 'browse' ? tags : []}
+                  selected={mode === 'browse' ? phrase : null}
+                  onSelect={setPhrase}
+                />
               </div>
               <div className="flex-1 min-w-0 h-full">
                 <CorpusPhraseDetail phraseNormalized={phrase} />
               </div>
-              <div className="w-64 shrink-0 h-full border-l border-zinc-800 flex flex-col">
-                <div className="px-3 py-2 border-b border-zinc-800 text-xs font-medium text-zinc-300 bg-zinc-950 shrink-0">
-                  ⭐ 我的短语
-                </div>
-                <div className="flex-1 min-h-0">
-                  <CorpusPhraseList
-                    mode="mine"
-                    tags={mode === 'mine' ? tags : []}
-                    selected={mode === 'mine' ? phrase : null}
-                    onSelect={setPhrase}
-                  />
-                </div>
+              <div className="w-64 shrink-0 h-full border-l border-zinc-800">
+                <CorpusPhraseList
+                  mode="mine"
+                  tags={mode === 'mine' ? tags : []}
+                  selected={mode === 'mine' ? phrase : null}
+                  onSelect={setPhrase}
+                />
               </div>
             </div>
           </div>

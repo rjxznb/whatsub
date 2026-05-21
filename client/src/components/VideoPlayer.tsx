@@ -380,12 +380,14 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     track.mode = pipActive && showCaptions ? "showing" : "hidden";
   }, [currentSubtitle, pipActive, showCaptions]);
 
-  // PiP teardown: when the system PiP window closes (user hits ✕ on the
-  // floating window, video ends, another video takes over) sync local state
-  // and restore the main element's muted flag.
+  // PiP enter/leave sync from the native events. More reliable than flipping
+  // pipActive manually in togglePip — handles cases where Chromium opens or
+  // closes the PiP without our button (right-click → PiP menu, video ends,
+  // user hits ✕ on the floating window).
   useEffect(() => {
     const mainVid = resolveVideo();
     if (!mainVid) return;
+    const onEnter = () => setPipActive(true);
     const onLeave = () => {
       setPipActive(false);
       setPipPosterUrl(null);
@@ -394,8 +396,12 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         pipPrevMutedRef.current = null;
       }
     };
+    mainVid.addEventListener("enterpictureinpicture", onEnter);
     mainVid.addEventListener("leavepictureinpicture", onLeave);
-    return () => mainVid.removeEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      mainVid.removeEventListener("enterpictureinpicture", onEnter);
+      mainVid.removeEventListener("leavepictureinpicture", onLeave);
+    };
   }, [resolveVideo, src]);
 
   // Close the PiP window when the whatsub window closes — preventDefault
@@ -473,13 +479,31 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         console.warn("pip poster capture failed (canvas tainted?)", err);
         setPipPosterUrl(null);
       }
+      // Pre-arm the text track BEFORE requesting PiP — Chromium's PiP
+      // surface picks up the cue list at open time, so a track that's
+      // empty / hidden during entry shows no captions even after we add
+      // cues post-hoc. Adding the current cue + flipping mode=showing
+      // here means the very first frame of PiP renders the caption.
+      const track = pipTrackRef.current;
+      if (track && showCaptions && currentSubtitle) {
+        while (track.cues && track.cues.length > 0) {
+          track.removeCue(track.cues[0]);
+        }
+        try {
+          const start = Math.max(0, currentSubtitle.time);
+          const end = Math.max(start + 0.5, currentSubtitle.endTime || start + 30);
+          track.addCue(new VTTCue(start, end, buildVttText(currentSubtitle)));
+          track.mode = "showing";
+        } catch (err) {
+          console.warn("pre-arm pip cue failed", err);
+        }
+      }
       // Native PiP on the source element. Audio + seekbar + play/pause
       // all wire through Chromium's PiP controls automatically.
+      // pipActive flips via the enterpictureinpicture event, not here.
       await mainVid.requestPictureInPicture();
-      setPipActive(true);
     } catch (e) {
       console.error("pip toggle failed", e);
-      setPipActive(false);
       setPipPosterUrl(null);
     }
   }
@@ -616,12 +640,18 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
       <video
         ref={ref}
         src={src}
-        // CORS-anonymous load so the PiP rig's canvas.drawImage() on this
-        // element doesn't taint the canvas → captureStream(30) returns
-        // actual frames instead of black. Tauri 2 asset protocol sends
+        // CORS-anonymous load so the poster-capture drawImage() doesn't
+        // taint the canvas → toDataURL works. Tauri 2 asset protocol sends
         // Access-Control-Allow-Origin: *, so CORS load succeeds.
         crossOrigin="anonymous"
         className="h-full w-full object-contain bg-black cursor-pointer"
+        // Hide the in-page video entirely during PiP. Some WebView2 builds
+        // keep showing the live frames in-page even when the OS PiP window
+        // is up; that bled video through the blurred poster overlay. Setting
+        // opacity:0 keeps the element in DOM (so PiP keeps working) but
+        // visually it's gone. The blurred poster + bg-black wrapper handle
+        // the visible state.
+        style={pipActive ? { opacity: 0 } : undefined}
         onTimeUpdate={onTimeUpdate}
         onLoadedMetadata={onLoadedMetadata}
         onProgress={onProgress}
@@ -631,16 +661,21 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         onClick={togglePlay}
       />
       {/* While PiP is active, hide the live video behind a blurred / grayscale
-          freeze frame captured at the moment of toggle — the user wanted the
-          source player to read as "已经送到画中画了" rather than show duplicate
-          live video. */}
-      {pipActive && pipPosterUrl && (
-        <img
-          src={pipPosterUrl}
-          alt=""
-          className="absolute inset-0 h-full w-full object-contain bg-black pointer-events-none"
-          style={{ filter: "blur(24px) grayscale(1)" }}
-        />
+          freeze frame captured at the moment of toggle. Wrapped in a
+          bg-black z-10 div so the blur's soft edges + object-contain
+          letterbox can't leak the underlying frames; the wrapper is fully
+          opaque, the img sits on top of it. */}
+      {pipActive && (
+        <div className="absolute inset-0 z-10 bg-black pointer-events-none">
+          {pipPosterUrl && (
+            <img
+              src={pipPosterUrl}
+              alt=""
+              className="h-full w-full object-contain"
+              style={{ filter: "blur(24px) grayscale(1)" }}
+            />
+          )}
+        </div>
       )}
 
       {/* Bilingual caption overlay — sits above where the controls render,

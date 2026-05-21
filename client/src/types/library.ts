@@ -17,6 +17,13 @@ export interface LibraryEntry {
   lastError: string | null;
   videoDir?: string;
   analysisStyle?: TranslationStyle;
+  /** Unix ms — set when entry was last successfully uploaded to /api/library/sync.
+   *  Undefined = never synced (or unsynced via the backend). v1 only YouTube
+   *  sources get a value; others stay undefined. */
+  syncedAt?: number;
+  /** Friendly error message from the LAST sync attempt that failed.
+   *  Cleared on next successful sync. Used by SyncButton to render the ✗ state. */
+  syncError?: string;
 }
 
 export interface LibraryFolder {

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, RotateCw } from 'lucide-react';
 
 type Mode = 'browse' | 'mine';
 
@@ -45,10 +45,10 @@ export function CorpusNav({ onRefresh, refreshing, mode, onModeChange }: Props) 
         <button
           onClick={onRefresh}
           disabled={refreshing}
-          title="刷新语料库"
-          className="px-2 py-1 text-sm text-zinc-400 hover:text-zinc-100 disabled:opacity-50"
+          title={refreshing ? '刷新中…' : '刷新语料库'}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
         >
-          {refreshing ? '↻ 刷新中…' : '↻'}
+          <RotateCw className={'h-4 w-4 ' + (refreshing ? 'animate-spin' : '')} />
         </button>
       )}
     </header>

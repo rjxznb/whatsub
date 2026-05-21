@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { LibraryEntry, LibraryFolder } from "../types/library";
+import { SyncButton } from "./LibraryCard/SyncButton";
 
 interface Props {
   folder: LibraryFolder;
@@ -10,6 +11,9 @@ interface Props {
   onClose: () => void;
   onVideoClick: (videoId: string) => void;
   onVideoContextMenu: (e: React.MouseEvent, video: LibraryEntry) => void;
+  /** Called after a cloud sync/unsync from an in-folder card so the parent
+   *  can refresh library state (sync badges reflect the new state). */
+  onSyncChanged: () => void | Promise<void>;
 }
 
 export function FolderOpenView({
@@ -19,6 +23,7 @@ export function FolderOpenView({
   onClose,
   onVideoClick,
   onVideoContextMenu,
+  onSyncChanged,
 }: Props) {
   const [open, setOpen] = useState(false);
 
@@ -90,24 +95,34 @@ export function FolderOpenView({
           {videos.length === 0 ? (
             <div className="col-span-full text-center text-zinc-500 py-12">空文件夹</div>
           ) : (
-            videos.map((v) => (
-              <div
-                key={v.id}
-                className="cursor-pointer rounded overflow-hidden bg-zinc-800 border border-zinc-700 hover:border-zinc-600 transition-colors"
-                onClick={() => onVideoClick(v.id)}
-                onContextMenu={(e) => onVideoContextMenu(e, v)}
-              >
-                {v.thumbnailPath && (
-                  <img
-                    draggable={false}
-                    src={convertFileSrc(v.thumbnailPath)}
-                    alt=""
-                    className="w-full aspect-video object-cover"
-                  />
-                )}
-                <div className="p-2 text-xs truncate">{v.title}</div>
-              </div>
-            ))
+            videos.map((v) => {
+              const syncOverlayAlwaysVisible = Boolean(v.syncedAt) || Boolean(v.syncError);
+              return (
+                <div
+                  key={v.id}
+                  className="group relative cursor-pointer rounded overflow-hidden bg-zinc-800 border border-zinc-700 hover:border-zinc-600 transition-colors"
+                  onClick={() => onVideoClick(v.id)}
+                  onContextMenu={(e) => onVideoContextMenu(e, v)}
+                >
+                  {v.thumbnailPath && (
+                    <img
+                      draggable={false}
+                      src={convertFileSrc(v.thumbnailPath)}
+                      alt=""
+                      className="w-full aspect-video object-cover"
+                    />
+                  )}
+                  <div className="p-2 text-xs truncate">{v.title}</div>
+                  <div
+                    className={`absolute top-2 left-2 transition-opacity ${
+                      syncOverlayAlwaysVisible ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    }`}
+                  >
+                    <SyncButton entry={v} onChanged={onSyncChanged} />
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
       </div>

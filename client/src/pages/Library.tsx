@@ -795,6 +795,7 @@ export function Library() {
               e.preventDefault();
               setMenu({ type: "videoInFolder", entry: v, folderId: f.id, x: e.clientX, y: e.clientY });
             }}
+            onSyncChanged={reload}
           />
         );
       })()}

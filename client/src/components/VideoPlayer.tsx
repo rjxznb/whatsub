@@ -470,28 +470,85 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     return () => cancelAnimationFrame(raf);
   }, [pipActive, currentSubtitle, captionStyle, showCaptions, resolveVideo]);
 
-  // Bridge pipVid play/pause events → mainVid. Lets the PiP window's
-  // built-in pause/play button drive the real media element. Seek
-  // doesn't bridge because MediaStream from canvas has no duration / no
-  // seekable range — PiP's seekbar stays inert.
+  // Media Session bridge — registers play/pause/seek handlers that PiP's
+  // floating-window UI (and OS media controls + media keys) invoke instead
+  // of operating on pipVid directly. Without this, canvas-stream-backed
+  // PiP gives the user inert buttons + a frozen seekbar; with it the PiP
+  // UI controls the real source <video> and the seekbar gets a working
+  // position via setPositionState().
   useEffect(() => {
-    const pipVid = pipVideoRef.current;
-    if (!pipVid) return;
-    const onPause = () => {
-      const mainVid = resolveVideo();
-      if (mainVid && !mainVid.paused) mainVid.pause();
+    if (!pipActive) return;
+    const mainVid = resolveVideo();
+    if (!mainVid || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const seek = (offset: number) => {
+      const d = mainVid.duration;
+      mainVid.currentTime = Math.max(0, Math.min(d || 0, mainVid.currentTime + offset));
     };
-    const onPlay = () => {
-      const mainVid = resolveVideo();
-      if (mainVid && mainVid.paused) mainVid.play().catch(() => {});
-    };
-    pipVid.addEventListener("pause", onPause);
-    pipVid.addEventListener("play", onPlay);
+    try {
+      ms.setActionHandler("play", () => { mainVid.play().catch(() => {}); });
+      ms.setActionHandler("pause", () => { mainVid.pause(); });
+      ms.setActionHandler("seekto", (details) => {
+        if (typeof details.seekTime === "number") {
+          mainVid.currentTime = details.seekTime;
+        }
+      });
+      ms.setActionHandler("seekbackward", (details) => {
+        seek(-(details.seekOffset || 10));
+      });
+      ms.setActionHandler("seekforward", (details) => {
+        seek(details.seekOffset || 10);
+      });
+    } catch (err) {
+      console.warn("media session action handler failed", err);
+    }
     return () => {
-      pipVid.removeEventListener("pause", onPause);
-      pipVid.removeEventListener("play", onPlay);
+      try {
+        ms.setActionHandler("play", null);
+        ms.setActionHandler("pause", null);
+        ms.setActionHandler("seekto", null);
+        ms.setActionHandler("seekbackward", null);
+        ms.setActionHandler("seekforward", null);
+      } catch { /* some platforms throw on null */ }
     };
-  }, [resolveVideo]);
+  }, [pipActive, resolveVideo]);
+
+  // Mirror playback state to Media Session so PiP's play/pause icon
+  // reflects the real source. Driven by the source video's onplay/onpause
+  // handlers in the existing flow plus polled position state for the
+  // seekbar (1s interval is enough for the UI to look live).
+  useEffect(() => {
+    if (!pipActive) return;
+    const mainVid = resolveVideo();
+    if (!mainVid || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const push = () => {
+      ms.playbackState = mainVid.paused ? "paused" : "playing";
+      if (mainVid.duration > 0 && Number.isFinite(mainVid.duration)) {
+        try {
+          ms.setPositionState({
+            duration: mainVid.duration,
+            position: Math.min(mainVid.currentTime, mainVid.duration),
+            playbackRate: mainVid.playbackRate || 1,
+          });
+        } catch { /* invalid state arg — ignore */ }
+      }
+    };
+    push();
+    const timer = setInterval(push, 1000);
+    mainVid.addEventListener("play", push);
+    mainVid.addEventListener("pause", push);
+    mainVid.addEventListener("seeked", push);
+    mainVid.addEventListener("ratechange", push);
+    return () => {
+      clearInterval(timer);
+      mainVid.removeEventListener("play", push);
+      mainVid.removeEventListener("pause", push);
+      mainVid.removeEventListener("seeked", push);
+      mainVid.removeEventListener("ratechange", push);
+      ms.playbackState = "none";
+    };
+  }, [pipActive, resolveVideo]);
 
   // PiP teardown sync: the system closes the floating window (user hits ✕,
   // video ends, another video takes over) → pipVid fires leave →

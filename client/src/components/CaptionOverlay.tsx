@@ -61,7 +61,7 @@ export function CaptionOverlay({ subtitle, style, onPositionChange }: Props) {
   }
 
   return (
-    <div className="absolute inset-x-0 bottom-20 px-6 flex justify-center pointer-events-none z-20">
+    <div className="absolute inset-x-0 bottom-20 px-6 flex justify-center pointer-events-none z-10">
       <div
         data-caption-box
         className={

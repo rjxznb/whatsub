@@ -29,7 +29,13 @@ describe('YouTubeEmbed', () => {
     const { container } = render(<YouTubeEmbed videoId="Abc123" startSec={42} />);
     const iframe = container.querySelector('iframe');
     expect(iframe).toBeDefined();
-    expect(iframe?.src).toContain('youtube.com/embed/Abc123');
+    expect(iframe?.src).toContain('youtube-nocookie.com/embed/Abc123');
     expect(iframe?.src).toContain('start=42');
+  });
+
+  it('forces captions on by default via cc_load_policy=1', () => {
+    const { container } = render(<YouTubeEmbed videoId="Abc123" />);
+    const iframe = container.querySelector('iframe');
+    expect(iframe?.src).toContain('cc_load_policy=1');
   });
 });

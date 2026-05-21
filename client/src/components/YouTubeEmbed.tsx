@@ -45,7 +45,11 @@ export function YouTubeEmbed({ videoId, startSec = 0, className }: Props) {
   // (e.g. 5.646522 captured from player.getCurrentTime()) wouldn't seek
   // at all. Math.floor — never skip the moment, only land before it.
   const startInt = Math.max(0, Math.floor(startSec));
-  const src = `https://www.youtube-nocookie.com/embed/${videoId}?start=${startInt}&rel=0`;
+  // cc_load_policy=1 forces captions on by default if the video has them —
+  // this is a learning tool, captions are the whole point. cc_lang_pref=en
+  // picks English as the preferred subtitle language when the video has
+  // multiple track options.
+  const src = `https://www.youtube-nocookie.com/embed/${videoId}?start=${startInt}&rel=0&cc_load_policy=1&cc_lang_pref=en`;
   return (
     <iframe
       src={src}

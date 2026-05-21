@@ -15,12 +15,14 @@ import {
   PanelRight,
   PanelRightClose,
   Pause,
+  PictureInPicture2,
   Play,
   RotateCcw,
   Settings,
   Volume2,
   VolumeX,
 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { formatTime } from "../utils/time";
 import { CaptionOverlay } from "./CaptionOverlay";
 import type { Subtitle } from "../llm/types";
@@ -102,6 +104,87 @@ function colorLabel(hex: string): string {
   return CAPTION_COLOR_OPTIONS.find((o) => o.value.toUpperCase() === upper)?.label ?? hex;
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace(/^#/, "");
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
+}
+
+/** Compositing pass for PiP: draws the bilingual caption onto the same
+ *  canvas that holds the video frame. Visual approximation of CaptionOverlay
+ *  (Tailwind DOM) but inside canvas — fonts smaller, no highlight spans,
+ *  bg + text styles tracked. The native PiP window has no DOM, so all of
+ *  this has to be 2d API. */
+function drawCaptionOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  subtitle: { text: string; translation: string },
+  style: CaptionStyle,
+): void {
+  if (!subtitle.text && !subtitle.translation) return;
+  // Reference font size = 4% of video height × user's scale slider.
+  const baseEn = Math.max(14, Math.round(height * 0.04 * style.fontScale));
+  const baseZh = Math.max(12, Math.round(height * 0.032 * style.fontScale));
+  const padX = Math.round(baseEn * 0.7);
+  const padY = Math.round(baseEn * 0.45);
+  const gap = Math.round(baseEn * 0.25);
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // Measure both lines independently
+  ctx.font = `600 ${baseEn}px sans-serif`;
+  const enWidth = subtitle.text ? ctx.measureText(subtitle.text).width : 0;
+  ctx.font = `400 ${baseZh}px sans-serif`;
+  const zhWidth = subtitle.translation ? ctx.measureText(subtitle.translation).width : 0;
+
+  const blockWidth = Math.min(width * 0.9, Math.max(enWidth, zhWidth) + padX * 2);
+  const blockHeight = padY * 2 + baseEn + (subtitle.translation ? gap + baseZh : 0);
+  const blockX = (width - blockWidth) / 2;
+  const blockY = height - blockHeight - Math.round(height * 0.08);
+
+  // Background (rounded rect approximation via fillRect when radius is 0,
+  // otherwise use roundRect if supported by the canvas).
+  if (style.bgOpacity > 0) {
+    ctx.fillStyle = hexToRgba(style.bgColor, style.bgOpacity);
+    const radius = Math.min(10, blockHeight / 4);
+    const r = ctx as CanvasRenderingContext2D & {
+      roundRect?: (x: number, y: number, w: number, h: number, radii: number) => void;
+    };
+    if (typeof r.roundRect === "function") {
+      ctx.beginPath();
+      r.roundRect(blockX, blockY, blockWidth, blockHeight, radius);
+      ctx.fill();
+    } else {
+      ctx.fillRect(blockX, blockY, blockWidth, blockHeight);
+    }
+  }
+
+  // Foreground text — fontColor + fontOpacity composed into rgba so the
+  // overall layer respects the alpha.
+  ctx.fillStyle = hexToRgba(style.fontColor, style.fontOpacity);
+  const centerX = blockX + blockWidth / 2;
+
+  if (subtitle.text) {
+    ctx.font = `600 ${baseEn}px sans-serif`;
+    ctx.fillText(subtitle.text, centerX, blockY + padY + baseEn);
+  }
+  if (subtitle.translation) {
+    ctx.font = `400 ${baseZh}px sans-serif`;
+    ctx.fillText(
+      subtitle.translation,
+      centerX,
+      blockY + padY + baseEn + gap + baseZh,
+    );
+  }
+
+  ctx.restore();
+}
+
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
   {
     src,
@@ -118,6 +201,14 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   const containerRef = useRef<HTMLDivElement>(null);
   const progressRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
+  // PiP rig — canvas painted with video + subtitle, captureStream() → hidden
+  // <video> for the actual PiP request. Native pip on the main <video>
+  // wouldn't carry the subtitle overlay (PiP only renders the video element
+  // itself, not DOM overlays), so we composite onto a canvas first.
+  const pipCanvasRef = useRef<HTMLCanvasElement>(null);
+  const pipVideoRef = useRef<HTMLVideoElement>(null);
+  const pipStreamRef = useRef<MediaStream | null>(null);
+  const [pipActive, setPipActive] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [duration, setDuration] = useState(0);
@@ -276,6 +367,111 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, volume, muted, ended]);
+
+  // ---------- Picture-in-Picture rig ----------
+  //
+  // Paint loop: video frame → canvas, then bilingual caption text → canvas.
+  // Runs only while pipActive. Cancelled on unmount or PiP exit. The captionStyle
+  // / currentSubtitle deps drive a fresh paint loop after each style/cue change.
+  useEffect(() => {
+    if (!pipActive) return;
+    const canvas = pipCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    const mainVid = resolveVideo();
+    if (!canvas || !ctx || !mainVid) return;
+    let raf = 0;
+    const paint = () => {
+      // Sync canvas size to source video's intrinsic resolution (lazy: only
+      // on first paint when video metadata is ready).
+      if (canvas.width !== mainVid.videoWidth || canvas.height !== mainVid.videoHeight) {
+        if (mainVid.videoWidth > 0 && mainVid.videoHeight > 0) {
+          canvas.width = mainVid.videoWidth;
+          canvas.height = mainVid.videoHeight;
+        }
+      }
+      try {
+        ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
+      } catch {
+        /* drawImage can throw if source not yet ready — silently retry next frame */
+      }
+      if (showCaptions && currentSubtitle) {
+        drawCaptionOnCanvas(ctx, canvas.width, canvas.height, currentSubtitle, captionStyle);
+      }
+      raf = requestAnimationFrame(paint);
+    };
+    raf = requestAnimationFrame(paint);
+    return () => cancelAnimationFrame(raf);
+  }, [pipActive, currentSubtitle, captionStyle, showCaptions, resolveVideo]);
+
+  // PiP teardown: when system PiP window closes (user hits the ✕ on the
+  // floating window or another video takes over), sync our local state +
+  // stop the captureStream.
+  useEffect(() => {
+    const pipVid = pipVideoRef.current;
+    if (!pipVid) return;
+    const onLeave = () => {
+      setPipActive(false);
+      pipStreamRef.current?.getTracks().forEach((t) => t.stop());
+      pipStreamRef.current = null;
+    };
+    pipVid.addEventListener("leavepictureinpicture", onLeave);
+    return () => pipVid.removeEventListener("leavepictureinpicture", onLeave);
+  }, []);
+
+  // Close the PiP window when the whatsub window closes — otherwise the
+  // floating PiP can survive the source webview destruction on some
+  // Chromium builds, leaving an orphaned floating frame.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let unlisten: undefined | (() => void);
+    win
+      .onCloseRequested(() => {
+        if (document.pictureInPictureElement) {
+          document.exitPictureInPicture().catch(() => {});
+        }
+      })
+      .then((u) => {
+        unlisten = u;
+      });
+    const onUnload = () => {
+      if (document.pictureInPictureElement) {
+        document.exitPictureInPicture().catch(() => {});
+      }
+    };
+    window.addEventListener("beforeunload", onUnload);
+    return () => {
+      unlisten?.();
+      window.removeEventListener("beforeunload", onUnload);
+    };
+  }, []);
+
+  async function togglePip() {
+    const mainVid = resolveVideo();
+    const pipVid = pipVideoRef.current;
+    const canvas = pipCanvasRef.current;
+    if (!mainVid || !pipVid || !canvas) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+        return;
+      }
+      // Seed canvas size — important: captureStream needs nonzero size.
+      canvas.width = mainVid.videoWidth || 1280;
+      canvas.height = mainVid.videoHeight || 720;
+      const stream = canvas.captureStream(30);
+      pipStreamRef.current = stream;
+      pipVid.srcObject = stream;
+      pipVid.muted = true;
+      await pipVid.play();
+      await pipVid.requestPictureInPicture();
+      setPipActive(true);
+    } catch (e) {
+      console.error("pip toggle failed", e);
+      setPipActive(false);
+      pipStreamRef.current?.getTracks().forEach((t) => t.stop());
+      pipStreamRef.current = null;
+    }
+  }
 
   function togglePlay() {
     const v = resolveVideo();
@@ -986,6 +1182,19 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
             )}
           </div>
 
+          {/* Picture-in-Picture toggle */}
+          <button
+            type="button"
+            onClick={() => void togglePip()}
+            title={pipActive ? "退出画中画" : "画中画 (字幕同步显示)"}
+            className={
+              "flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors " +
+              (pipActive ? "bg-white/15 hover:bg-white/25" : "hover:bg-white/20")
+            }
+          >
+            <PictureInPicture2 className="h-6 w-6" />
+          </button>
+
           {/* Toggle bilingual caption overlay */}
           {onToggleCaptions && (
             <button
@@ -1026,6 +1235,23 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
         </div>
       </div>
+
+      {/* PiP rig — kept off-screen but in DOM. Chromium refuses to PiP a
+          display:none video, so we position them off-screen at 1×1 px. */}
+      <canvas
+        ref={pipCanvasRef}
+        width={1}
+        height={1}
+        className="absolute pointer-events-none opacity-0"
+        style={{ left: -9999, top: -9999, width: 1, height: 1 }}
+      />
+      <video
+        ref={pipVideoRef}
+        muted
+        playsInline
+        className="absolute pointer-events-none opacity-0"
+        style={{ left: -9999, top: -9999, width: 1, height: 1 }}
+      />
     </div>
   );
 });

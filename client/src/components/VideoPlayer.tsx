@@ -104,60 +104,143 @@ function colorLabel(hex: string): string {
   return CAPTION_COLOR_OPTIONS.find((o) => o.value.toUpperCase() === upper)?.label ?? hex;
 }
 
-/** Format a non-negative number of seconds as `HH:MM:SS.mmm` for WEBVTT
- *  cue timestamps. Chromium's PiP rejects malformed timestamps silently
- *  by ignoring the cue entirely, so this needs to be exact. */
-function formatVttTime(sec: number): string {
-  const total = Math.max(0, sec);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total - h * 3600 - m * 60;
-  // s already has ms precision; toFixed(3) → "5.500" or "65.000" etc.
-  const ss = s.toFixed(3).padStart(6, "0");
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${ss}`;
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace(/^#/, "");
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`;
 }
 
-/** Build a WebVTT cue text string for a Subtitle:
- *  - English line wraps highlight phrases as `<c.h>...</c.h>` for ::cue(.h)
- *    styling in App.css to render an amber background (matches CaptionOverlay).
- *  - Followed by a newline + the Chinese translation when present.
- *
- *  Non-overlapping wrap algorithm: find each highlight word's first position,
- *  sort ascending, drop overlaps. Single-pass string build so positional
- *  indices stay valid (don't try to wrap in-place — early wraps shift later
- *  indices and the math gets brittle). */
-function buildVttText(s: Subtitle): string {
-  const text = s.text || "";
-  let en = text;
-  if (s.highlightWords && s.highlightWords.length > 0) {
-    type Match = { start: number; end: number; word: string };
-    const matches: Match[] = [];
-    for (const w of s.highlightWords) {
-      if (!w) continue;
-      const idx = text.indexOf(w);
-      if (idx === -1) continue;
-      matches.push({ start: idx, end: idx + w.length, word: w });
+/** Compositing pass for PiP: draws the bilingual caption onto the same
+ *  canvas that holds the video frame. Visual approximation of CaptionOverlay
+ *  (Tailwind DOM) but inside canvas — fonts smaller, highlight phrases get
+ *  an amber background fill. Native PiP can't render DOM overlays so we
+ *  have to do this manually with 2D API. */
+function drawCaptionOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  subtitle: Subtitle,
+  style: CaptionStyle,
+): void {
+  const enRaw = subtitle.text || "";
+  const zhRaw = subtitle.translation || "";
+  if (!enRaw && !zhRaw) return;
+
+  const baseEn = Math.max(14, Math.round(height * 0.04 * style.fontScale));
+  const baseZh = Math.max(12, Math.round(height * 0.032 * style.fontScale));
+  const padX = Math.round(baseEn * 0.7);
+  const padY = Math.round(baseEn * 0.45);
+  const gap = Math.round(baseEn * 0.25);
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  ctx.font = `600 ${baseEn}px sans-serif`;
+  const enWidth = enRaw ? ctx.measureText(enRaw).width : 0;
+  ctx.font = `400 ${baseZh}px sans-serif`;
+  const zhWidth = zhRaw ? ctx.measureText(zhRaw).width : 0;
+
+  const blockWidth = Math.min(width * 0.9, Math.max(enWidth, zhWidth) + padX * 2);
+  const blockHeight = padY * 2 + baseEn + (zhRaw ? gap + baseZh : 0);
+  const blockX = (width - blockWidth) / 2;
+  const blockY = height - blockHeight - Math.round(height * 0.08);
+
+  if (style.bgOpacity > 0) {
+    ctx.fillStyle = hexToRgba(style.bgColor, style.bgOpacity);
+    const radius = Math.min(10, blockHeight / 4);
+    const r = ctx as CanvasRenderingContext2D & {
+      roundRect?: (x: number, y: number, w: number, h: number, radii: number) => void;
+    };
+    if (typeof r.roundRect === "function") {
+      ctx.beginPath();
+      r.roundRect(blockX, blockY, blockWidth, blockHeight, radius);
+      ctx.fill();
+    } else {
+      ctx.fillRect(blockX, blockY, blockWidth, blockHeight);
     }
-    matches.sort((a, b) => a.start - b.start);
-    const nonOverlapping: Match[] = [];
-    let lastEnd = 0;
-    for (const m of matches) {
-      if (m.start >= lastEnd) {
-        nonOverlapping.push(m);
-        lastEnd = m.end;
-      }
-    }
-    let out = "";
-    let cursor = 0;
-    for (const m of nonOverlapping) {
-      out += text.slice(cursor, m.start);
-      out += `<c.h>${m.word}</c.h>`;
-      cursor = m.end;
-    }
-    out += text.slice(cursor);
-    en = out;
   }
-  return s.translation ? `${en}\n${s.translation}` : en;
+
+  const fg = hexToRgba(style.fontColor, style.fontOpacity);
+  const centerX = blockX + blockWidth / 2;
+
+  // English line — split into runs of [normal, highlight, normal, highlight, ...]
+  // so highlight phrases get an amber background fill underneath.
+  if (enRaw) {
+    ctx.font = `600 ${baseEn}px sans-serif`;
+    const runs = splitForHighlights(
+      enRaw,
+      style.highlightsEnabled ? subtitle.highlightWords : [],
+    );
+    const widths = runs.map((r) => ctx.measureText(r.text).width);
+    const totalWidth = widths.reduce((a, b) => a + b, 0);
+    let cursorX = centerX - totalWidth / 2;
+    const enBaseline = blockY + padY + baseEn;
+    for (let i = 0; i < runs.length; i++) {
+      const w = widths[i]!;
+      if (runs[i]!.highlight) {
+        ctx.fillStyle = "#fbbf24";
+        ctx.fillRect(cursorX, enBaseline - baseEn * 0.95, w, baseEn * 1.15);
+        ctx.fillStyle = "#1c1917";
+      } else {
+        ctx.fillStyle = fg;
+      }
+      ctx.textAlign = "left";
+      ctx.fillText(runs[i]!.text, cursorX, enBaseline);
+      cursorX += w;
+    }
+    ctx.textAlign = "center";
+  }
+  if (zhRaw) {
+    ctx.font = `400 ${baseZh}px sans-serif`;
+    ctx.fillStyle = fg;
+    ctx.fillText(zhRaw, centerX, blockY + padY + baseEn + gap + baseZh);
+  }
+
+  ctx.restore();
+}
+
+/** Slice text into runs alternating normal / highlight. Non-overlapping —
+ *  earliest-start highlight wins on collisions. */
+function splitForHighlights(
+  text: string,
+  highlights: string[] | undefined,
+): Array<{ text: string; highlight: boolean }> {
+  if (!highlights || highlights.length === 0) {
+    return [{ text, highlight: false }];
+  }
+  type Match = { start: number; end: number };
+  const matches: Match[] = [];
+  for (const w of highlights) {
+    if (!w) continue;
+    const idx = text.indexOf(w);
+    if (idx === -1) continue;
+    matches.push({ start: idx, end: idx + w.length });
+  }
+  matches.sort((a, b) => a.start - b.start);
+  const merged: Match[] = [];
+  let lastEnd = 0;
+  for (const m of matches) {
+    if (m.start >= lastEnd) {
+      merged.push(m);
+      lastEnd = m.end;
+    }
+  }
+  const runs: Array<{ text: string; highlight: boolean }> = [];
+  let cursor = 0;
+  for (const m of merged) {
+    if (m.start > cursor) {
+      runs.push({ text: text.slice(cursor, m.start), highlight: false });
+    }
+    runs.push({ text: text.slice(m.start, m.end), highlight: true });
+    cursor = m.end;
+  }
+  if (cursor < text.length) {
+    runs.push({ text: text.slice(cursor), highlight: false });
+  }
+  return runs;
 }
 
 export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPlayer(
@@ -343,80 +426,93 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, volume, muted, ended]);
 
-  // ---------- Picture-in-Picture (native, via the source <video>) ----------
+  // ---------- Picture-in-Picture (canvas + captureStream) ----------
   //
-  // Subtitles delivered via a real <track> element loaded from a Blob URL,
-  // NOT via the JS addTextTrack API. WebView2 / some Chromium builds don't
-  // render programmatically-added TextTracks in the PiP window even when
-  // mode='showing' and a cue is active — we hit that exact symptom. A
-  // <track> element loaded from a blob: source goes through the standard
-  // HTMLMediaElement track pipeline that PiP always picks up.
-  //
-  // Blob content: one WEBVTT cue for the currently-active subtitle, with
-  // `<c.h>...</c.h>` markup for highlight phrases. The matching ::cue(.h)
-  // style lives in App.css and applies in the PiP surface.
-  const pipTrackElRef = useRef<HTMLTrackElement>(null);
-  const [pipVttUrl, setPipVttUrl] = useState<string | null>(null);
+  // Native PiP on the source <video> can't render subtitle overlays in
+  // WebView2 — TextTrack-via-JS and <track>+blob both fail to surface in
+  // the floating window. So we composite video frames + caption text onto
+  // a hidden canvas, captureStream() the canvas, hand the stream to a
+  // hidden <video>, then PiP that hidden video. Trade-off: PiP's seekbar
+  // becomes inert (MediaStream isn't seekable), but play/pause is wired
+  // via event bridging from pipVid → mainVid below.
+  const pipCanvasRef = useRef<HTMLCanvasElement>(null);
+  const pipVideoRef = useRef<HTMLVideoElement>(null);
+  const pipStreamRef = useRef<MediaStream | null>(null);
 
+  // Paint loop: video frame → canvas, then bilingual caption (with highlight
+  // backgrounds) → canvas. Runs only while pipActive; the captionStyle /
+  // currentSubtitle / showCaptions deps each trigger a fresh paint loop.
   useEffect(() => {
-    let url: string | null = null;
-    if (showCaptions && currentSubtitle) {
-      const start = Math.max(0, currentSubtitle.time);
-      const end = Math.max(start + 0.5, currentSubtitle.endTime || start + 30);
-      const vtt =
-        `WEBVTT\n\n` +
-        `${formatVttTime(start)} --> ${formatVttTime(end)}\n` +
-        `${buildVttText(currentSubtitle)}\n`;
-      url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
-    }
-    setPipVttUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return url;
-    });
-    return () => {
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [currentSubtitle, showCaptions]);
-
-  // Flip mode = 'showing' once the track DOM element has loaded its blob.
-  // <track default> only affects initial state; mode has to be set live
-  // after each src change because the track object recycles.
-  useEffect(() => {
-    const tEl = pipTrackElRef.current;
-    if (!tEl) return;
-    const apply = () => {
-      if (tEl.track) {
-        tEl.track.mode = pipActive && showCaptions ? "showing" : "hidden";
-      }
-    };
-    tEl.addEventListener("load", apply);
-    apply();
-    return () => tEl.removeEventListener("load", apply);
-  }, [pipVttUrl, pipActive, showCaptions]);
-
-  // PiP enter/leave sync from the native events. More reliable than flipping
-  // pipActive manually in togglePip — handles cases where Chromium opens or
-  // closes the PiP without our button (right-click → PiP menu, video ends,
-  // user hits ✕ on the floating window).
-  useEffect(() => {
+    if (!pipActive) return;
+    const canvas = pipCanvasRef.current;
+    const ctx = canvas?.getContext("2d");
     const mainVid = resolveVideo();
-    if (!mainVid) return;
-    const onEnter = () => setPipActive(true);
+    if (!canvas || !ctx || !mainVid) return;
+    let raf = 0;
+    const paint = () => {
+      if (canvas.width !== mainVid.videoWidth || canvas.height !== mainVid.videoHeight) {
+        if (mainVid.videoWidth > 0 && mainVid.videoHeight > 0) {
+          canvas.width = mainVid.videoWidth;
+          canvas.height = mainVid.videoHeight;
+        }
+      }
+      try {
+        ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
+      } catch {
+        /* source not yet ready — retry next frame */
+      }
+      if (showCaptions && currentSubtitle) {
+        drawCaptionOnCanvas(ctx, canvas.width, canvas.height, currentSubtitle, captionStyle);
+      }
+      raf = requestAnimationFrame(paint);
+    };
+    raf = requestAnimationFrame(paint);
+    return () => cancelAnimationFrame(raf);
+  }, [pipActive, currentSubtitle, captionStyle, showCaptions, resolveVideo]);
+
+  // Bridge pipVid play/pause events → mainVid. Lets the PiP window's
+  // built-in pause/play button drive the real media element. Seek
+  // doesn't bridge because MediaStream from canvas has no duration / no
+  // seekable range — PiP's seekbar stays inert.
+  useEffect(() => {
+    const pipVid = pipVideoRef.current;
+    if (!pipVid) return;
+    const onPause = () => {
+      const mainVid = resolveVideo();
+      if (mainVid && !mainVid.paused) mainVid.pause();
+    };
+    const onPlay = () => {
+      const mainVid = resolveVideo();
+      if (mainVid && mainVid.paused) mainVid.play().catch(() => {});
+    };
+    pipVid.addEventListener("pause", onPause);
+    pipVid.addEventListener("play", onPlay);
+    return () => {
+      pipVid.removeEventListener("pause", onPause);
+      pipVid.removeEventListener("play", onPlay);
+    };
+  }, [resolveVideo]);
+
+  // PiP teardown sync: the system closes the floating window (user hits ✕,
+  // video ends, another video takes over) → pipVid fires leave →
+  // reconcile local state, stop the captureStream, restore mainVid mute.
+  useEffect(() => {
+    const pipVid = pipVideoRef.current;
+    if (!pipVid) return;
     const onLeave = () => {
       setPipActive(false);
       setPipPosterUrl(null);
-      if (pipPrevMutedRef.current !== null) {
+      pipStreamRef.current?.getTracks().forEach((t) => t.stop());
+      pipStreamRef.current = null;
+      const mainVid = resolveVideo();
+      if (mainVid && pipPrevMutedRef.current !== null) {
         mainVid.muted = pipPrevMutedRef.current;
         pipPrevMutedRef.current = null;
       }
     };
-    mainVid.addEventListener("enterpictureinpicture", onEnter);
-    mainVid.addEventListener("leavepictureinpicture", onLeave);
-    return () => {
-      mainVid.removeEventListener("enterpictureinpicture", onEnter);
-      mainVid.removeEventListener("leavepictureinpicture", onLeave);
-    };
-  }, [resolveVideo, src]);
+    pipVid.addEventListener("leavepictureinpicture", onLeave);
+    return () => pipVid.removeEventListener("leavepictureinpicture", onLeave);
+  }, [resolveVideo]);
 
   // Close the PiP window when the whatsub window closes — preventDefault
   // the Tauri close, exit PiP, then force-destroy the window. Using
@@ -469,17 +565,16 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
   async function togglePip() {
     const mainVid = resolveVideo();
-    if (!mainVid) return;
+    const pipVid = pipVideoRef.current;
+    const canvas = pipCanvasRef.current;
+    if (!mainVid || !pipVid || !canvas) return;
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
         return;
       }
-      // Capture current frame as the blurred-grayscale poster shown over
-      // the main player while PiP runs. Native PiP on Chromium replaces
-      // the in-page video with a "Picture in Picture" placeholder; our
-      // overlay sits on top of that and gives the user a visual
-      // confirmation the content has been handed off.
+      // Capture current frame for the blurred-grayscale poster shown over
+      // the main player while PiP runs.
       try {
         const poster = document.createElement("canvas");
         poster.width = mainVid.videoWidth || 1280;
@@ -493,19 +588,58 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         console.warn("pip poster capture failed (canvas tainted?)", err);
         setPipPosterUrl(null);
       }
-      // Pre-arm: set track mode to 'showing' BEFORE requesting PiP, so
-      // Chromium's PiP surface picks up the active cue at open time.
-      const tEl = pipTrackElRef.current;
-      if (tEl?.track && showCaptions) {
-        tEl.track.mode = "showing";
+      // Seed canvas dimensions + prime one frame so captureStream's first
+      // packet isn't a black void.
+      canvas.width = mainVid.videoWidth || 1280;
+      canvas.height = mainVid.videoHeight || 720;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        try {
+          ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
+          if (showCaptions && currentSubtitle) {
+            drawCaptionOnCanvas(ctx, canvas.width, canvas.height, currentSubtitle, captionStyle);
+          }
+        } catch { /* video not ready — paint loop catches up */ }
       }
-      // Native PiP on the source element. Audio + seekbar + play/pause
-      // all wire through Chromium's PiP controls automatically.
-      // pipActive flips via the enterpictureinpicture event, not here.
-      await mainVid.requestPictureInPicture();
+      const canvasStream = canvas.captureStream(30);
+      // Combine canvas video with mainVid's audio so PiP has sound.
+      let combined: MediaStream = canvasStream;
+      try {
+        type Capturable = HTMLVideoElement & {
+          captureStream?: () => MediaStream;
+          mozCaptureStream?: () => MediaStream;
+        };
+        const cv = mainVid as Capturable;
+        const grab = cv.captureStream?.bind(cv) ?? cv.mozCaptureStream?.bind(cv);
+        const mainStream = grab?.();
+        if (mainStream) {
+          combined = new MediaStream([
+            ...canvasStream.getVideoTracks(),
+            ...mainStream.getAudioTracks(),
+          ]);
+        }
+      } catch (err) {
+        console.warn("audio capture from main video failed", err);
+      }
+      pipStreamRef.current = combined;
+      pipVid.srcObject = combined;
+      pipVid.muted = false;
+      pipPrevMutedRef.current = mainVid.muted;
+      mainVid.muted = true;
+      await pipVid.play();
+      await pipVid.requestPictureInPicture();
+      setPipActive(true);
     } catch (e) {
       console.error("pip toggle failed", e);
+      const mainVid2 = resolveVideo();
+      if (mainVid2 && pipPrevMutedRef.current !== null) {
+        mainVid2.muted = pipPrevMutedRef.current;
+        pipPrevMutedRef.current = null;
+      }
+      setPipActive(false);
       setPipPosterUrl(null);
+      pipStreamRef.current?.getTracks().forEach((t) => t.stop());
+      pipStreamRef.current = null;
     }
   }
 
@@ -660,22 +794,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         onPause={onPause}
         onEnded={onEndedEv}
         onClick={togglePlay}
-      >
-        {/* Hidden subtitle track for native Picture-in-Picture. <track>
-            sourced from a blob URL is the only path Chromium's PiP surface
-            reliably renders captions from — JS addTextTrack didn't work. */}
-        {pipVttUrl && (
-          <track
-            ref={pipTrackElRef}
-            key={pipVttUrl}
-            kind="subtitles"
-            label="whatsub-pip"
-            srcLang="zh"
-            src={pipVttUrl}
-            default
-          />
-        )}
-      </video>
+      />
       {/* While PiP is active, hide the live video behind a blurred / grayscale
           freeze frame captured at the moment of toggle. Wrapped in a
           bg-black z-10 div so the blur's soft edges + object-contain
@@ -1317,6 +1436,24 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         </div>
       </div>
 
+      {/* Hidden PiP rig — Chromium won't PiP a display:none video, so we
+          position them off-screen. The canvas takes one rAF tick to receive
+          its first frame; that's why togglePip primes drawImage above
+          before captureStream(). */}
+      <canvas
+        ref={pipCanvasRef}
+        width={1}
+        height={1}
+        className="absolute pointer-events-none opacity-0"
+        style={{ left: -9999, top: -9999, width: 1, height: 1 }}
+      />
+      <video
+        ref={pipVideoRef}
+        muted
+        playsInline
+        className="absolute pointer-events-none opacity-0"
+        style={{ left: -9999, top: -9999, width: 1, height: 1 }}
+      />
     </div>
   );
 });

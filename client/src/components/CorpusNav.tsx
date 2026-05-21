@@ -1,12 +1,18 @@
 import { Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
+type Mode = 'browse' | 'mine';
+
 interface Props {
   onRefresh?: () => void;
   refreshing?: boolean;
+  /** Current scope. When provided alongside onModeChange, a segmented
+   *  toggle renders in the header next to the refresh button. */
+  mode?: Mode;
+  onModeChange?: (m: Mode) => void;
 }
 
-export function CorpusNav({ onRefresh, refreshing }: Props) {
+export function CorpusNav({ onRefresh, refreshing, mode, onModeChange }: Props) {
   return (
     <header className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800 bg-zinc-950">
       <Link
@@ -17,6 +23,24 @@ export function CorpusNav({ onRefresh, refreshing }: Props) {
         <ArrowLeft className="h-5 w-5" />
       </Link>
       <h1 className="text-lg font-semibold flex-1">语料库</h1>
+      {mode && onModeChange && (
+        <div className="flex items-center gap-0.5 rounded-full bg-zinc-900 border border-zinc-800 p-0.5">
+          {(['browse', 'mine'] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => onModeChange(m)}
+              className={
+                'px-3 py-1 text-xs rounded-full transition-colors ' +
+                (mode === m
+                  ? 'bg-zinc-700 text-zinc-100'
+                  : 'text-zinc-400 hover:text-zinc-200')
+              }
+            >
+              {m === 'browse' ? '公共' : '⭐ 我的'}
+            </button>
+          ))}
+        </div>
+      )}
       {onRefresh && (
         <button
           onClick={onRefresh}

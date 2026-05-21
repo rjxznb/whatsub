@@ -86,6 +86,9 @@ pub fn run() {
             commands::library::library_move_video_to_folder,
             commands::library::library_merge_into_folder,
             commands::library::library_set_top_level_order,
+            commands::library_sync::library_sync_to_cloud,
+            commands::library_sync::library_unsync_from_cloud,
+            commands::library_sync::library_list_synced,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -90,7 +90,7 @@ pub struct Library {
     pub top_level_order: Vec<LibraryItemRef>,
 }
 
-fn read_index() -> AppResult<Library> {
+pub(crate) fn read_index() -> AppResult<Library> {
     let path = paths::library_index_path()?;
     if !path.exists() {
         return Ok(Library::default());
@@ -108,7 +108,7 @@ fn read_index() -> AppResult<Library> {
     Ok(lib)
 }
 
-fn write_index(lib: &Library) -> AppResult<()> {
+pub(crate) fn write_index(lib: &Library) -> AppResult<()> {
     let dir = paths::app_data_dir()?;
     fs::create_dir_all(&dir)?;
     let pretty = serde_json::to_string_pretty(lib)?;
@@ -476,6 +476,25 @@ pub fn library_set_top_level_order(refs: Vec<LibraryItemRef>) -> AppResult<()> {
     let mut lib = read_index()?;
     set_top_level_order_in_memory(&mut lib, refs)?;
     write_index(&lib)
+}
+
+/// Update synced_at + sync_error on a library entry by id. Used by the
+/// library_sync command (commands/library_sync.rs) to record cloud-sync
+/// state after a successful POST or DELETE. Atomic read-modify-write.
+pub fn set_synced_at(
+    id: &str,
+    synced_at: Option<i64>,
+    sync_error: Option<String>,
+) -> AppResult<()> {
+    let mut library = read_index()?;
+    if let Some(entry) = library.videos.iter_mut().find(|v| v.id == id) {
+        entry.synced_at = synced_at;
+        entry.sync_error = sync_error;
+    } else {
+        return Err("not_found".to_string().into());
+    }
+    write_index(&library)?;
+    Ok(())
 }
 
 #[cfg(test)]

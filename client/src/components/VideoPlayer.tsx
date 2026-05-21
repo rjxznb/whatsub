@@ -399,24 +399,38 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   }, [resolveVideo, src]);
 
   // Close the PiP window when the whatsub window closes — preventDefault
-  // the Tauri close, exit PiP, then call close() ourselves. Doing this
-  // synchronously-then-await ensures the PiP window dies before the
-  // webview is destroyed; otherwise the floating PiP can outlive the
-  // source page on some WebView2 builds, leaving an un-closable orphan
-  // (the bug surfacing as "下面还有一个 whatsub 程序怎么都关不上了").
+  // the Tauri close, exit PiP, then force-destroy the window. Using
+  // destroy() instead of close() avoids re-triggering onCloseRequested
+  // (close() goes through the same lifecycle and would recurse into
+  // this handler). Requires the `core:window:allow-destroy` capability;
+  // without that, win.destroy() throws and the window gets stuck open
+  // — that was the bug surfacing as "下面还有一个 whatsub 怎么都关不上".
+  //
+  // Reentry guard: if the user clicks X repeatedly while we're still
+  // exiting PiP, ignore subsequent close requests.
   useEffect(() => {
     const win = getCurrentWindow();
     let unlisten: undefined | (() => void);
+    let closing = false;
     win
       .onCloseRequested(async (event) => {
-        if (!document.pictureInPictureElement) return;
+        if (closing) {
+          event.preventDefault();
+          return;
+        }
+        if (!document.pictureInPictureElement) return; // let Tauri close normally
         event.preventDefault();
+        closing = true;
         try {
           await document.exitPictureInPicture();
         } catch { /* best-effort */ }
         try {
-          await win.close();
-        } catch { /* harness already closing */ }
+          await win.destroy();
+        } catch (err) {
+          console.error("window.destroy failed — falling back to close", err);
+          closing = false;
+          try { await win.close(); } catch { /* nothing left to try */ }
+        }
       })
       .then((u) => {
         unlisten = u;

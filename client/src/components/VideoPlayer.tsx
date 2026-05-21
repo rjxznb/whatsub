@@ -213,6 +213,9 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
   // <video> while PiP is active. Captured (via drawImage→toDataURL) once at
   // PiP entry, cleared at exit.
   const [pipPosterUrl, setPipPosterUrl] = useState<string | null>(null);
+  // Main video's muted state at the moment of PiP entry — restored on exit
+  // so the user's preferred mute state survives the PiP round-trip.
+  const pipPrevMutedRef = useRef<boolean | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [duration, setDuration] = useState(0);
@@ -418,6 +421,13 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
       setPipPosterUrl(null);
       pipStreamRef.current?.getTracks().forEach((t) => t.stop());
       pipStreamRef.current = null;
+      // Restore main video's muted state to whatever the user had before
+      // PiP started (we muted it on entry to avoid double-audio).
+      const mainVid = resolveVideo();
+      if (mainVid && pipPrevMutedRef.current !== null) {
+        mainVid.muted = pipPrevMutedRef.current;
+        pipPrevMutedRef.current = null;
+      }
     };
     pipVid.addEventListener("leavepictureinpicture", onLeave);
     return () => pipVid.removeEventListener("leavepictureinpicture", onLeave);
@@ -491,15 +501,48 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
           ctx.drawImage(mainVid, 0, 0, canvas.width, canvas.height);
         } catch { /* not ready — paint loop will retry */ }
       }
-      const stream = canvas.captureStream(30);
-      pipStreamRef.current = stream;
-      pipVid.srcObject = stream;
-      pipVid.muted = true;
+      const canvasStream = canvas.captureStream(30);
+      // Pull audio from the source video so the PiP window has sound. The
+      // canvas stream carries video frames only — without this, PiP would
+      // be silent and the main element would keep emitting audio in parallel
+      // (which is what the user complained about: "原播放器还在播放").
+      let combined: MediaStream = canvasStream;
+      try {
+        type Capturable = HTMLVideoElement & {
+          captureStream?: () => MediaStream;
+          mozCaptureStream?: () => MediaStream;
+        };
+        const cv = mainVid as Capturable;
+        const grab = cv.captureStream?.bind(cv) ?? cv.mozCaptureStream?.bind(cv);
+        const mainStream = grab?.();
+        if (mainStream) {
+          combined = new MediaStream([
+            ...canvasStream.getVideoTracks(),
+            ...mainStream.getAudioTracks(),
+          ]);
+        }
+      } catch (err) {
+        console.warn("audio capture from main video failed", err);
+      }
+      pipStreamRef.current = combined;
+      pipVid.srcObject = combined;
+      // Audio plays from the PiP window; main element gets muted below so
+      // we don't double-output. Set unmuted BEFORE play() while the user
+      // gesture is still active (Chromium autoplay policy).
+      pipVid.muted = false;
+      pipPrevMutedRef.current = mainVid.muted;
+      mainVid.muted = true;
       await pipVid.play();
       await pipVid.requestPictureInPicture();
       setPipActive(true);
     } catch (e) {
       console.error("pip toggle failed", e);
+      // Restore main video state if entry failed midway
+      const mainVid2 = resolveVideo();
+      if (mainVid2 && pipPrevMutedRef.current !== null) {
+        mainVid2.muted = pipPrevMutedRef.current;
+        pipPrevMutedRef.current = null;
+      }
       setPipActive(false);
       setPipPosterUrl(null);
       pipStreamRef.current?.getTracks().forEach((t) => t.stop());

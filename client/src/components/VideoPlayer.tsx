@@ -104,6 +104,19 @@ function colorLabel(hex: string): string {
   return CAPTION_COLOR_OPTIONS.find((o) => o.value.toUpperCase() === upper)?.label ?? hex;
 }
 
+/** Format a non-negative number of seconds as `HH:MM:SS.mmm` for WEBVTT
+ *  cue timestamps. Chromium's PiP rejects malformed timestamps silently
+ *  by ignoring the cue entirely, so this needs to be exact. */
+function formatVttTime(sec: number): string {
+  const total = Math.max(0, sec);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total - h * 3600 - m * 60;
+  // s already has ms precision; toFixed(3) → "5.500" or "65.000" etc.
+  const ss = s.toFixed(3).padStart(6, "0");
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${ss}`;
+}
+
 /** Build a WebVTT cue text string for a Subtitle:
  *  - English line wraps highlight phrases as `<c.h>...</c.h>` for ::cue(.h)
  *    styling in App.css to render an amber background (matches CaptionOverlay).
@@ -332,53 +345,54 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
 
   // ---------- Picture-in-Picture (native, via the source <video>) ----------
   //
-  // Earlier this was a canvas + captureStream rig so we could composite
-  // subtitles onto the PiP frames. But that broke play/pause/seek inside
-  // the PiP window (MediaStream from canvas is not seekable) AND highlight
-  // spans weren't rendered. Native PiP on the source element gives all
-  // three (controls + seekbar + currentTime) for free; we render subtitles
-  // via the standard TextTrack API which Chromium displays inside the
-  // PiP window directly. Highlight spans use WebVTT `<c.h>...</c.h>`
-  // markup styled by `::cue(.h)` in App.css.
+  // Subtitles delivered via a real <track> element loaded from a Blob URL,
+  // NOT via the JS addTextTrack API. WebView2 / some Chromium builds don't
+  // render programmatically-added TextTracks in the PiP window even when
+  // mode='showing' and a cue is active — we hit that exact symptom. A
+  // <track> element loaded from a blob: source goes through the standard
+  // HTMLMediaElement track pipeline that PiP always picks up.
   //
-  // Cue management: one rolling cue replaced on every currentSubtitle
-  // change. Times mirror the cue's own start/end so seeking in the PiP
-  // window auto-hides/shows correctly — Player.tsx pushes a new
-  // currentSubtitle on time-update anyway, so we always have an in-range
-  // cue for the current moment.
-  const pipTrackRef = useRef<TextTrack | null>(null);
+  // Blob content: one WEBVTT cue for the currently-active subtitle, with
+  // `<c.h>...</c.h>` markup for highlight phrases. The matching ::cue(.h)
+  // style lives in App.css and applies in the PiP surface.
+  const pipTrackElRef = useRef<HTMLTrackElement>(null);
+  const [pipVttUrl, setPipVttUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    const mainVid = resolveVideo();
-    if (!mainVid) return;
-    let track = Array.from(mainVid.textTracks).find(
-      (t) => t.label === "whatsub-pip"
-    );
-    if (!track) {
-      track = mainVid.addTextTrack("subtitles", "whatsub-pip", "zh");
+    let url: string | null = null;
+    if (showCaptions && currentSubtitle) {
+      const start = Math.max(0, currentSubtitle.time);
+      const end = Math.max(start + 0.5, currentSubtitle.endTime || start + 30);
+      const vtt =
+        `WEBVTT\n\n` +
+        `${formatVttTime(start)} --> ${formatVttTime(end)}\n` +
+        `${buildVttText(currentSubtitle)}\n`;
+      url = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
     }
-    track.mode = "hidden";
-    pipTrackRef.current = track;
-  }, [resolveVideo, src]);
+    setPipVttUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [currentSubtitle, showCaptions]);
 
+  // Flip mode = 'showing' once the track DOM element has loaded its blob.
+  // <track default> only affects initial state; mode has to be set live
+  // after each src change because the track object recycles.
   useEffect(() => {
-    const track = pipTrackRef.current;
-    if (!track) return;
-    while (track.cues && track.cues.length > 0) {
-      track.removeCue(track.cues[0]);
-    }
-    if (pipActive && showCaptions && currentSubtitle) {
-      try {
-        const start = Math.max(0, currentSubtitle.time);
-        const end = Math.max(start + 0.5, currentSubtitle.endTime || start + 30);
-        const cue = new VTTCue(start, end, buildVttText(currentSubtitle));
-        track.addCue(cue);
-      } catch (e) {
-        console.warn("vtt cue failed", e);
+    const tEl = pipTrackElRef.current;
+    if (!tEl) return;
+    const apply = () => {
+      if (tEl.track) {
+        tEl.track.mode = pipActive && showCaptions ? "showing" : "hidden";
       }
-    }
-    track.mode = pipActive && showCaptions ? "showing" : "hidden";
-  }, [currentSubtitle, pipActive, showCaptions]);
+    };
+    tEl.addEventListener("load", apply);
+    apply();
+    return () => tEl.removeEventListener("load", apply);
+  }, [pipVttUrl, pipActive, showCaptions]);
 
   // PiP enter/leave sync from the native events. More reliable than flipping
   // pipActive manually in togglePip — handles cases where Chromium opens or
@@ -479,24 +493,11 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         console.warn("pip poster capture failed (canvas tainted?)", err);
         setPipPosterUrl(null);
       }
-      // Pre-arm the text track BEFORE requesting PiP — Chromium's PiP
-      // surface picks up the cue list at open time, so a track that's
-      // empty / hidden during entry shows no captions even after we add
-      // cues post-hoc. Adding the current cue + flipping mode=showing
-      // here means the very first frame of PiP renders the caption.
-      const track = pipTrackRef.current;
-      if (track && showCaptions && currentSubtitle) {
-        while (track.cues && track.cues.length > 0) {
-          track.removeCue(track.cues[0]);
-        }
-        try {
-          const start = Math.max(0, currentSubtitle.time);
-          const end = Math.max(start + 0.5, currentSubtitle.endTime || start + 30);
-          track.addCue(new VTTCue(start, end, buildVttText(currentSubtitle)));
-          track.mode = "showing";
-        } catch (err) {
-          console.warn("pre-arm pip cue failed", err);
-        }
+      // Pre-arm: set track mode to 'showing' BEFORE requesting PiP, so
+      // Chromium's PiP surface picks up the active cue at open time.
+      const tEl = pipTrackElRef.current;
+      if (tEl?.track && showCaptions) {
+        tEl.track.mode = "showing";
       }
       // Native PiP on the source element. Audio + seekbar + play/pause
       // all wire through Chromium's PiP controls automatically.
@@ -659,7 +660,22 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, Props>(function VideoPla
         onPause={onPause}
         onEnded={onEndedEv}
         onClick={togglePlay}
-      />
+      >
+        {/* Hidden subtitle track for native Picture-in-Picture. <track>
+            sourced from a blob URL is the only path Chromium's PiP surface
+            reliably renders captions from — JS addTextTrack didn't work. */}
+        {pipVttUrl && (
+          <track
+            ref={pipTrackElRef}
+            key={pipVttUrl}
+            kind="subtitles"
+            label="whatsub-pip"
+            srcLang="zh"
+            src={pipVttUrl}
+            default
+          />
+        )}
+      </video>
       {/* While PiP is active, hide the live video behind a blurred / grayscale
           freeze frame captured at the moment of toggle. Wrapped in a
           bg-black z-10 div so the blur's soft edges + object-contain

@@ -49,7 +49,7 @@ export function CorpusTour({ onDismiss }: Props) {
         {/* Header — new-feature announcement */}
         <div className="flex items-center gap-3 px-6 pt-6 pb-4">
           <div className="h-10 w-10 rounded-full bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-xl">
-            🔌
+            🧩
           </div>
           <div className="flex-1">
             <div className="text-[11px] uppercase tracking-wide text-amber-300/80 font-medium">

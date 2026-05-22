@@ -44,8 +44,8 @@ pub struct CloudLibraryEntry {
 }
 
 #[tauri::command]
-pub async fn library_sync_to_cloud<R: Runtime>(
-    app: AppHandle<R>,
+pub async fn library_sync_to_cloud(
+    app: AppHandle,
     id: String,
 ) -> Result<SyncOk, String> {
     // 1. Auth
@@ -87,6 +87,23 @@ pub async fn library_sync_to_cloud<R: Runtime>(
     let analysis_json: serde_json::Value = serde_json::from_str(&analysis_text)
         .map_err(|e| format!("analysis parse: {e}"))?;
 
+    // Downscale local thumb.jpg → small JPEG → base64 (best-effort).
+    let thumb_b64: Option<String> = {
+        let thumb_src = std::path::Path::new(video_dir).join("thumb.jpg");
+        let thumb_small = std::path::Path::new(video_dir).join("thumb_small.jpg");
+        if thumb_src.exists() {
+            match crate::pipeline::ffmpeg::downscale_jpeg(&app, &thumb_src, &thumb_small, 320, &id, None).await {
+                Ok(()) => std::fs::read(&thumb_small).ok().map(|bytes| {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                }),
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    };
+
     // 4. POST
     let body = serde_json::json!({
         "id": entry.id,
@@ -97,6 +114,7 @@ pub async fn library_sync_to_cloud<R: Runtime>(
         "thumbUrl": format!("https://i.ytimg.com/vi/{youtube_id}/mqdefault.jpg"),
         "transcriptSrt": transcript_text,
         "analysisJson": analysis_json,
+        "thumbData": thumb_b64,
     });
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

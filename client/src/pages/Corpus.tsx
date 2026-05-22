@@ -10,7 +10,6 @@ import { useAuth } from '../store/auth';
 import { useLicense } from '../store/license';
 
 type Mode = 'browse' | 'mine';
-type TourStep = 'welcome' | 'refresh' | null;
 
 export function Corpus() {
   const [mode, setMode] = useState<Mode>('browse');
@@ -26,18 +25,15 @@ export function Corpus() {
   const [retryError, setRetryError] = useState('');
   const [showCloudManager, setShowCloudManager] = useState(false);
 
-  // First-visit onboarding tour. localStorage gate so it only fires once
-  // per machine; explains the browser-plugin → desktop-sync workflow.
-  const [tourStep, setTourStep] = useState<TourStep>(() => {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem('corpusTourSeen') ? null : 'welcome';
+  // First-visit onboarding modal. localStorage gate so it only fires once
+  // per machine; announces the plugin-sync feature with a demo clip.
+  const [showTour, setShowTour] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return !window.localStorage.getItem('corpusTourSeen');
   });
   function dismissTour() {
-    setTourStep(null);
+    setShowTour(false);
     window.localStorage.setItem('corpusTourSeen', '1');
-  }
-  function advanceTour() {
-    setTourStep('refresh');
   }
 
   const handleRefresh = async () => {
@@ -155,14 +151,9 @@ export function Corpus() {
           </div>
         </div>
       )}
-      {/* First-visit tour — only after auth resolves so the refresh button
-          (which it anchors to in step 2) is actually in the DOM. */}
-      {tourStep && status === 'authed' && (
-        <CorpusTour
-          step={tourStep}
-          onAdvance={advanceTour}
-          onDismiss={dismissTour}
-        />
+      {/* First-visit plugin-sync announcement modal. */}
+      {showTour && status === 'authed' && (
+        <CorpusTour onDismiss={dismissTour} />
       )}
       {showCloudManager && (
         <CloudSyncManager

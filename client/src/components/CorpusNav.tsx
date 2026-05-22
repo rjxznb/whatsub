@@ -67,7 +67,6 @@ export function CorpusNav({ onRefresh, refreshing, mode, onModeChange, onOpenClo
           onClick={onRefresh}
           disabled={refreshing}
           title={refreshing ? '刷新中…' : '刷新语料库'}
-          data-corpus-refresh="true"
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
         >
           <RotateCw className={'h-4 w-4 ' + (refreshing ? 'animate-spin' : '')} />

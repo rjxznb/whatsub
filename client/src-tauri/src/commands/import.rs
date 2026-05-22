@@ -200,6 +200,8 @@ async fn run_import(
         last_error: None,
         video_dir: Some(out_dir.to_string_lossy().to_string()),
         analysis_style: req.analysis_style.clone(),
+        synced_at: None,
+        sync_error: None,
     };
     library_upsert(entry)?;
 

@@ -9,3 +9,4 @@ pub mod youtube_auth;
 pub mod yt_dlp;
 pub mod auth;
 pub mod corpus;
+pub mod library_sync;

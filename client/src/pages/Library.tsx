@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Cloud } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
@@ -25,6 +25,8 @@ import {
   markImportChecklistShown,
 } from "../utils/importChecklistGate";
 import type { LibraryEntry, LibraryFolder } from "../types/library";
+import { SyncButton } from "../components/LibraryCard/SyncButton";
+import { CloudSyncManager } from "../components/CloudSyncManager";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
@@ -136,6 +138,7 @@ export function Library() {
   }, [navCollapsed]);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
+  const [showCloudManager, setShowCloudManager] = useState(false);
 
   // Overlap-based drag state.
   //
@@ -264,10 +267,24 @@ export function Library() {
       {
         label: "删除",
         danger: true,
-        onClick: () => {
-          if (confirm(`确定删除「${entry.title}」？\n这会同时删除视频文件和分析结果，不可恢复。`)) {
-            remove(entry.id).catch((e) => alert(`删除失败：${e}`));
+        onClick: async () => {
+          const baseConfirm = `确定删除「${entry.title}」？\n这会同时删除视频文件和分析结果，不可恢复。`;
+          if (!confirm(baseConfirm)) return;
+          if (entry.syncedAt) {
+            const cloudConfirm = `这个条目已同步到云（iOS 可见）。\n\n点【确定】= 同步从云上删除 + 删本地\n点【取消】= 不删任何东西`;
+            if (!confirm(cloudConfirm)) return;
+            try {
+              const { unsyncFromCloud } = await import("../lib/api/librarySync");
+              await unsyncFromCloud(entry.id);
+            } catch (err) {
+              const { friendlySyncError } = await import("../lib/api/librarySync");
+              const proceed = confirm(
+                `从云上删除失败：${friendlySyncError(String(err))}\n\n继续删本地吗？（云端那条会成为孤儿，可在「云同步详情」里手动下架）`
+              );
+              if (!proceed) return;
+            }
           }
+          remove(entry.id).catch((e) => alert(`删除失败：${e}`));
         },
       },
     ];
@@ -486,6 +503,14 @@ export function Library() {
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
         <button
+          onClick={() => setShowCloudManager(true)}
+          className="inline-flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2.5 py-1.5 rounded hover:bg-white/5 transition-colors"
+          title="管理云端同步的库条目"
+        >
+          <Cloud className="h-4 w-4" />
+          云同步详情
+        </button>
+        <button
           data-tour="import-button"
           onClick={() => {
             if (shouldShowImportChecklist()) {
@@ -593,6 +618,9 @@ export function Library() {
                             !
                           </div>
                         )}
+                        <div className={`absolute top-2 left-2 transition-opacity ${v.syncedAt || v.syncError ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                          <SyncButton entry={v} onChanged={reload} />
+                        </div>
                       </>
                     }
                   />
@@ -647,6 +675,9 @@ export function Library() {
                               !
                             </div>
                           )}
+                          <div className={`absolute top-2 left-2 transition-opacity ${v.syncedAt || v.syncError ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                            <SyncButton entry={v} onChanged={reload} />
+                          </div>
                         </>
                       }
                     />
@@ -764,6 +795,7 @@ export function Library() {
               e.preventDefault();
               setMenu({ type: "videoInFolder", entry: v, folderId: f.id, x: e.clientX, y: e.clientY });
             }}
+            onSyncChanged={reload}
           />
         );
       })()}
@@ -785,6 +817,13 @@ export function Library() {
           y={menu.y}
           onClose={() => setMenu(null)}
           items={buildMenuItemsFor(menu)}
+        />
+      )}
+
+      {showCloudManager && (
+        <CloudSyncManager
+          onClose={() => setShowCloudManager(false)}
+          onChanged={reload}
         />
       )}
 

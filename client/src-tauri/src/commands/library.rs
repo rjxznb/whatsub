@@ -51,6 +51,18 @@ pub struct LibraryEntry {
     /// the frontend doesn't require a Rust enum bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis_style: Option<String>,
+
+    /// Unix ms — set when entry was last successfully uploaded to /api/library/sync
+    /// (Plan 3, 2026-05-21). Undefined = never synced or unsynced from cloud.
+    /// v1 only YouTube sources get a value; others stay None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<i64>,
+
+    /// Friendly error message from the LAST sync attempt that failed.
+    /// Cleared on next successful sync. Used by SyncButton in the UI
+    /// to render the ✗ state + show the message in a tooltip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +90,7 @@ pub struct Library {
     pub top_level_order: Vec<LibraryItemRef>,
 }
 
-fn read_index() -> AppResult<Library> {
+pub(crate) fn read_index() -> AppResult<Library> {
     let path = paths::library_index_path()?;
     if !path.exists() {
         return Ok(Library::default());
@@ -96,7 +108,7 @@ fn read_index() -> AppResult<Library> {
     Ok(lib)
 }
 
-fn write_index(lib: &Library) -> AppResult<()> {
+pub(crate) fn write_index(lib: &Library) -> AppResult<()> {
     let dir = paths::app_data_dir()?;
     fs::create_dir_all(&dir)?;
     let pretty = serde_json::to_string_pretty(lib)?;
@@ -466,6 +478,25 @@ pub fn library_set_top_level_order(refs: Vec<LibraryItemRef>) -> AppResult<()> {
     write_index(&lib)
 }
 
+/// Update synced_at + sync_error on a library entry by id. Used by the
+/// library_sync command (commands/library_sync.rs) to record cloud-sync
+/// state after a successful POST or DELETE. Atomic read-modify-write.
+pub fn set_synced_at(
+    id: &str,
+    synced_at: Option<i64>,
+    sync_error: Option<String>,
+) -> AppResult<()> {
+    let mut library = read_index()?;
+    if let Some(entry) = library.videos.iter_mut().find(|v| v.id == id) {
+        entry.synced_at = synced_at;
+        entry.sync_error = sync_error;
+    } else {
+        return Err("not_found".to_string().into());
+    }
+    write_index(&library)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // PURE IN-MEMORY TESTS ONLY. Do NOT touch paths::library_index_path() —
@@ -488,6 +519,8 @@ mod tests {
             last_error: None,
             video_dir: None,
             analysis_style: None,
+            synced_at: None,
+            sync_error: None,
         }
     }
 

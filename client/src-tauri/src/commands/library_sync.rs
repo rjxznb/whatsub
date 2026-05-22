@@ -245,6 +245,27 @@ pub async fn library_list_synced<R: Runtime>(
             .map_err(|e| format!("entry parse: {e}"))?;
         out.push(entry);
     }
+
+    // Reconcile: a video deleted from the cloud elsewhere (e.g. the mobile app)
+    // should lose its local "synced" badge. Clear synced_at for local entries
+    // with it set that are absent from the cloud list. Best-effort — never fail
+    // the listing on a reconcile hiccup.
+    let cloud_ids: std::collections::HashSet<&str> =
+        out.iter().map(|e| e.id.as_str()).collect();
+    if let Ok(mut library) = crate::commands::library::read_index() {
+        let mut changed = false;
+        for v in library.videos.iter_mut() {
+            if v.synced_at.is_some() && !cloud_ids.contains(v.id.as_str()) {
+                v.synced_at = None;
+                v.sync_error = None;
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = crate::commands::library::write_index(&library);
+        }
+    }
+
     Ok(out)
 }
 

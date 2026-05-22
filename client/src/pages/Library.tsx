@@ -27,6 +27,7 @@ import {
 import type { LibraryEntry, LibraryFolder } from "../types/library";
 import { SyncButton } from "../components/LibraryCard/SyncButton";
 import { CloudSyncManager } from "../components/CloudSyncManager";
+import { listSynced } from "../lib/api/librarySync";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
@@ -180,6 +181,14 @@ export function Library() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Trigger the Rust-side reconcile on mount: clears stale syncedAt for entries
+  // deleted from the cloud elsewhere (e.g. the mobile app), then reloads so
+  // badges refresh. Fire-and-forget — never blocks the page render.
+  useEffect(() => {
+    listSynced().then(reload).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Listen for files dragged from the OS onto the window. Tauri 2 emits a single
   // event stream covering enter/over/drop/leave with absolute paths.

@@ -150,6 +150,18 @@ YouTube-style scrubber preview in `components/VideoPlayer.tsx`. A hidden `<video
 
 The preview element **stays mounted** (toggled via inline `display`) so we pay the metadata-load cost once per video open, not per hover-tick. Lag for local mp4 via the asset protocol is ~50–200ms — comparable to YouTube's storyboard previews but live-decoded.
 
+## Library cloud sync (☁️ → whatsub-license backend → iOS app)
+
+Each Library card (incl. cards inside opened folders) has a `SyncButton` overlay that pushes the analyzed video to the cloud so the iOS companion app can read it. Three Rust commands in `src-tauri/src/commands/library_sync.rs` (registered in lib.rs), authed via `crate::auth::get_auth(&app)` (the same session token as license auto-login):
+
+- `library_sync_to_cloud(app, id)` — reads `{video_dir}/transcript.srt` + `analysis.json`, **downscales `thumb.jpg` → 320px JPEG via the ffmpeg sidecar (`ffmpeg::downscale_jpeg`) → base64**, and `POST`s `{id, youtubeId, sourceUrl, title, durationSec, thumbUrl, transcriptSrt, analysisJson, thumbData}` to `POST /api/library/sync`. Thumb is best-effort (missing/failed → omitted, backend falls back to the `i.ytimg.com` URL). On success calls `set_synced_at(id, now, null)` in the local index; on failure stores `set_synced_at(id, prev, errorMsg)`.
+- `library_unsync_from_cloud(app, id)` — `DELETE /api/library/sync/:id` + clears local `syncedAt`.
+- `library_list_synced(app)` — `GET /api/library/list` (reconcile UI on launch).
+
+`LibraryEntry` (TS `types/library.ts` + Rust) carries `syncedAt?: number` + `syncError?: string`; `SyncButton` renders idle/syncing/synced(✓)/error(✗) from these. Only YouTube-sourced entries sync in v1 (others stay `syncedAt: undefined`). `library_sync_to_cloud` takes a concrete `AppHandle` (NOT generic `AppHandle<R>`) because it calls the pipeline ffmpeg helper which is concrete-typed.
+
+**The downscaled thumb is why the iOS list shows covers without a VPN** — `i.ytimg.com` is GFW-blocked, so the backend serves the synced thumb from `whatsub.eversay.cc/api/library/thumb/:id` instead. Existing entries synced before this feature need a re-sync (click ☁️ again) to populate `thumbData`.
+
 ## yt-dlp resolution order
 
 `pipeline/ytdlp.rs::download()` resolves yt-dlp at runtime in priority order:

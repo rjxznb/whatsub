@@ -4,7 +4,6 @@ import { CorpusPhraseDetail } from '../components/CorpusPhraseDetail';
 import { CorpusNav } from '../components/CorpusNav';
 import { CorpusTagChips } from '../components/CorpusTagChips';
 import { CorpusTour } from '../components/CorpusTour';
-import { CloudSyncManager } from '../components/CloudSyncManager';
 import { invalidateAll } from '../lib/corpusCache';
 import { useAuth } from '../store/auth';
 import { useLicense } from '../store/license';
@@ -23,7 +22,6 @@ export function Corpus() {
   const licenseKey = useLicense((s) => s.state?.key ?? null);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState('');
-  const [showCloudManager, setShowCloudManager] = useState(false);
 
   // First-visit onboarding modal. localStorage gate so it only fires once
   // per machine; announces the plugin-sync feature with a demo clip.
@@ -81,7 +79,6 @@ export function Corpus() {
         refreshing={refreshing}
         mode={status === 'authed' ? mode : undefined}
         onModeChange={status === 'authed' ? switchMode : undefined}
-        onOpenCloudSync={status === 'authed' ? () => setShowCloudManager(true) : undefined}
       />
       {status === 'authed' ? (
         <>
@@ -154,12 +151,6 @@ export function Corpus() {
       {/* First-visit plugin-sync announcement modal. */}
       {showTour && status === 'authed' && (
         <CorpusTour onDismiss={dismissTour} />
-      )}
-      {showCloudManager && (
-        <CloudSyncManager
-          onClose={() => setShowCloudManager(false)}
-          onChanged={handleRefresh}
-        />
       )}
     </div>
   );

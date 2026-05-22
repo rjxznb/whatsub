@@ -533,14 +533,6 @@ export function Library() {
             (navCollapsed ? "max-w-0 opacity-0" : "max-w-[560px] opacity-100")
           }
         >
-          <button
-            onClick={() => setShowCloudManager(true)}
-            className="inline-flex shrink-0 items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2.5 py-1.5 rounded hover:bg-white/5 transition-colors whitespace-nowrap"
-            title="管理云端同步的库条目"
-          >
-            <Cloud className="h-4 w-4" />
-            云同步详情
-          </button>
           <Link
             to="/vocab"
             className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm whitespace-nowrap"
@@ -557,6 +549,14 @@ export function Library() {
               📚 语料库
             </Link>
           )}
+          <button
+            onClick={() => setShowCloudManager(true)}
+            className="inline-flex shrink-0 items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2.5 py-1.5 rounded hover:bg-white/5 transition-colors whitespace-nowrap"
+            title="管理云端同步的库条目"
+          >
+            <Cloud className="h-4 w-4" />
+            云同步详情
+          </button>
           <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
             ⚙
           </Link>

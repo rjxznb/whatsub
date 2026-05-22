@@ -104,6 +104,12 @@ pub async fn library_sync_to_cloud(
         }
     };
 
+    // Transcode source.mp4 → 720p mobile.mp4, request a presigned PUT, upload
+    // direct to OSS. Best-effort: any failure → no videoKey → iOS falls back to
+    // the YouTube embed for this entry.
+    let video_key: Option<String> =
+        upload_video(&app, video_dir, &id, &auth_state.session_token).await;
+
     // 4. POST
     let body = serde_json::json!({
         "id": entry.id,
@@ -115,6 +121,7 @@ pub async fn library_sync_to_cloud(
         "transcriptSrt": transcript_text,
         "analysisJson": analysis_json,
         "thumbData": thumb_b64,
+        "videoKey": video_key,
     });
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -239,6 +246,83 @@ pub async fn library_list_synced<R: Runtime>(
         out.push(entry);
     }
     Ok(out)
+}
+
+/// Transcode source.mp4 → 720p mobile.mp4, obtain a presigned PUT URL from
+/// the backend, and upload straight to OSS. Returns the `videoKey` on success.
+/// Fully best-effort: any step failure returns `None` (caller omits videoKey →
+/// iOS falls back to the YouTube embed).
+async fn upload_video(
+    app: &AppHandle,
+    video_dir: &str,
+    id: &str,
+    token: &str,
+) -> Option<String> {
+    let src = std::path::Path::new(video_dir).join("source.mp4");
+    if !src.exists() {
+        return None;
+    }
+    let mobile = std::path::Path::new(video_dir).join("mobile.mp4");
+
+    // Step 1: transcode to 720p H.264 (never upscales)
+    crate::pipeline::ffmpeg::transcode_720p(app, &src, &mobile, id, None)
+        .await
+        .ok()?;
+
+    // Step 2: request a presigned PUT URL from the backend
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
+        .build()
+        .ok()?;
+
+    #[derive(serde::Deserialize)]
+    struct UploadUrl {
+        #[serde(rename = "putUrl")]
+        put_url: String,
+        #[serde(rename = "videoKey")]
+        video_key: String,
+    }
+
+    let uu_text = client
+        .post(format!("{API_BASE}/upload-url"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(
+            serde_json::json!({ "id": id, "contentType": "video/mp4" }).to_string(),
+        )
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+    let uu: UploadUrl = serde_json::from_str(&uu_text).ok()?;
+
+    // Step 3: PUT the file straight to OSS.
+    // Content-Type MUST exactly match the presigned signature ("video/mp4").
+    // Use a separate client with a larger timeout — the payload can be 100s of MB.
+    let bytes = std::fs::read(&mobile).ok()?;
+    let put_resp = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS * 4))
+        .build()
+        .ok()?
+        .put(&uu.put_url)
+        .header("content-type", "video/mp4")
+        .body(bytes)
+        .send()
+        .await
+        .ok()?;
+
+    if !put_resp.status().is_success() {
+        return None;
+    }
+
+    // Clean up the temp transcoded file after a successful upload.
+    let _ = std::fs::remove_file(&mobile);
+
+    Some(uu.video_key)
 }
 
 fn extract_youtube_id_rust(url: &str) -> Option<String> {

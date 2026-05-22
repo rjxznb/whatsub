@@ -503,14 +503,6 @@ export function Library() {
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
         <button
-          onClick={() => setShowCloudManager(true)}
-          className="inline-flex items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2.5 py-1.5 rounded hover:bg-white/5 transition-colors"
-          title="管理云端同步的库条目"
-        >
-          <Cloud className="h-4 w-4" />
-          云同步详情
-        </button>
-        <button
           data-tour="import-button"
           onClick={() => {
             if (shouldShowImportChecklist()) {
@@ -538,9 +530,17 @@ export function Library() {
         <div
           className={
             "flex items-center gap-3 overflow-hidden transition-[max-width,opacity] duration-300 ease-out " +
-            (navCollapsed ? "max-w-0 opacity-0" : "max-w-[400px] opacity-100")
+            (navCollapsed ? "max-w-0 opacity-0" : "max-w-[560px] opacity-100")
           }
         >
+          <button
+            onClick={() => setShowCloudManager(true)}
+            className="inline-flex shrink-0 items-center gap-1.5 text-sm text-zinc-400 hover:text-white px-2.5 py-1.5 rounded hover:bg-white/5 transition-colors whitespace-nowrap"
+            title="管理云端同步的库条目"
+          >
+            <Cloud className="h-4 w-4" />
+            云同步详情
+          </button>
           <Link
             to="/vocab"
             className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm whitespace-nowrap"

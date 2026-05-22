@@ -132,3 +132,34 @@ pub async fn downscale_jpeg(
     .await?;
     Ok(())
 }
+
+/// Transcode a video to a mobile-friendly 720p H.264 MP4 (never upscales) with
+/// faststart (moov atom up front for progressive streaming). Used by library
+/// cloud-sync before uploading to OSS.
+pub async fn transcode_720p(
+    app: &AppHandle,
+    src_path: &Path,
+    out_path: &Path,
+    video_id: &str,
+    cancel: Option<&CancellationToken>,
+) -> AppResult<()> {
+    let src = src_path.to_string_lossy().to_string();
+    let out = out_path.to_string_lossy().to_string();
+    let log = make_log_emitter(app, video_id);
+    run_sidecar(
+        app,
+        "ffmpeg",
+        &[
+            "-y", "-i", &src,
+            "-vf", "scale=-2:'min(720,ih)'",
+            "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            &out,
+        ],
+        log,
+        cancel,
+    )
+    .await?;
+    Ok(())
+}

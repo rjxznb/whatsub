@@ -156,7 +156,7 @@ Each Library card (incl. cards inside opened folders) has a `SyncButton` overlay
 
 - `library_sync_to_cloud(app, id)` — reads `{video_dir}/transcript.srt` + `analysis.json`, **downscales `thumb.jpg` → 320px JPEG via the ffmpeg sidecar (`ffmpeg::downscale_jpeg`) → base64**, and `POST`s `{id, youtubeId, sourceUrl, title, durationSec, thumbUrl, transcriptSrt, analysisJson, thumbData}` to `POST /api/library/sync`. Thumb is best-effort (missing/failed → omitted, backend falls back to the `i.ytimg.com` URL). On success calls `set_synced_at(id, now, null)` in the local index; on failure stores `set_synced_at(id, prev, errorMsg)`.
 - `library_unsync_from_cloud(app, id)` — `DELETE /api/library/sync/:id` + clears local `syncedAt`.
-- `library_list_synced(app)` — `GET /api/library/list` (reconcile UI on launch).
+- `library_list_synced(app)` — `GET /api/library/list`. **Reconciles** the local index: clears `synced_at`/`sync_error` for local videos that are no longer in the cloud list (i.e. deleted from the iOS app), so a stale ✓ badge goes away. Local source files are KEPT (desktop is the master copy). Called on Library page mount (`Library.tsx`) so badges refresh after a mobile-side delete. The DELETE endpoint also removes the OSS video object, so an iOS swipe-delete cleans up backend row + OSS video + (on next desktop reconcile) the local badge.
 
 `LibraryEntry` (TS `types/library.ts` + Rust) carries `syncedAt?: number` + `syncError?: string`; `SyncButton` renders idle/syncing/synced(✓)/error(✗) from these. Only YouTube-sourced entries sync in v1 (others stay `syncedAt: undefined`). `library_sync_to_cloud` takes a concrete `AppHandle` (NOT generic `AppHandle<R>`) because it calls the pipeline ffmpeg helper which is concrete-typed.
 

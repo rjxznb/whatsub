@@ -105,3 +105,30 @@ pub async fn extract_thumbnail(
     .await?;
     Ok(())
 }
+
+/// Downscale an existing image (e.g. thumb.jpg) to `width` px wide (height
+/// auto via -2, kept even for the encoder) as JPEG. Used by library cloud-sync
+/// to ship a small (~15 KB) cover instead of the full-res frame. Reuses the
+/// bundled ffmpeg sidecar — no new deps.
+pub async fn downscale_jpeg(
+    app: &AppHandle,
+    src_path: &Path,
+    out_path: &Path,
+    width: u32,
+    video_id: &str,
+    cancel: Option<&CancellationToken>,
+) -> AppResult<()> {
+    let src = src_path.to_string_lossy().to_string();
+    let out = out_path.to_string_lossy().to_string();
+    let scale = format!("scale={width}:-2");
+    let log = make_log_emitter(app, video_id);
+    run_sidecar(
+        app,
+        "ffmpeg",
+        &["-y", "-i", &src, "-vf", &scale, "-q:v", "5", &out],
+        log,
+        cancel,
+    )
+    .await?;
+    Ok(())
+}

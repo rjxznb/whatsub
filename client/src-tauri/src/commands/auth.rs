@@ -196,6 +196,23 @@ struct FromLicenseResp {
     expires_at: i64,
 }
 
+/// Return the raw session token (and whether it is still valid) to the
+/// TS frontend. Used by the import-queue API client so it can attach a
+/// Bearer header without going through a Rust command for every HTTP call.
+/// Returns `None` when not logged in or the token has expired.
+#[tauri::command]
+pub async fn get_session_token<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Option<String>, String> {
+    let Some(auth) = auth::get_auth(&app) else {
+        return Ok(None);
+    };
+    if !auth::is_valid(&auth) {
+        return Ok(None);
+    }
+    Ok(Some(auth.session_token))
+}
+
 /// Exchange a license key for a session token.
 /// Calls `POST /auth/from-license` and persists the resulting session locally.
 /// Email is left empty — `auth_me` must be called after to populate it.

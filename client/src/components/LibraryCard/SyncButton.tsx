@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Cloud, CloudOff, CheckCircle2, Loader2 } from "lucide-react";
 import { syncToCloud, friendlySyncError } from "../../lib/api/librarySync";
-import { extractYouTubeId } from "../../lib/syncSourceUrl";
 import type { LibraryEntry } from "../../types/library";
 
 interface Props {
@@ -17,10 +16,12 @@ export function SyncButton({ entry, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(entry.syncError ?? null);
 
-  const youtubeId = entry.source.type === "url" ? extractYouTubeId(entry.source.url) : null;
-  const isYoutube = !!youtubeId;
+  // Any URL source can sync now (YouTube, Bilibili, other) — the backend
+  // generalised library_sync_to_cloud. Only local-file sources can't (the
+  // Rust command still rejects LibrarySource::Local).
+  const isUrlSource = entry.source.type === "url";
   const isReady = entry.status === "ready";
-  const enabled = isYoutube && isReady && !busy;
+  const enabled = isUrlSource && isReady && !busy;
 
   const state: State =
     busy ? "syncing" :
@@ -60,7 +61,7 @@ export function SyncButton({ entry, onChanged }: Props) {
     }
   }
 
-  const tooltip = !isYoutube ? "仅 YouTube 源可云同步"
+  const tooltip = !isUrlSource ? "本地文件源暂不支持云同步"
                 : !isReady ? "等解析完成后再同步"
                 : state === "failed" ? error ?? "同步失败 · 点重试"
                 : state === "synced" ? `已同步 · ${new Date(entry.syncedAt!).toLocaleString()}`

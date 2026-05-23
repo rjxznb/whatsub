@@ -104,6 +104,26 @@ pub(crate) fn read_index() -> AppResult<Library> {
             .iter()
             .map(|v| LibraryItemRef::Video { id: v.id.clone() })
             .collect();
+    } else {
+        // Surface orphan videos — present in `videos` but neither in
+        // `top_level_order` nor any folder. Background/queue imports upsert into
+        // `videos` only, so without this they'd never show in the main Library
+        // list. Append them so the list stays complete.
+        let orphans: Vec<String> = lib
+            .videos
+            .iter()
+            .map(|v| v.id.clone())
+            .filter(|id| {
+                let in_order = lib.top_level_order.iter().any(
+                    |r| matches!(r, LibraryItemRef::Video { id: vid } if vid == id),
+                );
+                let in_folder = lib.folders.iter().any(|f| f.video_ids.contains(id));
+                !in_order && !in_folder
+            })
+            .collect();
+        for id in orphans {
+            lib.top_level_order.push(LibraryItemRef::Video { id });
+        }
     }
     Ok(lib)
 }

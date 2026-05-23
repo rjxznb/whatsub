@@ -28,6 +28,7 @@ import type { LibraryEntry, LibraryFolder } from "../types/library";
 import { SyncButton } from "../components/LibraryCard/SyncButton";
 import { CloudSyncManager } from "../components/CloudSyncManager";
 import { listSynced, unsyncFromCloud, friendlySyncError } from "../lib/api/librarySync";
+import { useMaterializing } from "../store/materializing";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
@@ -103,6 +104,7 @@ export function Library() {
   // and is it active right now?" to pick the card label.
   const activeAnalysisVideoId = useAnalysis((s) => s.videoId);
   const activeAnalysisPhase = useAnalysis((s) => s.phase);
+  const materializeStatus = useMaterializing((s) => s.status);
   const [importInitial, setImportInitial] = useState<{ filePath?: string } | null>(null);
   // 仅在「点击 + Import 按钮」时拦截弹出 checklist —— 拖拽本地文件
   // 不走这里(本地文件不需要梯子/cookies)。
@@ -591,7 +593,7 @@ export function Library() {
                     draggedId={dragSt?.id ?? null}
                     dropFeedback={null}
                     onContextMenu={handleContextMenu}
-                    onClick={() => navigate(`/player/${v.id}`)}
+                    onClick={() => { if (materializeStatus[v.id] !== "downloading") navigate(`/player/${v.id}`); }}
                     onDragStart={(e) => onDragStart(e, { type: "video", id: v.id })}
                     onDragOver={(e) => onDragOver(e, { type: "video", id: v.id })}
                     onDragLeave={() => onDragLeave(v.id)}
@@ -601,7 +603,11 @@ export function Library() {
                     durationNode={v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined}
                     badge={
                       <>
-                        {v.status === "analyzing" && (
+                        {materializeStatus[v.id] === "downloading" ? (
+                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-blue-300 text-xs gap-1 pointer-events-none">
+                            <span className="animate-spin">⟳</span> 正在下载…
+                          </div>
+                        ) : v.status === "analyzing" ? (
                           isLive ? (
                             <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs pointer-events-none">
                               解析中...
@@ -614,7 +620,7 @@ export function Library() {
                               </span>
                             </div>
                           )
-                        )}
+                        ) : null}
                         {v.status === "failed" && (
                           <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center pointer-events-none">
                             !
@@ -648,7 +654,7 @@ export function Library() {
                         dragOver?.targetId === v.id ? { mode: dragOver.mode } : null
                       }
                       onContextMenu={handleContextMenu}
-                      onClick={() => navigate(`/player/${v.id}`)}
+                      onClick={() => { if (materializeStatus[v.id] !== "downloading") navigate(`/player/${v.id}`); }}
                       onDragStart={(e) => onDragStart(e, { type: "video", id: v.id })}
                       onDragOver={(e) => onDragOver(e, { type: "video", id: v.id })}
                       onDragLeave={() => onDragLeave(v.id)}
@@ -658,7 +664,11 @@ export function Library() {
                       durationNode={v.durationSec > 0 ? <>{formatTime(v.durationSec)}</> : undefined}
                       badge={
                         <>
-                          {v.status === "analyzing" && (
+                          {materializeStatus[v.id] === "downloading" ? (
+                            <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-blue-300 text-xs gap-1 pointer-events-none">
+                              <span className="animate-spin">⟳</span> 正在下载…
+                            </div>
+                          ) : v.status === "analyzing" ? (
                             isLive ? (
                               <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-blue-300 text-xs pointer-events-none">
                                 解析中...
@@ -671,7 +681,7 @@ export function Library() {
                                 </span>
                               </div>
                             )
-                          )}
+                          ) : null}
                           {v.status === "failed" && (
                             <div className="absolute top-2 right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center pointer-events-none">
                               !

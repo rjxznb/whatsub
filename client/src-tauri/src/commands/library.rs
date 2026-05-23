@@ -498,6 +498,40 @@ pub fn library_set_top_level_order(refs: Vec<LibraryItemRef>) -> AppResult<()> {
     write_index(&lib)
 }
 
+/// Insert (or overwrite) a stub entry with status=Analyzing so the Library UI
+/// can show an immediate "正在下载…" card before the actual download starts.
+/// Called from the TS materializing store as the first step of `run(entry)`.
+#[tauri::command]
+pub fn library_upsert_placeholder(
+    id: String,
+    title: String,
+    source_url: String,
+    duration_sec: f64,
+    thumb_url: Option<String>,
+) -> AppResult<()> {
+    let now_iso_str = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let video_dir_path = paths::video_dir(&id)?;
+    let entry = LibraryEntry {
+        id,
+        title,
+        source: LibrarySource::Url { url: source_url },
+        duration_sec,
+        thumbnail_path: thumb_url.unwrap_or_default(),
+        created_at: now_iso_str,
+        status: LibraryStatus::Analyzing,
+        last_error: None,
+        video_dir: Some(video_dir_path.to_string_lossy().to_string()),
+        analysis_style: None,
+        synced_at: Some(now_ms),
+        sync_error: None,
+    };
+    library_upsert(entry)
+}
+
 /// Update synced_at + sync_error on a library entry by id. Used by the
 /// library_sync command (commands/library_sync.rs) to record cloud-sync
 /// state after a successful POST or DELETE. Atomic read-modify-write.

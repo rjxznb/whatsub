@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { X, Trash2, Cloud, Download } from "lucide-react";
-import { listSynced, unsyncFromCloud, materializeFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
+import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
 import { useLibrary } from "../store/library";
+import { useMaterializing } from "../store/materializing";
 
 interface Props {
   /** Called when user closes the dialog (Esc, backdrop click, X button, 关闭). */
@@ -15,8 +16,10 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
   const [entries, setEntries] = useState<CloudLibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const [materializingIds, setMaterializingIds] = useState<Set<string>>(new Set());
-  const [materializeErrors, setMaterializeErrors] = useState<Record<string, string>>({});
+  // Materialize state lives in a module-level store so the "正在后台下载…"
+  // indicator persists across this dialog being closed + reopened.
+  const materializeStatus = useMaterializing((s) => s.status);
+  const materializeErrors = useMaterializing((s) => s.errors);
   const localLibrary = useLibrary((s) => s.library);
 
   const reload = useCallback(async () => {
@@ -60,24 +63,11 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
     }
   }
 
-  async function materialize(id: string) {
-    setMaterializingIds(prev => new Set(prev).add(id));
-    setMaterializeErrors(prev => { const next = { ...prev }; delete next[id]; return next; });
-    try {
-      await materializeFromCloud(id);
-      await useLibrary.getState().reload();
-      await onChanged();
-      window.alert("已下载到本地，可在库中播放");
-    } catch (err) {
-      const msg = friendlySyncError(String(err));
-      setMaterializeErrors(prev => ({ ...prev, [id]: msg }));
-    } finally {
-      setMaterializingIds(prev => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
+  function materialize(id: string) {
+    // Fire-and-forget into the module-level store: it keeps running (and the
+    // "正在后台下载…" indicator persists) even if this dialog is closed. On
+    // success it silently reloads the library — no popup, no alert sound.
+    void useMaterializing.getState().run(id);
   }
 
   async function unsyncAll() {
@@ -135,7 +125,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
           )}
           {entries?.map(e => {
             const isLocal = localLibrary.videos.some(v => v.id === e.id);
-            const isMaterializing = materializingIds.has(e.id);
+            const isMaterializing = materializeStatus[e.id] === "downloading";
             const matError = materializeErrors[e.id];
             return (
               <div
@@ -175,7 +165,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
                     ) : (
                       <Download size={14} />
                     )}
-                    <span>下载到本地</span>
+                    <span>{isMaterializing ? "正在后台下载…" : "下载到本地"}</span>
                   </button>
                 )}
                 {isLocal && (

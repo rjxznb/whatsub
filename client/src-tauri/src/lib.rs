@@ -91,6 +91,7 @@ pub fn run() {
             commands::library_sync::library_unsync_from_cloud,
             commands::library_sync::library_list_synced,
             commands::library_sync::library_materialize_from_cloud,
+            commands::library::library_upsert_placeholder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

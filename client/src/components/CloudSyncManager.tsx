@@ -63,11 +63,17 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
     }
   }
 
-  function materialize(id: string) {
+  function materialize(e: CloudLibraryEntry) {
     // Fire-and-forget into the module-level store: it keeps running (and the
     // "正在后台下载…" indicator persists) even if this dialog is closed. On
     // success it silently reloads the library — no popup, no alert sound.
-    void useMaterializing.getState().run(id);
+    void useMaterializing.getState().run({
+      id: e.id,
+      title: e.title,
+      sourceUrl: e.sourceUrl,
+      durationSec: e.durationSec,
+      thumbUrl: e.thumbUrl,
+    });
   }
 
   async function unsyncAll() {
@@ -154,7 +160,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
                 </div>
                 {!isLocal && (
                   <button
-                    onClick={() => materialize(e.id)}
+                    onClick={() => materialize(e)}
                     disabled={isMaterializing || busyIds.has(e.id)}
                     className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 disabled:opacity-40 px-2 py-1.5 rounded flex-shrink-0 transition-colors"
                     title="下载到本地（视频+字幕+分析）"

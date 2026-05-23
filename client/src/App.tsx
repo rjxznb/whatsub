@@ -13,7 +13,24 @@ import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
+import { useAuth } from "./store/auth";
+import { startImportQueuePolling } from "./store/importQueue";
 import "./App.css";
+
+/**
+ * Starts the import-queue poll loop once the user is authenticated.
+ * startImportQueuePolling() is idempotent — safe to call multiple times if
+ * auth status flips (e.g. token refresh). Renders nothing.
+ */
+function ImportQueuePoller() {
+  const status = useAuth((s) => s.status);
+  useEffect(() => {
+    if (status === "authed") {
+      startImportQueuePolling();
+    }
+  }, [status]);
+  return null;
+}
 
 /** Listens globally for whisper backend detection events emitted from Rust on
  *  every transcribe. Persists the latest value into settings.json so the
@@ -55,6 +72,7 @@ function App() {
         <LicenseSessionGate>
           <BrowserRouter>
             <BackendListener />
+            <ImportQueuePoller />
             <Routes>
               <Route path="/" element={<Navigate to="/library" replace />} />
               <Route

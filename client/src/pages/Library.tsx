@@ -27,7 +27,7 @@ import {
 import type { LibraryEntry, LibraryFolder } from "../types/library";
 import { SyncButton } from "../components/LibraryCard/SyncButton";
 import { CloudSyncManager } from "../components/CloudSyncManager";
-import { listSynced } from "../lib/api/librarySync";
+import { listSynced, unsyncFromCloud, friendlySyncError } from "../lib/api/librarySync";
 
 // 公共语料库功能仍在打磨中。flip to true when ready 公开。
 // 路由 /corpus 仍然挂着,内部测试直接输地址可以访问。
@@ -175,6 +175,8 @@ export function Library() {
     targetRect: DOMRect;
   }>(null);
   const [renamingFolder, setRenamingFolder] = useState<null | { id: string; currentName: string }>(null);
+  const [deleteCascade, setDeleteCascade] = useState<null | { entry: LibraryEntry }>(null);
+  const [deleteCascadeBusy, setDeleteCascadeBusy] = useState(false);
 
   const [fileHover, setFileHover] = useState(false);
 
@@ -277,23 +279,14 @@ export function Library() {
         label: "删除",
         danger: true,
         onClick: async () => {
-          const baseConfirm = `确定删除「${entry.title}」？\n这会同时删除视频文件和分析结果，不可恢复。`;
-          if (!confirm(baseConfirm)) return;
           if (entry.syncedAt) {
-            const cloudConfirm = `这个条目已同步到云（iOS 可见）。\n\n点【确定】= 同步从云上删除 + 删本地\n点【取消】= 不删任何东西`;
-            if (!confirm(cloudConfirm)) return;
-            try {
-              const { unsyncFromCloud } = await import("../lib/api/librarySync");
-              await unsyncFromCloud(entry.id);
-            } catch (err) {
-              const { friendlySyncError } = await import("../lib/api/librarySync");
-              const proceed = confirm(
-                `从云上删除失败：${friendlySyncError(String(err))}\n\n继续删本地吗？（云端那条会成为孤儿，可在「云同步详情」里手动下架）`
-              );
-              if (!proceed) return;
-            }
+            // Synced video: show 3-way dialog (仅删本地 / 本地+云端 / 取消).
+            setDeleteCascade({ entry });
+          } else {
+            // Unsynced video: single confirm, then delete.
+            if (!confirm(`确定删除「${entry.title}」？\n这会同时删除视频文件和分析结果，不可恢复。`)) return;
+            remove(entry.id).catch((e) => alert(`删除失败：${e}`));
           }
-          remove(entry.id).catch((e) => alert(`删除失败：${e}`));
         },
       },
     ];
@@ -860,6 +853,71 @@ export function Library() {
           }}
           onClose={() => setRenamingFolder(null)}
         />
+      )}
+
+      {deleteCascade && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-5 w-[440px] space-y-3">
+            <h2 className="text-base font-semibold text-zinc-100">删除「{deleteCascade.entry.title}」</h2>
+            <p className="text-sm text-zinc-400">
+              这个条目已同步到云端（iOS 可见）。请选择删除范围：
+            </p>
+            <p className="text-xs text-zinc-500">
+              删除后本地视频文件和分析结果不可恢复。
+            </p>
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                disabled={deleteCascadeBusy}
+                onClick={async () => {
+                  setDeleteCascadeBusy(true);
+                  try {
+                    await unsyncFromCloud(deleteCascade.entry.id);
+                  } catch (err) {
+                    const proceed = confirm(
+                      `从云上删除失败：${friendlySyncError(String(err))}\n\n继续删本地吗？（云端那条可在「云同步详情」里手动下架）`
+                    );
+                    if (!proceed) { setDeleteCascadeBusy(false); return; }
+                  }
+                  try {
+                    await remove(deleteCascade.entry.id);
+                  } catch (e) {
+                    alert(`删除失败：${e}`);
+                  } finally {
+                    setDeleteCascadeBusy(false);
+                    setDeleteCascade(null);
+                  }
+                }}
+                className="w-full px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-sm rounded font-medium disabled:opacity-50 transition-colors"
+              >
+                {deleteCascadeBusy ? "处理中…" : "本地 + 云端都删"}
+              </button>
+              <button
+                disabled={deleteCascadeBusy}
+                onClick={async () => {
+                  setDeleteCascadeBusy(true);
+                  try {
+                    await remove(deleteCascade.entry.id);
+                  } catch (e) {
+                    alert(`删除失败：${e}`);
+                  } finally {
+                    setDeleteCascadeBusy(false);
+                    setDeleteCascade(null);
+                  }
+                }}
+                className="w-full px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-sm rounded disabled:opacity-50 transition-colors"
+              >
+                仅删本地（保留云端 + iOS 可见）
+              </button>
+              <button
+                disabled={deleteCascadeBusy}
+                onClick={() => { setDeleteCascade(null); setDeleteCascadeBusy(false); }}
+                className="w-full px-4 py-2 text-zinc-400 hover:text-zinc-200 text-sm disabled:opacity-50 transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

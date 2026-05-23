@@ -162,6 +162,45 @@ Each Library card (incl. cards inside opened folders) has a `SyncButton` overlay
 
 **The downscaled thumb is why the iOS list shows covers without a VPN** — `i.ytimg.com` is GFW-blocked, so the backend serves the synced thumb from `whatsub.eversay.cc/api/library/thumb/:id` instead. Existing entries synced before this feature need a re-sync (click ☁️ again) to populate `thumbData`.
 
+## Import queue — desktop auto-poll worker
+
+When the iOS app encounters a caption-less YouTube video it pushes the URL to the backend queue (`POST /api/library/import-queue`). The desktop picks it up and runs the full local pipeline headlessly.
+
+**New files:**
+- `src/lib/api/importQueue.ts` — `enqueueImport`, `listPending`, `setStatus` — `fetch` wrappers to `GET/POST /api/library/import-queue*` using the session bearer (same auth as `librarySync.ts`).
+- `src/store/importQueue.ts` — module-level `setInterval` poll loop (~30 s, single-flight, only while authed). Per pending item: `setStatus(id, 'processing')` → `invoke("import_video", {source_kind:"url", source_value, quality, background:true})` → `invoke("load_transcript", {videoId})` + `parseSrt` → `runInBackground({videoId, label, cues, previouslyAnalyzed:[], previousSummary:null, style})` → await bg job reaching ready → `library_sync_to_cloud(videoId)` → `setStatus(id, 'done')`. Failures → `setStatus(id, 'failed', errorMessage)`. Concurrency = 1.
+
+**New Rust command:** `get_session_token` in `src-tauri/src/commands/auth.rs` — returns the current session bearer from `auth.json` so the TS poll loop can authenticate its `fetch` calls natively (bypasses WebView2 fetch quirks, consistent with `reqwest`-based corpus calls).
+
+**Wiring:** Loop started from `App.tsx` `useEffect` on auth ready. This is how caption-less videos pushed from the iOS "推送到桌面" button get processed automatically while the desktop is running.
+
+## Materialize (下载到本地)
+
+Downloads a cloud-only library entry (e.g. phone-imported, captions-only video) to local disk, reusing the cloud's transcript + analysis — no re-whisper/re-LLM.
+
+**New Rust command:** `library_materialize_from_cloud` in `src-tauri/src/commands/library_sync.rs`. Steps: `GET /api/library/entry/:id` → `ytdlp::download(source_url, background:true)` → write `transcript.srt` + `save_analysis(id, analysisJson)` from cloud data → `library_upsert(entry{status:Ready, synced_at:now})`. Registered in `lib.rs` invoke_handler.
+
+**New TS wrapper:** `materializeFromCloud(id)` in `src/lib/api/librarySync.ts`.
+
+**UI:** `src/components/CloudSyncManager.tsx` — "下载到本地" button per cloud entry. On click → `materializeFromCloud` → spinner → on success: `useLibrary.reload()` + toast "已下载到本地，可在库中播放". Only shown when entry is not already local.
+
+**Persistent progress state:** materializing state lives in `src/store/materializing.ts` (module-level store, NOT component-local useState) so "正在下载…" persists across dialog re-mounts while the Rust command runs.
+
+**Placeholder card in Library:** `library_upsert_placeholder` (a Rust helper) writes a stub entry with `status: Analyzing` + a "downloading" overlay while the materialize command runs, then flips to `ready` on success.
+
+**Orphan reconcile:** `read_index` (in `src-tauri/src/commands/library.rs`) now appends any video that is in `library.videos[]` but absent from both `top_level_order` and all `folders[].videoIds`. This ensures that entries created by materialize / the import queue / background runs always appear in the main Library grid.
+
+## Delete cascade dialog
+
+When deleting a SYNCED video locally, the desktop now asks what to do with the cloud copy.
+
+**UI:** In the Library delete flow (`src/pages/Library.tsx`), when the target `LibraryEntry` has `syncedAt` set, a dialog with three choices is shown:
+- **仅删本地** — `library_delete(id)` only (previous behavior for unsynced).
+- **本地 + 云端都删** — `unsyncFromCloud(id)` (calls `DELETE /api/library/sync/:id`, which also deletes the OSS video object) then `library_delete(id)`.
+- **取消** — dismiss.
+
+Unsynced videos still delete directly without the dialog. Reuses `unsyncFromCloud` from `src/lib/api/librarySync.ts`.
+
 ## yt-dlp resolution order
 
 `pipeline/ytdlp.rs::download()` resolves yt-dlp at runtime in priority order:

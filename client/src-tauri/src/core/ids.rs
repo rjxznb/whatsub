@@ -27,6 +27,23 @@ pub fn id_from_youtube_url(url: &str) -> Option<String> {
     None
 }
 
+/// Extract the `BV…` id from a Bilibili URL. Bilibili's current scheme is "BV"
+/// + 10 alphanumeric chars (12 total), e.g. BV1xx411c7mu. Returns None for URLs
+/// without a BV id (e.g. b23.tv short links) so the caller can fall back to the
+/// stable sha256 hash.
+pub fn id_from_bilibili_url(url: &str) -> Option<String> {
+    let idx = url.find("BV")?;
+    let candidate: String = url[idx..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if candidate.len() == 12 {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 pub fn id_from_url_fallback(url: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
@@ -68,6 +85,27 @@ mod tests {
             id_from_youtube_url("https://www.bilibili.com/video/BV1xx411c7mu"),
             None
         );
+    }
+
+    #[test]
+    fn bilibili_bv_id() {
+        assert_eq!(
+            id_from_bilibili_url("https://www.bilibili.com/video/BV1xx411c7mu"),
+            Some("BV1xx411c7mu".to_string())
+        );
+    }
+
+    #[test]
+    fn bilibili_bv_id_with_query() {
+        assert_eq!(
+            id_from_bilibili_url("https://www.bilibili.com/video/BV1GJ411x7h7?p=2&t=10"),
+            Some("BV1GJ411x7h7".to_string())
+        );
+    }
+
+    #[test]
+    fn bilibili_short_link_has_no_bv() {
+        assert_eq!(id_from_bilibili_url("https://b23.tv/abc123"), None);
     }
 
     #[test]

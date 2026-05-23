@@ -21,7 +21,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { listPending, setStatus } from "../lib/api/importQueue";
+import { listPending, setStatus, claimItem } from "../lib/api/importQueue";
 import { runInBackground, useBgAnalyses } from "./backgroundAnalyses";
 import { parseSrt } from "../llm/parseSrt";
 import { useSettings } from "./settings";
@@ -36,6 +36,18 @@ const PHASE_CHECK_INTERVAL_MS = 2_000;
 
 let isProcessing = false;
 let pollingStarted = false;
+
+/** Map a raw pipeline error to actionable Chinese copy for login-walled sites. */
+function friendlyQueueError(raw: string): string {
+  const t = raw.toLowerCase();
+  if (
+    raw.includes("登录") || raw.includes("会员") ||
+    t.includes("login") || t.includes("cookies") || t.includes("account")
+  ) {
+    return `需要登录该网站后重试（桌面端 设置 → 登录对应站点 Cookie）。原始错误：${raw}`;
+  }
+  return raw;
+}
 
 /**
  * Start the background poll loop. Call once from App.tsx when the user is
@@ -76,8 +88,12 @@ async function processNextPendingItem(): Promise<void> {
 
   console.info(`[importQueue] processing item ${item.id} url=${item.url}`);
 
-  // Mark as processing so other desktop instances (if any) don't double-pick.
-  await setStatus(item.id, "processing");
+  // Atomically claim it; if another desktop already claimed it, skip this tick.
+  const won = await claimItem(item.id);
+  if (!won) {
+    console.info(`[importQueue] item ${item.id} already claimed elsewhere, skipping`);
+    return;
+  }
 
   try {
     // ---- Step 1: import_video (yt-dlp + Whisper) ----
@@ -135,7 +151,8 @@ async function processNextPendingItem(): Promise<void> {
     await setStatus(item.id, "done");
     console.info(`[importQueue] item ${item.id} done`);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const raw = err instanceof Error ? err.message : String(err);
+    const msg = friendlyQueueError(raw);
     console.error(`[importQueue] item ${item.id} failed:`, msg);
     try {
       await setStatus(item.id, "failed", msg);

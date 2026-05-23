@@ -26,6 +26,7 @@ import { runInBackground, useBgAnalyses } from "./backgroundAnalyses";
 import { parseSrt } from "../llm/parseSrt";
 import { useSettings } from "./settings";
 import { syncToCloud } from "../lib/api/librarySync";
+import { useLibrary } from "./library";
 import type { SrtCue } from "../llm/types";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -146,6 +147,13 @@ async function processNextPendingItem(): Promise<void> {
     // ---- Step 5: sync to cloud ----
     console.info(`[importQueue] syncing ${videoId} to cloud`);
     await syncToCloud(videoId);
+
+    // Refresh the library store so the card's ☁️ icon flips to "synced".
+    // syncToCloud wrote synced_at to library.json, but the in-memory store is
+    // stale — without this the card stays "unsynced" until a manual reload
+    // (CloudSyncManager reads from the backend directly, so it looked synced
+    // there but not on the card).
+    await useLibrary.getState().reload();
 
     // ---- Step 6: mark queue item done ----
     await setStatus(item.id, "done");

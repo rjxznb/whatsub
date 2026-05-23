@@ -72,8 +72,13 @@ pub async fn library_sync_to_cloud(
         crate::commands::library::LibrarySource::Url { url } => url.clone(),
         _ => return Err("only_youtube_sources_supported".into()),
     };
-    let youtube_id = extract_youtube_id_rust(&source_url)
-        .ok_or_else(|| "not_youtube".to_string())?;
+    // Generic: a real YouTube id when the source is YouTube (keeps the i.ytimg
+    // cover + the iOS YouTube-embed fallback working); otherwise the entry's own
+    // id (BV id / u_ hash). For non-YouTube the cover comes from thumbData (the
+    // local ffmpeg thumb, built above) and playback from the OSS video below.
+    let yt_id_opt = extract_youtube_id_rust(&source_url);
+    let is_youtube = yt_id_opt.is_some();
+    let youtube_id = yt_id_opt.unwrap_or_else(|| entry.id.clone());
     let video_dir = entry
         .video_dir
         .as_deref()
@@ -117,7 +122,11 @@ pub async fn library_sync_to_cloud(
         "sourceUrl": source_url,
         "title": entry.title,
         "durationSec": entry.duration_sec as i64,
-        "thumbUrl": format!("https://i.ytimg.com/vi/{youtube_id}/mqdefault.jpg"),
+        "thumbUrl": if is_youtube {
+            serde_json::Value::String(format!("https://i.ytimg.com/vi/{youtube_id}/mqdefault.jpg"))
+        } else {
+            serde_json::Value::Null
+        },
         "transcriptSrt": transcript_text,
         "analysisJson": analysis_json,
         "thumbData": thumb_b64,

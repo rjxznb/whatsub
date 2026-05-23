@@ -94,6 +94,23 @@ export async function listPending(): Promise<ImportQueueItem[]> {
 }
 
 /**
+ * Atomically claim a pending item. Returns true if THIS desktop won the claim,
+ * false if another instance already took it (or the backend doesn't yet expose
+ * the route — treated as "not won" so we never double-process; see caller).
+ */
+export async function claimItem(id: string): Promise<boolean> {
+  const token = await getToken();
+  const resp = await apiFetch(`${BASE}/${id}/claim`, { method: "POST", token });
+  if (resp.status === 404) return false; // route not deployed yet → don't process
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`claimItem http ${resp.status}: ${text}`);
+  }
+  const body = (await resp.json()) as { claimed: boolean };
+  return body.claimed;
+}
+
+/**
  * Update the status of a queue item. `error` is optional and only relevant
  * for the "failed" status.
  */

@@ -95,6 +95,7 @@ pub async fn import_video(
 ) -> AppResult<ImportResult> {
     let video_id = match req.source_kind.as_str() {
         "url" => ids::id_from_youtube_url(&req.source_value)
+            .or_else(|| ids::id_from_bilibili_url(&req.source_value))
             .unwrap_or_else(|| ids::id_from_url_fallback(&req.source_value)),
         "local" => ids::id_from_file_hash(std::path::Path::new(&req.source_value))?,
         _ => {

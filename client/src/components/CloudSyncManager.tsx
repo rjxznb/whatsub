@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
-import { X, Trash2, Cloud } from "lucide-react";
-import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
+import { X, Trash2, Cloud, Download } from "lucide-react";
+import { listSynced, unsyncFromCloud, materializeFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
+import { useLibrary } from "../store/library";
 
 interface Props {
   /** Called when user closes the dialog (Esc, backdrop click, X button, 关闭). */
@@ -14,6 +15,9 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
   const [entries, setEntries] = useState<CloudLibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [materializingIds, setMaterializingIds] = useState<Set<string>>(new Set());
+  const [materializeErrors, setMaterializeErrors] = useState<Record<string, string>>({});
+  const localLibrary = useLibrary((s) => s.library);
 
   const reload = useCallback(async () => {
     setEntries(null);
@@ -49,6 +53,26 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
       window.alert(friendlySyncError(String(err)));
     } finally {
       setBusyIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  async function materialize(id: string) {
+    setMaterializingIds(prev => new Set(prev).add(id));
+    setMaterializeErrors(prev => { const next = { ...prev }; delete next[id]; return next; });
+    try {
+      await materializeFromCloud(id);
+      await useLibrary.getState().reload();
+      await onChanged();
+      window.alert("已下载到本地，可在库中播放");
+    } catch (err) {
+      const msg = friendlySyncError(String(err));
+      setMaterializeErrors(prev => ({ ...prev, [id]: msg }));
+    } finally {
+      setMaterializingIds(prev => {
         const next = new Set(prev);
         next.delete(id);
         return next;
@@ -109,37 +133,66 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
               <span className="text-xs">在 Library 卡片上点 ☁️ 同步 YouTube 视频。</span>
             </div>
           )}
-          {entries?.map(e => (
-            <div
-              key={e.id}
-              className="flex items-center gap-3 rounded-lg bg-zinc-800/60 hover:bg-zinc-800 p-3 transition-colors"
-            >
-              {e.thumbUrl ? (
-                <img
-                  src={e.thumbUrl}
-                  alt=""
-                  className="h-12 w-20 rounded object-cover bg-zinc-700 flex-shrink-0"
-                />
-              ) : (
-                <div className="h-12 w-20 rounded bg-zinc-700 flex-shrink-0" />
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="truncate text-sm text-white" title={e.title}>{e.title}</div>
-                <div className="text-xs text-zinc-500 mt-0.5">
-                  同步于 {new Date(e.syncedAt).toLocaleString()}
-                </div>
-              </div>
-              <button
-                onClick={() => unsync(e.id, e.title)}
-                disabled={busyIds.has(e.id)}
-                className="grid place-items-center h-8 w-8 rounded text-rose-400 hover:bg-rose-500/15 disabled:opacity-40 flex-shrink-0"
-                title="从云下架"
-                aria-label={`从云下架 ${e.title}`}
+          {entries?.map(e => {
+            const isLocal = localLibrary.videos.some(v => v.id === e.id);
+            const isMaterializing = materializingIds.has(e.id);
+            const matError = materializeErrors[e.id];
+            return (
+              <div
+                key={e.id}
+                className="flex items-center gap-3 rounded-lg bg-zinc-800/60 hover:bg-zinc-800 p-3 transition-colors"
               >
-                <Trash2 size={16} />
-              </button>
-            </div>
-          ))}
+                {e.thumbUrl ? (
+                  <img
+                    src={e.thumbUrl}
+                    alt=""
+                    className="h-12 w-20 rounded object-cover bg-zinc-700 flex-shrink-0"
+                  />
+                ) : (
+                  <div className="h-12 w-20 rounded bg-zinc-700 flex-shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="truncate text-sm text-white" title={e.title}>{e.title}</div>
+                  <div className="text-xs text-zinc-500 mt-0.5">
+                    同步于 {new Date(e.syncedAt).toLocaleString()}
+                  </div>
+                  {matError && (
+                    <div className="text-xs text-rose-400 mt-0.5" title={matError}>
+                      下载失败：{matError}
+                    </div>
+                  )}
+                </div>
+                {!isLocal && (
+                  <button
+                    onClick={() => materialize(e.id)}
+                    disabled={isMaterializing || busyIds.has(e.id)}
+                    className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 disabled:opacity-40 px-2 py-1.5 rounded flex-shrink-0 transition-colors"
+                    title="下载到本地（视频+字幕+分析）"
+                    aria-label={`下载到本地 ${e.title}`}
+                  >
+                    {isMaterializing ? (
+                      <span className="animate-spin">⟳</span>
+                    ) : (
+                      <Download size={14} />
+                    )}
+                    <span>下载到本地</span>
+                  </button>
+                )}
+                {isLocal && (
+                  <span className="text-xs text-emerald-500 px-2 flex-shrink-0">已在本地</span>
+                )}
+                <button
+                  onClick={() => unsync(e.id, e.title)}
+                  disabled={busyIds.has(e.id) || isMaterializing}
+                  className="grid place-items-center h-8 w-8 rounded text-rose-400 hover:bg-rose-500/15 disabled:opacity-40 flex-shrink-0"
+                  title="从云下架"
+                  aria-label={`从云下架 ${e.title}`}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            );
+          })}
         </div>
 
         {entries && entries.length > 0 && (

@@ -27,6 +27,10 @@ export async function listSynced(): Promise<CloudLibraryEntry[]> {
   return invoke<CloudLibraryEntry[]>("library_list_synced");
 }
 
+export async function materializeFromCloud(id: string): Promise<void> {
+  await invoke("library_materialize_from_cloud", { id });
+}
+
 /** Maps the prefixed Rust error strings to friendly Chinese for tooltips/dialogs. */
 export function friendlySyncError(raw: string): string {
   if (raw === "auth_required") return "需要先登录";

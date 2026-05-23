@@ -346,6 +346,76 @@ async fn upload_video(
     Some(uu.video_key)
 }
 
+#[tauri::command]
+pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Result<(), String> {
+    let auth_state = auth::get_auth(&app).ok_or_else(|| "auth_required".to_string())?;
+    if !auth::is_valid(&auth_state) {
+        return Err("auth_required".into());
+    }
+
+    // 1. GET /api/library/entry/:id → full cloud entry
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("client build: {e}"))?;
+    let resp = client
+        .get(format!("{API_BASE}/entry/{id}"))
+        .header("authorization", format!("Bearer {}", auth_state.session_token))
+        .send()
+        .await
+        .map_err(|e| categorise(&e))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("http {}: {}", status.as_u16(), truncate(&text, 200)));
+    }
+    let entry_json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse: {e}"))?;
+
+    let source_url = entry_json["sourceUrl"].as_str().unwrap_or_default().to_string();
+    let title = entry_json["title"].as_str().unwrap_or("Untitled").to_string();
+    let duration_sec_cloud = entry_json["durationSec"].as_f64().unwrap_or(0.0);
+    let transcript = entry_json["transcriptSrt"].as_str().unwrap_or_default().to_string();
+    let analysis = entry_json["analysisJson"].clone();
+    if source_url.is_empty() {
+        return Err("missing sourceUrl".into());
+    }
+
+    // 2. Download the video locally (reuse the import download path).
+    let out_dir = crate::core::paths::video_dir(&id).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let dl = crate::pipeline::ytdlp::download(&app, &source_url, &out_dir, &id, "standard", true, None)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 3. Write transcript.srt + analysis.json from cloud data (NO re-whisper/re-LLM).
+    std::fs::write(out_dir.join("transcript.srt"), &transcript).map_err(|e| e.to_string())?;
+    crate::commands::analysis::save_analysis(id.clone(), analysis).map_err(|e| e.to_string())?;
+
+    // 4. Build a full local library entry (status Ready, synced since it came from cloud).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let duration_sec = if duration_sec_cloud > 0.0 { duration_sec_cloud } else { dl.duration_sec };
+    let entry = crate::commands::library::LibraryEntry {
+        id: id.clone(),
+        title: if dl.title.is_empty() { title } else { dl.title },
+        source: crate::commands::library::LibrarySource::Url { url: source_url },
+        duration_sec,
+        thumbnail_path: dl.thumb_path.clone(),
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        status: crate::commands::library::LibraryStatus::Ready,
+        last_error: None,
+        video_dir: Some(out_dir.to_string_lossy().to_string()),
+        analysis_style: None,
+        synced_at: Some(now),
+        sync_error: None,
+    };
+    crate::commands::library::library_upsert(entry).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn extract_youtube_id_rust(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_lowercase();

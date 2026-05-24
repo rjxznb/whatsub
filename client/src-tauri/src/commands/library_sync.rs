@@ -109,6 +109,40 @@ pub async fn library_sync_to_cloud(
         }
     };
 
+    // Quota pre-check: only for NEW cloud videos (not re-syncs of an already-
+    // uploaded entry). If used >= limit we return early WITHOUT uploading so no
+    // orphan OSS object is created. If the GET /quota request itself fails
+    // (network/parse) we fall through and let the POST /sync backstop enforce.
+    if entry.synced_at.is_none() {
+        #[derive(serde::Deserialize)]
+        struct QuotaResp {
+            used: i64,
+            limit: i64,
+        }
+        let quota_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
+            .build();
+        if let Ok(qc) = quota_client {
+            let quota_result = qc
+                .get(format!("{API_BASE}/quota"))
+                .header("authorization", format!("Bearer {}", auth_state.session_token))
+                .send()
+                .await;
+            if let Ok(qresp) = quota_result {
+                if let Ok(qtext) = qresp.text().await {
+                    if let Ok(q) = serde_json::from_str::<QuotaResp>(&qtext) {
+                        if q.used >= q.limit {
+                            return Err(format!(
+                                "quota_exceeded {{\"used\":{}, \"limit\":{}}}",
+                                q.used, q.limit
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Transcode source.mp4 → 720p mobile.mp4, request a presigned PUT, upload
     // direct to OSS. Best-effort: any failure → no videoKey → iOS falls back to
     // the YouTube embed for this entry.

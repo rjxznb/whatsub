@@ -41,6 +41,11 @@ export function friendlySyncError(raw: string): string {
   if (raw.startsWith("timeout:")) return "网络超时，检查 VPN 或重试";
   if (raw.startsWith("connect:")) return "连不上服务器，检查网络";
   if (raw.startsWith("http 401")) return "登录已过期，请重新登录";
+  if (raw.includes("quota_exceeded")) {
+    const m = raw.match(/"used":\s*(\d+).*?"limit":\s*(\d+)/);
+    const tail = m ? `（${m[1]}/${m[2]}）` : "";
+    return `云端视频已达上限${tail}：删掉一些已同步的，或购买授权解锁 50 个`;
+  }
   if (raw.startsWith("http ")) return `服务器返回 ${raw}`;
   return raw;
 }

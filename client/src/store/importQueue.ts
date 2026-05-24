@@ -40,6 +40,11 @@ let pollingStarted = false;
 
 /** Map a raw pipeline error to actionable Chinese copy for login-walled sites. */
 function friendlyQueueError(raw: string): string {
+  if (raw.includes("quota_exceeded")) {
+    const m = raw.match(/"used":\s*(\d+).*?"limit":\s*(\d+)/);
+    const tail = m ? `（${m[1]}/${m[2]}）` : "";
+    return `云端视频已达上限${tail}：删掉一些或购买授权解锁 50 个`;
+  }
   const t = raw.toLowerCase();
   if (
     raw.includes("登录") || raw.includes("会员") ||

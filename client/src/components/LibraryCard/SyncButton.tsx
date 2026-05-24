@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Cloud, CloudOff, CheckCircle2, Loader2 } from "lucide-react";
 import { syncToCloud, friendlySyncError } from "../../lib/api/librarySync";
 import type { LibraryEntry } from "../../types/library";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface Props {
   entry: LibraryEntry;
@@ -35,7 +36,13 @@ export function SyncButton({ entry, onChanged }: Props) {
       await syncToCloud(entry.id);
       await onChanged();
     } catch (err) {
-      setError(friendlySyncError(String(err)));
+      const raw = String(err);
+      setError(friendlySyncError(raw));
+      if (raw.includes("quota_exceeded")) {
+        if (window.confirm("云端视频已达上限。前往官网购买授权解锁 50 个？")) {
+          void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {});
+        }
+      }
     } finally {
       setBusy(false);
     }

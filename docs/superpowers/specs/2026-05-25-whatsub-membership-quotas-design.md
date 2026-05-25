@@ -5,6 +5,13 @@
 
 ---
 
+> **⚠️ 最终模型更新(2026-05-25,以此为准,覆盖下方 §2–§4 的旧表述)**
+> 实现中确认:**高档(个人语料库 1000 + 云端 Library 50)= 仅"有效订阅"**——iOS 自动续费订阅 **OR** 支付宝时段会员(新子产品 `sub_month` ¥12 / `sub_year` ¥88,买 N 个月)。一次性 **license / iOS 买断 / 试用 / 免费一律低档**(语料库 50 / Library 3);但 license/买断/试用仍可**浏览**公共语料库。
+> 判定:`hasActiveSubscription`(高档配额门槛)**取代**了下文的 `isMember`(已废弃——它错误地把一次性 license/买断算进高档)。
+> **权威文档**:`plans/2026-05-25-plan1-membership-backend.md`(已实现,quota 门控)+ `plans/2026-05-25-plan2-alipay-subscription.md`(支付宝订阅产品)+ 记忆 `project_whatsub_membership_quotas`。下方 §2–§4 保留 isMember 旧框架,仅作历史参考。
+
+---
+
 ## 0. 定位与硬规则
 
 1. **一份会员,通吃三端**:同一个邮箱的权益,同时解锁 插件(语料库)+ 桌面(Library 云同步)+ iOS。后端按 email 判定,不分端。

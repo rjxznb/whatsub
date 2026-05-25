@@ -3,6 +3,7 @@ import { Cloud, CloudOff, CheckCircle2, Loader2 } from "lucide-react";
 import { syncToCloud, friendlySyncError } from "../../lib/api/librarySync";
 import type { LibraryEntry } from "../../types/library";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { confirm } from "@tauri-apps/plugin-dialog";
 
 interface Props {
   entry: LibraryEntry;
@@ -44,7 +45,7 @@ export function SyncButton({ entry, onChanged }: Props) {
       const raw = String(err);
       setError(friendlySyncError(raw));
       if (raw.includes("quota_exceeded")) {
-        if (window.confirm("云端视频已达上限。前往官网购买授权解锁 50 个？")) {
+        if (await confirm("云端视频已达上限。前往官网购买授权解锁 50 个？")) {
           void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {});
         }
       }
@@ -58,15 +59,15 @@ export function SyncButton({ entry, onChanged }: Props) {
     e.preventDefault();
     if (!enabled && state !== "synced") return;
     if (state === "idle") {
-      const ok = window.confirm(
-        "同步到云？\n仅上传字幕 + 元数据，不上传视频文件。\niOS / 其他设备的 whatSub 能看到这条。"
+      const ok = await confirm(
+        "同步到云？\n上传字幕 + 视频到云端，手机 / 其他设备的 whatSub 可免 VPN 观看。"
       );
       if (!ok) return;
       await doSync();
     } else if (state === "failed") {
       await doSync(); // retry
     } else if (state === "synced") {
-      const again = window.confirm(
+      const again = await confirm(
         `已同步 · ${new Date(entry.syncedAt!).toLocaleString()}\n\n点【确定】= 重新同步\n点【取消】= 关闭`
       );
       if (again) await doSync();

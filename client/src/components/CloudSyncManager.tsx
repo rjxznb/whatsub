@@ -3,6 +3,7 @@ import { X, Trash2, Cloud, Download } from "lucide-react";
 import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
 import { useLibrary } from "../store/library";
 import { useMaterializing } from "../store/materializing";
+import { confirm, message } from "@tauri-apps/plugin-dialog";
 
 interface Props {
   /** Called when user closes the dialog (Esc, backdrop click, X button, 关闭). */
@@ -46,14 +47,14 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
   }, [onClose]);
 
   async function unsync(id: string, title: string) {
-    if (!window.confirm(`从云端下架「${title}」？\niOS 上将不再可见。本地条目不会被删。`)) return;
+    if (!(await confirm(`从云端下架「${title}」？\niOS 上将不再可见。本地条目不会被删。`))) return;
     setBusyIds(prev => new Set(prev).add(id));
     try {
       await unsyncFromCloud(id);
       setEntries(prev => prev?.filter(e => e.id !== id) ?? null);
       await onChanged();
     } catch (err) {
-      window.alert(friendlySyncError(String(err)));
+      await message(friendlySyncError(String(err)));
     } finally {
       setBusyIds(prev => {
         const next = new Set(prev);
@@ -78,7 +79,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
 
   async function unsyncAll() {
     if (!entries?.length) return;
-    if (!window.confirm(`从云端下架全部 ${entries.length} 条？\n本地条目不会被删。`)) return;
+    if (!(await confirm(`从云端下架全部 ${entries.length} 条？\n本地条目不会被删。`))) return;
     // Sequential — fast enough for typical sizes (< 100 entries) and gives
     // partial-progress feedback if one fails.
     for (const e of entries) {

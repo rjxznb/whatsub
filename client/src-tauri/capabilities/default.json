@@ -14,6 +14,9 @@
     "shell:default",
     "fs:default",
     "dialog:default",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "dialog:allow-ask",
     {
       "identifier": "http:default",
       "allow": [

@@ -341,9 +341,10 @@ async fn upload_video(
     let mobile = std::path::Path::new(video_dir).join("mobile.mp4");
 
     // Step 1: transcode to 720p H.264 (never upscales)
-    crate::pipeline::ffmpeg::transcode_720p(app, &src, &mobile, id, duration_sec, None)
-        .await
-        .ok()?;
+    if let Err(e) = crate::pipeline::ffmpeg::transcode_720p(app, &src, &mobile, id, duration_sec, None).await {
+        eprintln!("[upload_video] {id}: transcode failed: {e}");
+        return None;
+    }
 
     // Transcode done — signal the PUT phase (frontend shows an indeterminate
     // "正在上传…" spinner; we don't track byte-level PUT progress).
@@ -369,29 +370,39 @@ async fn upload_video(
         video_key: String,
     }
 
-    let uu_text = client
+    let uu_resp = match client
         .post(format!("{API_BASE}/upload-url"))
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
-        .body(
-            serde_json::json!({ "id": id, "contentType": "video/mp4" }).to_string(),
-        )
+        .body(serde_json::json!({ "id": id, "contentType": "video/mp4" }).to_string())
         .send()
         .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .text()
-        .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[upload_video] {id}: /upload-url request failed: {e}");
+            return None;
+        }
+    };
+    let uu_resp = match uu_resp.error_for_status() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[upload_video] {id}: /upload-url HTTP error: {e}");
+            return None;
+        }
+    };
+    let uu_text = uu_resp.text().await.ok()?;
     let uu: UploadUrl = serde_json::from_str(&uu_text).ok()?;
 
     // Step 3: PUT the file straight to OSS.
     // Content-Type MUST exactly match the presigned signature ("video/mp4").
-    // Use a separate client with a larger timeout — the payload can be 100s of MB.
     let bytes = std::fs::read(&mobile).ok()?;
-    let put_resp = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS * 4))
+    let size_mb = bytes.len() / 1_000_000;
+    eprintln!("[upload_video] {id}: uploading {size_mb} MB to OSS…");
+    // Generous timeout — a multi-hundred-MB 720p file over a home upstream can
+    // take many minutes; the old 120s timed out on long videos (e.g. full games).
+    let put_resp = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30 * 60))
         .build()
         .ok()?
         .put(&uu.put_url)
@@ -399,15 +410,23 @@ async fn upload_video(
         .body(bytes)
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[upload_video] {id}: OSS PUT failed ({size_mb} MB, timeout/network): {e}");
+            return None;
+        }
+    };
 
     if !put_resp.status().is_success() {
+        eprintln!("[upload_video] {id}: OSS PUT rejected: HTTP {}", put_resp.status());
         return None;
     }
 
     // Clean up the temp transcoded file after a successful upload.
     let _ = std::fs::remove_file(&mobile);
 
+    eprintln!("[upload_video] {id}: OSS upload OK ({size_mb} MB), key={}", uu.video_key);
     Some(uu.video_key)
 }
 

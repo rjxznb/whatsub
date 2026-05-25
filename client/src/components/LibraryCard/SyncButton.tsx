@@ -4,6 +4,8 @@ import { syncToCloud, friendlySyncError } from "../../lib/api/librarySync";
 import type { LibraryEntry } from "../../types/library";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { confirm } from "@tauri-apps/plugin-dialog";
+import { useDownloadQueue } from "../../store/downloadQueue";
+import { applyUploadResult } from "../../store/importQueue";
 
 interface Props {
   entry: LibraryEntry;
@@ -33,8 +35,21 @@ export function SyncButton({ entry, onChanged }: Props) {
   async function doSync() {
     setBusy(true);
     setError(null);
+    // Show an "uploading" row in the 后台任务 widget (transcode % then a PUT
+    // spinner), same as the queue-driven path. applyUploadResult finalizes it
+    // (removes on success / shows upload_failed + 重试上传 on failure).
+    useDownloadQueue.getState().upsert(entry.id, {
+      videoId: entry.id,
+      sourceKind: "url",
+      sourceValue: entry.title,
+      label: entry.title,
+      phase: "uploading",
+      percent: 0,
+      startedAt: Date.now(),
+    });
     try {
       const res = await syncToCloud(entry.id);
+      applyUploadResult(entry.id, res.videoUploaded);
       if (!res.videoUploaded) {
         // Entry synced (captions) but the OSS video upload failed — show the
         // retryable failed state (also persisted via entry.syncError on reload).
@@ -42,6 +57,7 @@ export function SyncButton({ entry, onChanged }: Props) {
       }
       await onChanged();
     } catch (err) {
+      useDownloadQueue.getState().remove(entry.id);
       const raw = String(err);
       setError(friendlySyncError(raw));
       if (raw.includes("quota_exceeded")) {

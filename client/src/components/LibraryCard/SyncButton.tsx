@@ -33,7 +33,12 @@ export function SyncButton({ entry, onChanged }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await syncToCloud(entry.id);
+      const res = await syncToCloud(entry.id);
+      if (!res.videoUploaded) {
+        // Entry synced (captions) but the OSS video upload failed — show the
+        // retryable failed state (also persisted via entry.syncError on reload).
+        setError(friendlySyncError("video_upload_failed"));
+      }
       await onChanged();
     } catch (err) {
       const raw = String(err);

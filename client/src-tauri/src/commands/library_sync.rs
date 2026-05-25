@@ -25,6 +25,10 @@ pub struct SyncOk {
     pub ok: bool,
     #[serde(rename = "syncedAt")]
     pub synced_at: i64,
+    /// Whether the OSS video upload succeeded. false → entry synced
+    /// captions-only (iOS needs VPN); UI shows 上传失败 · 重试上传.
+    #[serde(rename = "videoUploaded")]
+    pub video_uploaded: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -147,7 +151,7 @@ pub async fn library_sync_to_cloud(
     // direct to OSS. Best-effort: any failure → no videoKey → iOS falls back to
     // the YouTube embed for this entry.
     let video_key: Option<String> =
-        upload_video(&app, video_dir, &id, &auth_state.session_token).await;
+        upload_video(&app, video_dir, &id, &auth_state.session_token, entry.duration_sec as f64).await;
 
     // 4. POST
     let body = serde_json::json!({
@@ -196,13 +200,20 @@ pub async fn library_sync_to_cloud(
         ));
     }
 
-    // 5. Persist syncedAt
-    crate::commands::library::set_synced_at(&id, Some(now), None)
+    // 5. Persist syncedAt. On OSS-upload failure keep the entry (captions
+    // synced) but record sync_error so the card + queue show 上传失败 · 重试.
+    let sync_error = if video_key.is_none() {
+        Some("video_upload_failed".to_string())
+    } else {
+        None
+    };
+    crate::commands::library::set_synced_at(&id, Some(now), sync_error)
         .map_err(|e| format!("library write: {e}"))?;
 
     Ok(SyncOk {
         ok: true,
         synced_at: now,
+        video_uploaded: video_key.is_some(),
     })
 }
 
@@ -321,6 +332,7 @@ async fn upload_video(
     video_dir: &str,
     id: &str,
     token: &str,
+    duration_sec: f64,
 ) -> Option<String> {
     let src = std::path::Path::new(video_dir).join("source.mp4");
     if !src.exists() {
@@ -329,9 +341,19 @@ async fn upload_video(
     let mobile = std::path::Path::new(video_dir).join("mobile.mp4");
 
     // Step 1: transcode to 720p H.264 (never upscales)
-    crate::pipeline::ffmpeg::transcode_720p(app, &src, &mobile, id, None)
+    crate::pipeline::ffmpeg::transcode_720p(app, &src, &mobile, id, duration_sec, None)
         .await
         .ok()?;
+
+    // Transcode done — signal the PUT phase (frontend shows an indeterminate
+    // "正在上传…" spinner; we don't track byte-level PUT progress).
+    crate::core::progress::emit(
+        app,
+        crate::core::progress::PipelineEvent::Uploading {
+            video_id: id.to_string(),
+            percent: 100,
+        },
+    );
 
     // Step 2: request a presigned PUT URL from the backend
     let client = reqwest::Client::builder()

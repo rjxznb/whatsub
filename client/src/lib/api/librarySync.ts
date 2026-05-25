@@ -13,6 +13,8 @@ export interface CloudLibraryEntry {
 export interface SyncOk {
   ok: boolean;
   syncedAt: number;
+  /** false → captions synced but the OSS video upload failed (iOS needs VPN). */
+  videoUploaded: boolean;
 }
 
 export async function syncToCloud(id: string): Promise<SyncOk> {
@@ -45,6 +47,9 @@ export function friendlySyncError(raw: string): string {
     const m = raw.match(/"used":\s*(\d+).*?"limit":\s*(\d+)/);
     const tail = m ? `（${m[1]}/${m[2]}）` : "";
     return `云端视频已达上限${tail}：删掉一些已同步的，或购买授权解锁 50 个`;
+  }
+  if (raw === "video_upload_failed") {
+    return "视频上传失败 · 点重试上传（字幕已同步，手机暂需 VPN）";
   }
   if (raw.startsWith("http ")) return `服务器返回 ${raw}`;
   return raw;

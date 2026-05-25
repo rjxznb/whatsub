@@ -6,6 +6,21 @@ import {
   cancelBackground,
   type BgAnalysisJob,
 } from "../store/backgroundAnalyses";
+import { syncToCloud } from "../lib/api/librarySync";
+
+async function retryUpload(videoId: string): Promise<void> {
+  useDownloadQueue.getState().update(videoId, { phase: "uploading", percent: 0, error: null });
+  try {
+    const r = await syncToCloud(videoId);
+    if (r.videoUploaded) {
+      useDownloadQueue.getState().remove(videoId);
+    } else {
+      useDownloadQueue.getState().update(videoId, { phase: "upload_failed", error: "video_upload_failed" });
+    }
+  } catch (e) {
+    useDownloadQueue.getState().update(videoId, { phase: "upload_failed", error: String(e) });
+  }
+}
 
 /**
  * Floating bottom-right widget for the unified background-jobs queue.
@@ -117,6 +132,9 @@ export function DownloadQueueWidget() {
                   if (item.kind === "download") removeDownload(item.videoId);
                   else cancelBackground(item.videoId);
                 }}
+                onRetry={() => {
+                  if (item.kind === "download") void retryUpload(item.videoId);
+                }}
               />
             ))}
           </div>
@@ -142,17 +160,19 @@ export function DownloadQueueWidget() {
 }
 
 function isTerminalPhase(item: UnifiedItem): boolean {
-  return item.phase === "done" || item.phase === "error";
+  return item.phase === "done" || item.phase === "error" || item.phase === "upload_failed";
 }
 
 function Row({
   item,
   onCancel,
   onDismiss,
+  onRetry,
 }: {
   item: UnifiedItem;
   onCancel: () => void;
   onDismiss: () => void;
+  onRetry: () => void;
 }) {
   const isTerminal = isTerminalPhase(item);
   const phaseTextValue = phaseText(item);
@@ -175,7 +195,7 @@ function Row({
           ×
         </button>
       </div>
-      {!isTerminal && (
+      {!isTerminal && !(item.phase === "uploading" && item.percent >= 100) && (
         <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
           <div
             className="h-full transition-all duration-300 bg-blue-500"
@@ -201,6 +221,14 @@ function Row({
             {shortError(item.error)}
           </span>
         )}
+        {item.phase === "upload_failed" && (
+          <button
+            onClick={onRetry}
+            className="ml-auto px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-[10px]"
+          >
+            重试上传
+          </button>
+        )}
       </div>
     </div>
   );
@@ -212,6 +240,9 @@ function PhaseIcon({ phase }: { phase: UnifiedItem["phase"] }) {
   }
   if (phase === "error") {
     return <AlertCircle className="h-4 w-4 text-amber-400 shrink-0" />;
+  }
+  if (phase === "upload_failed") {
+    return <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />;
   }
   return (
     <div className="h-3 w-3 rounded-full border-2 border-blue-500 border-t-transparent animate-spin shrink-0" />
@@ -229,6 +260,10 @@ function phaseText(item: UnifiedItem): string {
         return "提取音频";
       case "transcribing":
         return "转录字幕";
+      case "uploading":
+        return item.percent >= 100 ? "正在上传到云端…" : `上传到云端 · 转码 ${Math.round(item.percent)}%`;
+      case "upload_failed":
+        return "视频上传失败";
       case "done":
         return "完成";
       case "error":

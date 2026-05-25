@@ -18,7 +18,9 @@ export type QueuePhase =
   | "downloading"
   | "extracting"
   | "transcribing"
+  | "uploading"
   | "done"
+  | "upload_failed"
   | "error";
 
 export interface QueueItem {
@@ -107,6 +109,7 @@ type Transcribed = {
   duration_sec: number;
 };
 type Failed = { stage: "Failed"; video_id: string; error: string };
+type Uploading = { stage: "Uploading"; video_id: string; percent: number };
 type PipelineEvent =
   | Started
   | Downloading
@@ -114,6 +117,7 @@ type PipelineEvent =
   | Transcribing
   | Transcribed
   | Failed
+  | Uploading
   | { stage: string; [key: string]: unknown };
 
 /** Derive a short label from URL or filename. Cheap, called once per
@@ -135,6 +139,77 @@ function deriveLabel(sourceKind: string, sourceValue: string): string {
   return parts[parts.length - 1] || sourceValue;
 }
 
+/** Pure reducer for pipeline events → download-queue store. Exported for tests. */
+export function applyPipelineEvent(ev: PipelineEvent): void {
+  const store = useDownloadQueue.getState();
+  switch (ev.stage) {
+    case "Started": {
+      const s = ev as Started;
+      if (!s.background) return;
+      store.upsert(s.video_id, {
+        videoId: s.video_id,
+        sourceKind: s.source_kind ?? "url",
+        sourceValue: s.source_value ?? "",
+        label: deriveLabel(s.source_kind ?? "url", s.source_value ?? ""),
+        phase: "started",
+        percent: 0,
+        startedAt: Date.now(),
+      });
+      break;
+    }
+    case "Downloading": {
+      const d = ev as Downloading;
+      store.update(d.video_id, {
+        phase: "downloading",
+        percent: d.percent,
+        speed: d.speed ?? null,
+        eta: d.eta ?? null,
+        total: d.total ?? null,
+      });
+      break;
+    }
+    case "ExtractingAudio": {
+      const x = ev as Extracting;
+      store.update(x.video_id, { phase: "extracting", percent: 0 });
+      break;
+    }
+    case "Transcribing": {
+      const t = ev as Transcribing;
+      store.update(t.video_id, { phase: "transcribing", percent: t.percent });
+      break;
+    }
+    case "Transcribed": {
+      const t = ev as Transcribed;
+      store.update(t.video_id, { phase: "done", percent: 100 });
+      setTimeout(() => {
+        useDownloadQueue.getState().remove(t.video_id);
+      }, 4000);
+      break;
+    }
+    case "Uploading": {
+      // Only update a row a caller (importQueue) already upserted before
+      // syncToCloud. Manual card syncs (SyncButton) don't pre-upsert and show
+      // their own button spinner, so we intentionally ignore their Uploading
+      // events here. A late event after the row was removed is a no-op too —
+      // no stray resurrected row.
+      const u = ev as Uploading;
+      if (store.entries[u.video_id]) {
+        store.update(u.video_id, {
+          phase: "uploading",
+          percent: u.percent,
+          error: null,
+        });
+      }
+      break;
+    }
+    case "Failed": {
+      const f = ev as Failed;
+      store.update(f.video_id, { phase: "error", error: f.error });
+      break;
+    }
+  }
+}
+
 /** One-time global event subscription. Idempotent — called from
  *  App.tsx mount, the second call is a no-op. */
 let mounted = false;
@@ -143,70 +218,7 @@ export async function mountDownloadQueueListener(): Promise<void> {
   if (mounted) return;
   mounted = true;
   unlisten = await listen<PipelineEvent>("pipeline-event", (e) => {
-    const ev = e.payload;
-    const store = useDownloadQueue.getState();
-
-    switch (ev.stage) {
-      case "Started": {
-        const s = ev as Started;
-        // Only background imports go in the queue. Foreground ones
-        // show inside ImportModal already; adding them here would
-        // duplicate the progress UI.
-        if (!s.background) return;
-        store.upsert(s.video_id, {
-          videoId: s.video_id,
-          sourceKind: s.source_kind ?? "url",
-          sourceValue: s.source_value ?? "",
-          label: deriveLabel(s.source_kind ?? "url", s.source_value ?? ""),
-          phase: "started",
-          percent: 0,
-          startedAt: Date.now(),
-        });
-        break;
-      }
-      case "Downloading": {
-        const d = ev as Downloading;
-        store.update(d.video_id, {
-          phase: "downloading",
-          percent: d.percent,
-          speed: d.speed ?? null,
-          eta: d.eta ?? null,
-          total: d.total ?? null,
-        });
-        break;
-      }
-      case "ExtractingAudio": {
-        const x = ev as Extracting;
-        store.update(x.video_id, { phase: "extracting", percent: 0 });
-        break;
-      }
-      case "Transcribing": {
-        const t = ev as Transcribing;
-        store.update(t.video_id, { phase: "transcribing", percent: t.percent });
-        break;
-      }
-      case "Transcribed": {
-        const t = ev as Transcribed;
-        store.update(t.video_id, { phase: "done", percent: 100 });
-        // Linger briefly so the user sees the green checkmark, then
-        // auto-clear to keep the queue panel from growing forever.
-        setTimeout(() => {
-          // Re-check the phase: if the user manually dismissed in the
-          // meantime, the update() will be a no-op.
-          useDownloadQueue.getState().remove(t.video_id);
-        }, 4000);
-        break;
-      }
-      case "Failed": {
-        const f = ev as Failed;
-        // Cancel emits Cancelled (subprocess-side) → the import_video
-        // task already removed itself from ImportState. The Rust task
-        // doesn't separately emit Failed for cancellations, but if
-        // something else did, the user just sees "error" in the queue.
-        store.update(f.video_id, { phase: "error", error: f.error });
-        break;
-      }
-    }
+    applyPipelineEvent(e.payload);
   });
 }
 

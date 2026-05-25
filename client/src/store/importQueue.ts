@@ -27,6 +27,7 @@ import { parseSrt } from "../llm/parseSrt";
 import { useSettings } from "./settings";
 import { syncToCloud } from "../lib/api/librarySync";
 import { useLibrary } from "./library";
+import { useDownloadQueue } from "./downloadQueue";
 import type { SrtCue } from "../llm/types";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -53,6 +54,16 @@ function friendlyQueueError(raw: string): string {
     return `需要登录该网站后重试（桌面端 设置 → 登录对应站点 Cookie）。原始错误：${raw}`;
   }
   return raw;
+}
+
+/** Reflect the OSS-upload outcome into the queue widget. true → drop the row;
+ *  false → keep it as upload_failed (retryable). Exported for tests. */
+export function applyUploadResult(videoId: string, videoUploaded: boolean): void {
+  if (videoUploaded) {
+    useDownloadQueue.getState().remove(videoId);
+  } else {
+    useDownloadQueue.getState().update(videoId, { phase: "upload_failed", error: "video_upload_failed" });
+  }
 }
 
 /**
@@ -149,18 +160,28 @@ async function processNextPendingItem(): Promise<void> {
     // ---- Step 4: wait for analysis to reach "done" (or "error") ----
     await waitForAnalysisDone(videoId);
 
-    // ---- Step 5: sync to cloud ----
+    // ---- Step 5: sync to cloud (with visible upload progress) ----
     console.info(`[importQueue] syncing ${videoId} to cloud`);
-    await syncToCloud(videoId);
+    // Show an "uploading" row in the queue widget; Uploading events update its
+    // transcode %, then the result branches it to done(removed)/upload_failed.
+    useDownloadQueue.getState().upsert(videoId, {
+      videoId,
+      sourceKind: "url",
+      sourceValue: item.url,
+      label: item.url,
+      phase: "uploading",
+      percent: 0,
+      startedAt: Date.now(),
+    });
+    const syncRes = await syncToCloud(videoId);
+    applyUploadResult(videoId, syncRes.videoUploaded);
 
-    // Refresh the library store so the card's ☁️ icon flips to "synced".
-    // syncToCloud wrote synced_at to library.json, but the in-memory store is
-    // stale — without this the card stays "unsynced" until a manual reload
-    // (CloudSyncManager reads from the backend directly, so it looked synced
-    // there but not on the card).
+    // Refresh the library store so the card's ☁️ / sync_error reflects reality.
     await useLibrary.getState().reload();
 
     // ---- Step 6: mark queue item done ----
+    // Captions-only success counts as queue "done"; a failed video upload is
+    // surfaced separately via the upload_failed row + the card's sync_error.
     await setStatus(item.id, "done");
     console.info(`[importQueue] item ${item.id} done`);
   } catch (err: unknown) {

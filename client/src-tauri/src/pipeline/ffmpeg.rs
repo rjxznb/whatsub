@@ -141,11 +141,46 @@ pub async fn transcode_720p(
     src_path: &Path,
     out_path: &Path,
     video_id: &str,
+    duration_sec: f64,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
+    use crate::commands::analysis::extract_time_field;
+
     let src = src_path.to_string_lossy().to_string();
     let out = out_path.to_string_lossy().to_string();
-    let log = make_log_emitter(app, video_id);
+
+    // Progress-aware stderr sink: surface raw ffmpeg lines as Log events (same
+    // as make_log_emitter) AND parse `time=` → emit Uploading{percent} (0–99),
+    // mirroring the burn-in export progress in commands/analysis.rs.
+    let app_for_log = app.clone();
+    let vid = video_id.to_string();
+    let mut last_percent: u8 = 0;
+    let log = move |line: &str| {
+        emit(
+            &app_for_log,
+            PipelineEvent::Log {
+                video_id: vid.clone(),
+                source: "ffmpeg".into(),
+                line: line.into(),
+            },
+        );
+        if let Some(secs) = extract_time_field(line) {
+            if duration_sec > 0.0 {
+                let pct = ((secs / duration_sec) * 100.0).clamp(0.0, 99.0) as u8;
+                if pct > last_percent {
+                    last_percent = pct;
+                    emit(
+                        &app_for_log,
+                        PipelineEvent::Uploading {
+                            video_id: vid.clone(),
+                            percent: pct,
+                        },
+                    );
+                }
+            }
+        }
+    };
+
     run_sidecar(
         app,
         "ffmpeg",

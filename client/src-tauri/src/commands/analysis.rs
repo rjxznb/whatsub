@@ -319,7 +319,7 @@ pub fn cancel_export(state: State<'_, ExportState>) -> AppResult<()> {
 /// Extract the `time=HH:MM:SS.cs` field from a single ffmpeg stderr status
 /// line and return it as seconds. Status lines look like:
 /// `frame=  123 fps=45 q=28.0 size=    256kB time=00:00:04.10 bitrate=...`
-fn extract_time_field(line: &str) -> Option<f64> {
+pub(crate) fn extract_time_field(line: &str) -> Option<f64> {
     let idx = line.find("time=")?;
     let rest = &line[idx + 5..];
     let token = rest

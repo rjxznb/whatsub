@@ -95,6 +95,13 @@ pub enum PipelineEvent {
         video_id: String,
         output_path: String,
     },
+    /// OSS upload progress for library cloud-sync. `percent` = 720p transcode
+    /// 0–99; once transcode is done we emit percent=100 to mean "transcode
+    /// finished, PUT in flight" (frontend shows an indeterminate spinner).
+    Uploading {
+        video_id: String,
+        percent: u8,
+    },
 }
 
 pub fn emit(app: &AppHandle, event: PipelineEvent) {

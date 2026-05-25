@@ -187,23 +187,17 @@ export function applyPipelineEvent(ev: PipelineEvent): void {
       break;
     }
     case "Uploading": {
+      // Only update a row a caller (importQueue) already upserted before
+      // syncToCloud. Manual card syncs (SyncButton) don't pre-upsert and show
+      // their own button spinner, so we intentionally ignore their Uploading
+      // events here. A late event after the row was removed is a no-op too —
+      // no stray resurrected row.
       const u = ev as Uploading;
-      const cur = store.entries[u.video_id];
-      if (cur) {
-        store.update(u.video_id, { phase: "uploading", percent: u.percent, error: null });
-      } else {
-        // Upload events can arrive after the download entry was auto-removed
-        // (download → analysis → upload are temporally separate). Upsert a
-        // minimal row; the caller (importQueue/SyncButton) normally upserts a
-        // labelled one first, so this is a fallback.
-        store.upsert(u.video_id, {
-          videoId: u.video_id,
-          sourceKind: "url",
-          sourceValue: "",
-          label: u.video_id,
+      if (store.entries[u.video_id]) {
+        store.update(u.video_id, {
           phase: "uploading",
           percent: u.percent,
-          startedAt: Date.now(),
+          error: null,
         });
       }
       break;

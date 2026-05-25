@@ -6,12 +6,9 @@ describe("applyPipelineEvent — Uploading", () => {
     useDownloadQueue.setState({ entries: {} });
   });
 
-  it("upserts an uploading entry with transcode percent", () => {
-    applyPipelineEvent({ stage: "Uploading", video_id: "vid1", percent: 42 });
-    const e = useDownloadQueue.getState().entries["vid1"];
-    expect(e).toBeTruthy();
-    expect(e.phase).toBe("uploading");
-    expect(e.percent).toBe(42);
+  it("ignores Uploading for an unknown video (no stray row)", () => {
+    applyPipelineEvent({ stage: "Uploading", video_id: "vidX", percent: 42 });
+    expect(useDownloadQueue.getState().entries["vidX"]).toBeUndefined();
   });
 
   it("updates an existing entry's percent", () => {

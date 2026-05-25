@@ -180,6 +180,8 @@ async function processNextPendingItem(): Promise<void> {
     await useLibrary.getState().reload();
 
     // ---- Step 6: mark queue item done ----
+    // Captions-only success counts as queue "done"; a failed video upload is
+    // surfaced separately via the upload_failed row + the card's sync_error.
     await setStatus(item.id, "done");
     console.info(`[importQueue] item ${item.id} done`);
   } catch (err: unknown) {

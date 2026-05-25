@@ -145,7 +145,6 @@ pub async fn transcode_720p(
     cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
     use crate::commands::analysis::extract_time_field;
-    use crate::core::progress::{emit, PipelineEvent};
 
     let src = src_path.to_string_lossy().to_string();
     let out = out_path.to_string_lossy().to_string();
@@ -168,7 +167,7 @@ pub async fn transcode_720p(
         if let Some(secs) = extract_time_field(line) {
             if duration_sec > 0.0 {
                 let pct = ((secs / duration_sec) * 100.0).clamp(0.0, 99.0) as u8;
-                if pct != last_percent {
+                if pct > last_percent {
                     last_percent = pct;
                     emit(
                         &app_for_log,

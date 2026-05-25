@@ -151,7 +151,7 @@ pub async fn library_sync_to_cloud(
     // direct to OSS. Best-effort: any failure → no videoKey → iOS falls back to
     // the YouTube embed for this entry.
     let video_key: Option<String> =
-        upload_video(&app, video_dir, &id, &auth_state.session_token, entry.duration_sec as f64).await;
+        upload_video(&app, video_dir, &id, &auth_state.session_token, entry.duration_sec).await;
 
     // 4. POST
     let body = serde_json::json!({

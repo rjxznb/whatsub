@@ -3,9 +3,9 @@ import { Cloud, CloudOff, CheckCircle2, Loader2 } from "lucide-react";
 import { syncToCloud, friendlySyncError } from "../../lib/api/librarySync";
 import type { LibraryEntry } from "../../types/library";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import { useDownloadQueue } from "../../store/downloadQueue";
 import { applyUploadResult } from "../../store/importQueue";
+import { ConfirmDialog } from "../ConfirmDialog";
 
 interface Props {
   entry: LibraryEntry;
@@ -16,9 +16,18 @@ interface Props {
 
 type State = "idle" | "syncing" | "synced" | "failed";
 
+interface DialogState {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}
+
 export function SyncButton({ entry, onChanged }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(entry.syncError ?? null);
+  // Themed confirm/notice dialog (replaces the OS-native confirm()).
+  const [dialog, setDialog] = useState<DialogState | null>(null);
 
   // Any URL source can sync now (YouTube, Bilibili, other) — the backend
   // generalised library_sync_to_cloud. Only local-file sources can't (the
@@ -61,32 +70,40 @@ export function SyncButton({ entry, onChanged }: Props) {
       const raw = String(err);
       setError(friendlySyncError(raw));
       if (raw.includes("quota_exceeded")) {
-        if (await confirm("云端视频已达上限。前往官网购买授权解锁 50 个？")) {
-          void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {});
-        }
+        setDialog({
+          title: "云端视频已达上限",
+          message: "已达到云端视频数量上限。前往官网购买授权可解锁 50 个。",
+          confirmLabel: "前往购买",
+          onConfirm: () =>
+            void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
+        });
       }
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleClick(e: React.MouseEvent) {
+  function handleClick(e: React.MouseEvent) {
     e.stopPropagation();
     e.preventDefault();
     if (!enabled && state !== "synced") return;
     if (state === "idle") {
-      const ok = await confirm(
-        "同步到云？\n上传字幕 + 视频到云端，手机 / 其他设备的 whatSub 可免 VPN 观看。"
-      );
-      if (!ok) return;
-      await doSync();
+      setDialog({
+        title: "同步到云？",
+        message:
+          "上传字幕 + 视频到云端，手机 / 其他设备的 whatSub 可免 VPN 观看。",
+        confirmLabel: "同步",
+        onConfirm: () => void doSync(),
+      });
     } else if (state === "failed") {
-      await doSync(); // retry
+      void doSync(); // retry — no confirm
     } else if (state === "synced") {
-      const again = await confirm(
-        `已同步 · ${new Date(entry.syncedAt!).toLocaleString()}\n\n点【确定】= 重新同步\n点【取消】= 关闭`
-      );
-      if (again) await doSync();
+      setDialog({
+        title: "重新同步？",
+        message: `已同步 · ${new Date(entry.syncedAt!).toLocaleString()}\n再次上传会覆盖云端版本。`,
+        confirmLabel: "重新同步",
+        onConfirm: () => void doSync(),
+      });
     }
   }
 
@@ -102,22 +119,33 @@ export function SyncButton({ entry, onChanged }: Props) {
     "text-zinc-300 hover:bg-white/15";
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={!enabled && state !== "synced" && state !== "failed"}
-      title={tooltip}
-      aria-label={tooltip}
-      className={`
-        h-7 w-7 grid place-items-center rounded-full transition-colors
-        bg-black/50 backdrop-blur-sm
-        ${colorClasses}
-        ${!enabled && state !== "synced" && state !== "failed" ? "opacity-40 cursor-not-allowed" : ""}
-      `}
-    >
-      {state === "syncing" && <Loader2 className="h-4 w-4 animate-spin" />}
-      {state === "synced" && <CheckCircle2 className="h-4 w-4" />}
-      {state === "failed" && <CloudOff className="h-4 w-4" />}
-      {state === "idle" && <Cloud className="h-4 w-4" />}
-    </button>
+    <>
+      <button
+        onClick={handleClick}
+        disabled={!enabled && state !== "synced" && state !== "failed"}
+        title={tooltip}
+        aria-label={tooltip}
+        className={`
+          h-7 w-7 grid place-items-center rounded-full transition-colors
+          bg-black/50 backdrop-blur-sm
+          ${colorClasses}
+          ${!enabled && state !== "synced" && state !== "failed" ? "opacity-40 cursor-not-allowed" : ""}
+        `}
+      >
+        {state === "syncing" && <Loader2 className="h-4 w-4 animate-spin" />}
+        {state === "synced" && <CheckCircle2 className="h-4 w-4" />}
+        {state === "failed" && <CloudOff className="h-4 w-4" />}
+        {state === "idle" && <Cloud className="h-4 w-4" />}
+      </button>
+      {dialog && (
+        <ConfirmDialog
+          title={dialog.title}
+          message={dialog.message}
+          confirmLabel={dialog.confirmLabel}
+          onConfirm={dialog.onConfirm}
+          onClose={() => setDialog(null)}
+        />
+      )}
+    </>
   );
 }

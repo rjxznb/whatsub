@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { X, Trash2, Cloud, Download } from "lucide-react";
 import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
+import { libraryQuota, type Quota } from "../lib/api/quota";
 import { useLibrary } from "../store/library";
 import { useMaterializing } from "../store/materializing";
 import { confirm, message } from "@tauri-apps/plugin-dialog";
@@ -15,6 +16,7 @@ interface Props {
 
 export function CloudSyncManager({ onClose, onChanged }: Props) {
   const [entries, setEntries] = useState<CloudLibraryEntry[] | null>(null);
+  const [quota, setQuota] = useState<Quota | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   // Materialize state lives in a module-level store so the "正在后台下载…"
@@ -33,9 +35,20 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
     }
   }, []);
 
+  // Server-authoritative cloud-video quota (used/limit). Best-effort — a failure
+  // just leaves the badge hidden; it never blocks the entry list.
+  const loadQuota = useCallback(async () => {
+    try {
+      setQuota(await libraryQuota());
+    } catch {
+      /* keep prior value / stay hidden */
+    }
+  }, []);
+
   useEffect(() => {
     void reload();
-  }, [reload]);
+    void loadQuota();
+  }, [reload, loadQuota]);
 
   // Esc to close.
   useEffect(() => {
@@ -53,6 +66,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
       await unsyncFromCloud(id);
       setEntries(prev => prev?.filter(e => e.id !== id) ?? null);
       await onChanged();
+      void loadQuota();
     } catch (err) {
       await message(friendlySyncError(String(err)));
     } finally {
@@ -91,6 +105,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
     }
     await reload();
     await onChanged();
+    void loadQuota();
   }
 
   return (
@@ -107,6 +122,18 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
             <Cloud className="h-5 w-5 text-emerald-400" />
             <h2 className="text-base font-semibold text-white">云同步详情</h2>
             {entries && <span className="text-xs text-zinc-500">· {entries.length} 条</span>}
+            {quota && (
+              <span
+                className={`text-xs px-1.5 py-0.5 rounded border ${
+                  quota.used >= quota.limit
+                    ? "text-amber-300 bg-amber-400/10 border-amber-400/40"
+                    : "text-zinc-400 bg-zinc-800 border-white/10"
+                }`}
+                title="云端视频额度（订阅 50 / 免费 3）"
+              >
+                配额 {quota.used}/{quota.limit}
+              </span>
+            )}
           </div>
           <button onClick={onClose} className="text-zinc-400 hover:text-white" aria-label="关闭">
             <X size={18} />

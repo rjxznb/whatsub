@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useCorpusList } from '../hooks/useCorpusList';
+import { corpusQuota, type Quota } from '../lib/api/quota';
 
 interface MineItem {
   phraseNormalized: string;
@@ -34,6 +35,22 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
   const { data, error, refreshing } = useCorpusList<BrowseResp | MineResp>(
     mode === 'mine' ? { mode: 'mine', tags } : { mode: 'browse', tags },
   );
+  const isMine = mode === 'mine';
+
+  // Server-authoritative personal-corpus quota (used/limit). Only fetched for
+  // the 'mine' list; best-effort (a failure just hides the badge). Refetched
+  // whenever the list data changes so the count tracks plugin-side saves after
+  // a refresh. limit = hasActiveSubscription ? 1000 : 50, so it reflects
+  // cross-platform (Alipay/web) subscriptions, not just a local guess.
+  const [quota, setQuota] = useState<Quota | null>(null);
+  useEffect(() => {
+    if (!isMine) return;
+    let cancelled = false;
+    corpusQuota()
+      .then((q) => { if (!cancelled) setQuota(q); })
+      .catch(() => { /* keep prior value / stay hidden */ });
+    return () => { cancelled = true; };
+  }, [isMine, data]);
 
   // Auto-select the first phrase when entering the page or when the active
   // list refreshes — so users don't land on a blank detail panel.
@@ -45,52 +62,65 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     }
   }, [autoSelectFirst, selected, data, onSelect]);
 
-  if (error && !data) {
+  const header = isMine ? (
+    <div
+      className="px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400 shrink-0"
+      title="个人语料库额度（订阅 1000 / 免费 50）"
+    >
+      个人语料{' '}
+      {quota ? (
+        <span className={quota.used >= quota.limit ? 'text-amber-300 font-medium' : 'text-zinc-200'}>
+          {quota.used}/{quota.limit}
+        </span>
+      ) : (
+        '…'
+      )}
+    </div>
+  ) : null;
+
+  function renderBody() {
+    if (error && !data) {
+      return <div className="p-4 text-red-300 text-xs break-all">加载失败：{error}</div>;
+    }
+    if (!data) {
+      return <div className="p-4 text-zinc-500 text-sm">{refreshing ? '加载中…' : '初始化…'}</div>;
+    }
+    if (data.items.length === 0) {
+      return <div className="p-4 text-zinc-500 text-sm">暂无</div>;
+    }
     return (
-      <div className="p-4 text-red-300 text-xs w-64 h-full border-r border-zinc-800 break-all">
-        加载失败：{error}
-      </div>
-    );
-  }
-  if (!data) {
-    return (
-      <div className="p-4 text-zinc-500 text-sm w-64 h-full border-r border-zinc-800">
-        {refreshing ? '加载中…' : '初始化…'}
-      </div>
-    );
-  }
-  const items = data.items;
-  if (items.length === 0) {
-    return (
-      <div className="p-4 text-zinc-500 text-sm w-64 h-full border-r border-zinc-800">暂无</div>
+      <ul>
+        {data.items.map((item) => (
+          <li
+            key={item.phraseNormalized}
+            onClick={() => onSelect(item.phraseNormalized)}
+            className={`px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
+              selected === item.phraseNormalized ? 'bg-zinc-800' : ''
+            }`}
+          >
+            <div className="text-sm font-medium">{item.phraseRaw}</div>
+            {item.meaningZh && (
+              <div className="text-xs text-zinc-400 truncate">{item.meaningZh}</div>
+            )}
+            {item.tags && item.tags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {item.tags.map((t) => (
+                  <span key={t} className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     );
   }
 
   return (
-    <ul className="w-64 h-full border-r border-zinc-800 overflow-y-auto min-w-0">
-      {items.map((item) => (
-        <li
-          key={item.phraseNormalized}
-          onClick={() => onSelect(item.phraseNormalized)}
-          className={`px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
-            selected === item.phraseNormalized ? 'bg-zinc-800' : ''
-          }`}
-        >
-          <div className="text-sm font-medium">{item.phraseRaw}</div>
-          {item.meaningZh && (
-            <div className="text-xs text-zinc-400 truncate">{item.meaningZh}</div>
-          )}
-          {item.tags && item.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1">
-              {item.tags.map((t) => (
-                <span key={t} className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200">
-                  {t}
-                </span>
-              ))}
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
+    <div className="w-64 h-full border-r border-zinc-800 flex flex-col min-w-0">
+      {header}
+      <div className="flex-1 overflow-y-auto min-w-0">{renderBody()}</div>
+    </div>
   );
 }

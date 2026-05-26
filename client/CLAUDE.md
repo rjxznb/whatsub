@@ -91,7 +91,7 @@ Layout:
 
 - `CorpusTagChips` pulls tags from `useCorpusTags(scope)` which invokes `corpus_tags` Rust command (which calls `/api/corpus/tags?scope=public|mine`). 18 official scenes are pinned in canonical order, custom tags after a divider. Multi-select AND.
 - `useCorpusList(scope)` SWR-style cache: reads server version via `corpus_versions`, compares to `tauri-plugin-store`-cached version, refetches only when stale. Scope = `{mode: 'mine'|'browse', tags: string[]}` — tags array participates in cache key so each filter combo caches separately.
-- `CorpusPhraseList` shows row title + meaning + inline tag chips per row.
+- `CorpusPhraseList` shows row title + meaning + inline tag chips per row. The `mine`(个人) variant also renders a `个人语料 used/limit` header above the list (all states — loading/empty included) via `lib/api/quota.ts::corpusQuota()` → `GET /api/corpus/quota` (`limit = hasActiveSubscription ? 1000 : 50`, server-authoritative so it covers Alipay/web subs); refetched whenever the mine list data changes.
 - `CorpusPhraseDetail` shows `📚 公共例句出处` + `⭐ 我的例句出处` lists. Each instance has a clickable `▶ MM:SS` button (resolved via `instance.source.timestampSec ?? parseYouTubeUrl(url).startSec`) that re-seeks the embedded YouTube iframe.
 - `YouTubeEmbed` uses `youtube-nocookie.com/embed/...` (Tracking Prevention bypass) + `allow="encrypted-media; picture-in-picture; clipboard-write"`. No autoplay — WebView2 blocks unmuted autoplay by default and the failed-load leaves the iframe blank.
 
@@ -161,6 +161,8 @@ Each Library card (incl. cards inside opened folders) has a `SyncButton` overlay
 `LibraryEntry` (TS `types/library.ts` + Rust) carries `syncedAt?: number` + `syncError?: string`; `SyncButton` renders idle/syncing/synced(✓)/error(✗) from these. Only YouTube-sourced entries sync in v1 (others stay `syncedAt: undefined`). `library_sync_to_cloud` takes a concrete `AppHandle` (NOT generic `AppHandle<R>`) because it calls the pipeline ffmpeg helper which is concrete-typed.
 
 **The downscaled thumb is why the iOS list shows covers without a VPN** — `i.ytimg.com` is GFW-blocked, so the backend serves the synced thumb from `whatsub.eversay.cc/api/library/thumb/:id` instead. Existing entries synced before this feature need a re-sync (click ☁️ again) to populate `thumbData`.
+
+**Cloud-video quota badge (2026-05-26):** the 云同步详情 dialog header (`CloudSyncManager`) shows a `配额 used/limit` pill (amber when at/over cap), fetched via `lib/api/quota.ts::libraryQuota()` → `GET /api/library/quota`. The `limit` is **server-authoritative** (`hasActiveSubscription ? 50 : 3` — counts iOS subs AND Alipay/web 时段会员, not just a local guess); refetched after an unsync frees a slot. `quota.ts` mirrors `importQueue.ts`'s auth (`invoke("get_session_token")` + `fetch` with Bearer) — pure TS, no Rust command.
 
 ## Import queue — desktop auto-poll worker
 

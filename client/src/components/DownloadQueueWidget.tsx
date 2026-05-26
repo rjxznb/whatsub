@@ -176,6 +176,12 @@ function Row({
 }) {
   const isTerminal = isTerminalPhase(item);
   const phaseTextValue = phaseText(item);
+  // No measurable progress for the OSS upload PUT (percent is pinned at 100
+  // once transcode finishes) or a background re-transcribe — show a sliding
+  // indeterminate bar instead of a stuck/empty one.
+  const indeterminate =
+    (item.phase === "uploading" && item.percent >= 100) ||
+    (item.kind === "analysis" && item.phase === "transcribing");
   return (
     <div className="px-4 py-3">
       <div className="flex items-center gap-2 mb-1.5">
@@ -195,12 +201,16 @@ function Row({
           ×
         </button>
       </div>
-      {!isTerminal && !(item.phase === "uploading" && item.percent >= 100) && (
-        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
-          <div
-            className="h-full transition-all duration-300 bg-blue-500"
-            style={{ width: `${Math.max(2, item.percent)}%` }}
-          />
+      {!isTerminal && (
+        <div className="h-1 bg-zinc-800 rounded-full overflow-hidden relative">
+          {indeterminate ? (
+            <div className="animate-indeterminate-bar bg-blue-500 rounded-full" />
+          ) : (
+            <div
+              className="h-full transition-all duration-300 bg-blue-500"
+              style={{ width: `${Math.max(2, item.percent)}%` }}
+            />
+          )}
         </div>
       )}
       <div className="flex items-center gap-2 mt-1.5 text-[10px] text-zinc-500">

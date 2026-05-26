@@ -262,6 +262,30 @@ body::-webkit-scrollbar-corner,
   animation: vocab-tour-pulse 1.6s ease-in-out infinite;
 }
 
+/* Indeterminate progress bar — a segment sliding L→R for unbounded steps
+   where we have no byte-level progress (OSS upload PUT, background
+   re-transcribe). Parent needs position:relative + overflow:hidden. */
+@keyframes indeterminate-bar {
+  0% {
+    left: -45%;
+    width: 45%;
+  }
+  50% {
+    left: 25%;
+    width: 55%;
+  }
+  100% {
+    left: 100%;
+    width: 45%;
+  }
+}
+.animate-indeterminate-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  animation: indeterminate-bar 1.15s ease-in-out infinite;
+}
+
 /* Note indicator: blue L-shaped corner bracket at the top-right of a
    vocab card, present whenever the card has a saved note. Mounts with
    scale-from-zero anchored at the top-right corner so the bracket

@@ -276,6 +276,7 @@ pub async fn cancel_import(state: State<'_, ImportState>, video_id: String) -> A
 #[tauri::command]
 pub async fn retranscribe_video(
     app: AppHandle,
+    state: State<'_, ImportState>,
     video_id: String,
     whisper_model: String,
 ) -> AppResult<ImportResult> {
@@ -288,10 +289,34 @@ pub async fn retranscribe_video(
         )));
     }
 
+    // Register a cancel token (same registry + `cancel_import` command as
+    // import_video) so the foreground 「前台解析」 can kill the ffmpeg /
+    // whisper child process if the user leaves the Player page mid-run.
+    let cancel = state.register(&video_id);
+    let result =
+        run_retranscribe(&app, &video_id, &out_dir, &video_path, &whisper_model, &cancel).await;
+    // Always unregister so a later run of the same video_id doesn't start
+    // "already cancelled".
+    state.unregister(&video_id);
+    result
+}
+
+/// Inner re-transcribe pipeline (extract audio → whisper). Split out so the
+/// outer command always unregisters its cancel token regardless of outcome.
+/// Unlike `run_import`, a cancel here does NOT delete source.mp4 — the user
+/// is just aborting a re-analyze, not the original import.
+async fn run_retranscribe(
+    app: &AppHandle,
+    video_id: &str,
+    out_dir: &std::path::Path,
+    video_path: &std::path::Path,
+    whisper_model: &str,
+    cancel: &CancellationToken,
+) -> AppResult<ImportResult> {
     emit(
-        &app,
+        app,
         PipelineEvent::Started {
-            video_id: video_id.clone(),
+            video_id: video_id.to_string(),
             source_kind: None,
             source_value: None,
             background: false,
@@ -302,38 +327,39 @@ pub async fn retranscribe_video(
     // Library page card stops showing "Failed" while the retry runs. If the
     // entry got deleted somehow, just continue — transcript output still
     // lands in the right directory and the user can re-import to re-list it.
-    if let Some(mut entry) = library_get(video_id.clone())? {
+    if let Some(mut entry) = library_get(video_id.to_string())? {
         entry.status = LibraryStatus::Analyzing;
         entry.last_error = None;
         library_upsert(entry)?;
     }
 
     emit(
-        &app,
+        app,
         PipelineEvent::ExtractingAudio {
-            video_id: video_id.clone(),
+            video_id: video_id.to_string(),
         },
     );
     let audio_path = out_dir.join("audio.wav");
-    ffmpeg::extract_audio_wav(&app, &video_path, &audio_path, &video_id, None).await?;
+    ffmpeg::extract_audio_wav(app, video_path, &audio_path, video_id, Some(cancel)).await?;
 
     let srt_path =
-        whisper::transcribe(&app, &audio_path, &out_dir, &whisper_model, &video_id, None).await?;
+        whisper::transcribe(app, &audio_path, out_dir, whisper_model, video_id, Some(cancel))
+            .await?;
     let dur_sec = std::fs::metadata(&audio_path)
         .map(|m| m.len() as f64 / (16000.0 * 2.0))
         .unwrap_or(0.0);
 
     emit(
-        &app,
+        app,
         PipelineEvent::Transcribed {
-            video_id: video_id.clone(),
+            video_id: video_id.to_string(),
             srt_path: srt_path.to_string_lossy().to_string(),
             duration_sec: dur_sec,
         },
     );
 
     Ok(ImportResult {
-        video_id,
+        video_id: video_id.to_string(),
         srt_path: srt_path.to_string_lossy().to_string(),
         duration_sec: dur_sec,
     })

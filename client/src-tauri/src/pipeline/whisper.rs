@@ -366,6 +366,16 @@ pub async fn transcribe(
             "-m", &model_str,
             "-f", &audio_str,
             "-l", "en",
+            // Disable text-context carryover between 30s windows (whisper.cpp
+            // default is -1 = carry as much prior transcript as fits). With it
+            // on, a repetition/hallucination on a non-speech stretch (intro
+            // music, crowd noise) becomes the prompt for the next window and
+            // snowballs into a runaway loop of one repeated line across the
+            // whole file (observed on sports-highlight intros). A controlled
+            // A/B on clean speech showed no quality loss from -mc 0 — only
+            // minor cross-window punctuation/casing variance, which the
+            // downstream LLM translation normalizes anyway.
+            "-mc", "0",
             "-osrt",
             "-of", &out_base,
             "--print-progress",

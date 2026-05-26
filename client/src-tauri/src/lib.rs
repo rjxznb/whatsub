@@ -37,6 +37,7 @@ pub fn run() {
             commands::library::reveal_in_explorer,
             commands::analysis::save_analysis,
             commands::analysis::load_analysis,
+            commands::analysis::delete_analysis,
             commands::analysis::load_transcript,
             commands::analysis::video_source_path,
             commands::analysis::write_text_file,

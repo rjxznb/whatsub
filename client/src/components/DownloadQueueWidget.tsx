@@ -271,6 +271,8 @@ function phaseText(item: UnifiedItem): string {
     }
   }
   switch (item.phase) {
+    case "transcribing":
+      return "重新转写中";
     case "analyzing":
       return "AI 解析";
     case "done":

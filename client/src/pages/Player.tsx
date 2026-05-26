@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, FileOutput } from "lucide-react";
+import { ArrowLeft, FileOutput, RefreshCw } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
@@ -22,7 +22,11 @@ import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
 import { dedupSubtitles } from "../store/analysis";
-import { runInBackground, takeOverBackground } from "../store/backgroundAnalyses";
+import {
+  runInBackground,
+  takeOverBackground,
+  retranscribeAndAnalyzeInBackground,
+} from "../store/backgroundAnalyses";
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
 import type { AnalysisResult, Subtitle, SrtCue } from "../llm/types";
@@ -87,6 +91,8 @@ export function Player() {
   const [videoSrc, setVideoSrc] = useState<string>("");
   const [exportMenu, setExportMenu] = useState<{ x: number; y: number } | null>(null);
   const exportButtonRef = useRef<HTMLButtonElement>(null);
+  const [reanalyzeMenu, setReanalyzeMenu] = useState<{ x: number; y: number } | null>(null);
+  const reanalyzeButtonRef = useRef<HTMLButtonElement>(null);
   const [showExportVideo, setShowExportVideo] = useState(false);
   const [autoScrollSubtitle, setAutoScrollSubtitle] = useState<boolean>(() => {
     const saved =
@@ -390,11 +396,54 @@ export function Player() {
         videoId,
         whisperModel: settings.whisperModel,
       });
-      // SRT is now on disk. Re-run the loader to parse it + kick off LLM.
+      // Clear the stale analysis so the reload re-runs the LLM from scratch
+      // against the NEW transcript. Otherwise the load effect finds a complete
+      // cached analysis (with a summary) and short-circuits to it — leaving the
+      // OLD translation pinned to the new SRT's timestamps. This is what makes
+      // re-analyze actually overwrite analysis.json.
+      await invoke("delete_analysis", { videoId });
+      // SRT is now on disk + cache cleared. Re-run the loader to parse it +
+      // kick off a fresh LLM analysis.
       setReloadKey((k) => k + 1);
     } catch (e) {
       analysis.setError(String(e));
     }
+  };
+
+  // Foreground 重新解析: re-run whisper + LLM in this view. Leaving the page
+  // stops it — the unmount cleanup kills the whisper/ffmpeg child (via
+  // cancel_import) and aborts the LLM stream (saving partial as paused).
+  const onReanalyzeForeground = () => {
+    if (!videoId || reanalyzeBusy) return;
+    const ok = window.confirm(
+      "重新解析会用 whisper 重新转写、并重新调用大模型分析，覆盖当前的字幕与翻译。\n\n在本页前台进行——若中途离开本页，转写/解析会被停止。确定继续？",
+    );
+    if (!ok) return;
+    void onRetranscribe();
+  };
+
+  // Background variant of 重新解析: fire the whisper + LLM re-run into the
+  // background queue and leave the page. The run is owned by
+  // backgroundAnalyses (not this component), so it survives navigation and
+  // flips the library status to ready when done. Progress shows in the
+  // bottom-right 「后台任务」 widget.
+  const onReanalyzeBackground = () => {
+    if (!videoId || reanalyzeBusy) return;
+    const ok = window.confirm(
+      "重新解析会用 whisper 重新转写、并重新调用大模型分析，覆盖当前的字幕与翻译。\n\n将在后台进行（你可以离开此页面，进度见右下角「后台任务」）。确定继续？",
+    );
+    if (!ok) return;
+    const e = library.videos.find((v) => v.id === videoId);
+    retranscribeAndAnalyzeInBackground({
+      videoId,
+      label: e?.title ?? videoId,
+      style: e?.analysisStyle ?? "colloquial",
+      whisperModel: settings.whisperModel,
+    });
+    // The BG job now owns this video's re-analysis; release the foreground
+    // store and return to Library.
+    useAnalysis.getState().reset();
+    navigate("/library");
   };
 
   useEffect(() => {
@@ -514,6 +563,23 @@ export function Player() {
             analysis: { ...cached, subtitles: cleanedCachedCues },
           });
         }
+        // Self-heal: a COMPLETE analysis is on disk but the library entry is
+        // still "analyzing"/"failed" — happens when a foreground re-analyze
+        // was interrupted by navigation right before it flipped the status.
+        // Repair it so the card stops showing "未完成".
+        {
+          const cur = useLibrary
+            .getState()
+            .library.videos.find((v) => v.id === videoId);
+          if (cur && cur.status !== "ready") {
+            await invoke("library_set_status", {
+              id: videoId,
+              status: "ready",
+              error: null,
+            });
+            await useLibrary.getState().reload();
+          }
+        }
         return;
       }
 
@@ -548,6 +614,17 @@ export function Player() {
       // since those reflect a real outcome we shouldn't overwrite.
       const cur = useAnalysis.getState();
       const ACTIVE = new Set(["downloading", "extracting", "transcribing", "analyzing"]);
+      // Foreground re-analyze: if whisper/ffmpeg is mid-flight when the user
+      // leaves the page, kill the child process — foreground analysis is tied
+      // to this view. After retranscribe_video returns it unregisters its
+      // cancel token, so this is a harmless no-op during the internal
+      // reloadKey re-run that follows a successful transcribe.
+      if (
+        cur.videoId === videoId &&
+        (cur.phase === "extracting" || cur.phase === "transcribing")
+      ) {
+        void invoke("cancel_import", { videoId }).catch(() => {});
+      }
       if (cur.videoId === videoId && ACTIVE.has(cur.phase)) {
         useAnalysis.setState({ phase: "paused" });
       }
@@ -641,6 +718,11 @@ export function Player() {
   }
 
   const canExport = analysis.subtitles.length > 0;
+  // Pipeline is mid-flight — disable re-analyze so the user can't stack a
+  // second whisper+LLM run on top of a running one.
+  const reanalyzeBusy = ["downloading", "extracting", "transcribing", "analyzing"].includes(
+    analysis.phase,
+  );
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100">
@@ -653,6 +735,23 @@ export function Player() {
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <div className="flex-1 truncate text-sm">{entry?.title ?? videoId}</div>
+        <button
+          type="button"
+          ref={reanalyzeButtonRef}
+          disabled={reanalyzeBusy}
+          onClick={(e) => {
+            if (reanalyzeMenu) {
+              setReanalyzeMenu(null);
+              return;
+            }
+            const r = e.currentTarget.getBoundingClientRect();
+            setReanalyzeMenu({ x: r.right - 200, y: r.bottom + 4 });
+          }}
+          title="重新解析（whisper + AI，覆盖现有字幕和翻译）"
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
+        >
+          <RefreshCw className="h-4 w-4" />
+        </button>
         <button
           type="button"
           ref={exportButtonRef}
@@ -804,6 +903,19 @@ export function Player() {
           </div>
         </div>
       </div>
+
+      {reanalyzeMenu && (
+        <ContextMenu
+          x={reanalyzeMenu.x}
+          y={reanalyzeMenu.y}
+          onClose={() => setReanalyzeMenu(null)}
+          anchorRef={reanalyzeButtonRef}
+          items={[
+            { label: "前台解析（留在本页，离开即停止）", onClick: onReanalyzeForeground },
+            { label: "后台解析（返回库，后台进行）", onClick: onReanalyzeBackground },
+          ]}
+        />
+      )}
 
       {exportMenu && (
         <ContextMenu

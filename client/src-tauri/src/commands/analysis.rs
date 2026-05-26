@@ -30,6 +30,19 @@ pub fn load_analysis(video_id: String) -> AppResult<Option<Value>> {
     Ok(Some(serde_json::from_str(&raw)?))
 }
 
+/// Remove a video's analysis.json. Used by the "重新解析" flow so a
+/// re-transcribe re-runs the LLM from scratch instead of the loader
+/// short-circuiting to the (now stale) cached analysis. Best-effort:
+/// a missing file is success.
+#[tauri::command]
+pub fn delete_analysis(video_id: String) -> AppResult<()> {
+    let path = paths::video_dir(&video_id)?.join("analysis.json");
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn load_transcript(video_id: String) -> AppResult<Option<String>> {
     let path = paths::video_dir(&video_id)?.join("transcript.srt");

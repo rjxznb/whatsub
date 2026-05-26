@@ -4,7 +4,8 @@ import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry 
 import { libraryQuota, type Quota } from "../lib/api/quota";
 import { useLibrary } from "../store/library";
 import { useMaterializing } from "../store/materializing";
-import { confirm, message } from "@tauri-apps/plugin-dialog";
+import { message } from "@tauri-apps/plugin-dialog";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
   /** Called when user closes the dialog (Esc, backdrop click, X button, 关闭). */
@@ -19,6 +20,13 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
   const [quota, setQuota] = useState<Quota | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // Themed confirm dialog (replaces the OS-native confirm()).
+  const [dialog, setDialog] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
   // Materialize state lives in a module-level store so the "正在后台下载…"
   // indicator persists across this dialog being closed + reopened.
   const materializeStatus = useMaterializing((s) => s.status);
@@ -59,8 +67,16 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  async function unsync(id: string, title: string) {
-    if (!(await confirm(`从云端下架「${title}」？\niOS 上将不再可见。本地条目不会被删。`))) return;
+  function unsync(id: string, title: string) {
+    setDialog({
+      title: "从云端下架？",
+      message: `「${title}」\n\niOS 上将不再可见。本地条目不会被删。`,
+      confirmLabel: "下架",
+      onConfirm: () => void doUnsync(id),
+    });
+  }
+
+  async function doUnsync(id: string) {
     setBusyIds(prev => new Set(prev).add(id));
     try {
       await unsyncFromCloud(id);
@@ -91,9 +107,18 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
     });
   }
 
-  async function unsyncAll() {
+  function unsyncAll() {
     if (!entries?.length) return;
-    if (!(await confirm(`从云端下架全部 ${entries.length} 条？\n本地条目不会被删。`))) return;
+    setDialog({
+      title: "下架全部？",
+      message: `从云端下架全部 ${entries.length} 条？\n\n本地条目不会被删。`,
+      confirmLabel: "全部下架",
+      onConfirm: () => void doUnsyncAll(),
+    });
+  }
+
+  async function doUnsyncAll() {
+    if (!entries?.length) return;
     // Sequential — fast enough for typical sizes (< 100 entries) and gives
     // partial-progress feedback if one fails.
     for (const e of entries) {
@@ -109,6 +134,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
   }
 
   return (
+    <>
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
@@ -237,5 +263,15 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
         )}
       </div>
     </div>
+    {dialog && (
+      <ConfirmDialog
+        title={dialog.title}
+        message={dialog.message}
+        confirmLabel={dialog.confirmLabel}
+        onConfirm={dialog.onConfirm}
+        onClose={() => setDialog(null)}
+      />
+    )}
+    </>
   );
 }

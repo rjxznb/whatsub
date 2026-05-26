@@ -32,9 +32,13 @@ export function ConfirmDialog({
 }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // stopPropagation so Esc/Enter don't also reach a parent modal's key
+      // handler (e.g. CloudSyncManager closing itself on Esc).
       if (e.key === "Escape") {
+        e.stopPropagation();
         onClose();
       } else if (e.key === "Enter") {
+        e.stopPropagation();
         onConfirm();
         onClose();
       }

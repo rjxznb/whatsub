@@ -69,13 +69,17 @@ export function SyncButton({ entry, onChanged }: Props) {
       useDownloadQueue.getState().remove(entry.id);
       const raw = String(err);
       setError(friendlySyncError(raw));
+      // All three upsells deep-link to /mobile#pro (where the Pro subscription
+      // card lives) — count, size, and duration are all subscription-tier
+      // capabilities, lifted unanimously by the same ¥12/月 product.
       if (raw.includes("quota_exceeded")) {
         setDialog({
           title: "云端视频已达上限",
-          message: "已达到云端视频数量上限。前往官网购买授权可解锁 50 个。",
-          confirmLabel: "前往购买",
+          message:
+            "云端视频数量已达免费上限 (3 个)。升级 Pro 会员 (¥12/月) 可解锁到 50 个。",
+          confirmLabel: "前往订阅",
           onConfirm: () =>
-            void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
+            void openUrl("https://whatsub.eversay.cc/mobile#pro").catch(() => {}),
         });
       } else if (raw.includes("video_too_large")) {
         // Per-video size cap (free 100MB / sub 500MB). Sub upsell since OSS storage
@@ -86,7 +90,7 @@ export function SyncButton({ entry, onChanged }: Props) {
             "该视频超过免费版限制 (100MB)。升级 Pro 会员 (¥12/月) 可同步 500MB 的视频。",
           confirmLabel: "前往订阅",
           onConfirm: () =>
-            void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
+            void openUrl("https://whatsub.eversay.cc/mobile#pro").catch(() => {}),
         });
       } else if (raw.includes("video_too_long")) {
         // Per-video duration cap (free 20min / sub 60min). Same upsell as size.
@@ -96,7 +100,7 @@ export function SyncButton({ entry, onChanged }: Props) {
             "该视频超过免费版限制 (20 分钟)。升级 Pro 会员 (¥12/月) 可同步 60 分钟的视频。",
           confirmLabel: "前往订阅",
           onConfirm: () =>
-            void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
+            void openUrl("https://whatsub.eversay.cc/mobile#pro").catch(() => {}),
         });
       }
     } finally {

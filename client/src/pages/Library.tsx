@@ -322,6 +322,7 @@ export function Library() {
           },
           {
             label: "删除文件夹",
+            description: "只删除这个文件夹本身，里面的视频会保留在库中，不会被删除。",
             onClick: async () => {
               try {
                 await deleteFolder(menu.folder.id);

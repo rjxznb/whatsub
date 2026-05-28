@@ -4,6 +4,10 @@ export interface ContextMenuItem {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  /** Optional hover hint shown as a themed tooltip next to the item.
+   *  Use when the action's behavior isn't obvious from the label alone
+   *  (e.g. "删除文件夹" — but only deletes the folder, not its videos). */
+  description?: string;
 }
 
 interface Props {
@@ -51,19 +55,30 @@ export function ContextMenu({ x, y, items, onClose, anchorRef }: Props) {
       className="fixed z-[100] bg-zinc-900 border border-zinc-700 rounded shadow-xl py-1 min-w-[180px]"
     >
       {items.map((item, i) => (
-        <button
-          key={i}
-          onClick={() => {
-            item.onClick();
-            onClose();
-          }}
-          className={
-            "w-full px-3 py-1.5 text-left text-sm hover:bg-zinc-800 " +
-            (item.danger ? "text-red-400" : "text-zinc-200")
-          }
-        >
-          {item.label}
-        </button>
+        // Wrapper + group so `group-hover:` reveals the description tooltip
+        // next to the row. `relative` anchors the tooltip's absolute pos.
+        <div key={i} className="group relative">
+          <button
+            onClick={() => {
+              item.onClick();
+              onClose();
+            }}
+            className={
+              "w-full px-3 py-1.5 text-left text-sm hover:bg-zinc-800 " +
+              (item.danger ? "text-red-400" : "text-zinc-200")
+            }
+          >
+            {item.label}
+          </button>
+          {item.description && (
+            <div
+              role="tooltip"
+              className="hidden group-hover:block absolute left-full top-0 ml-2 z-[110] w-56 px-2.5 py-1.5 rounded bg-zinc-800 border border-zinc-700 text-xs leading-relaxed text-zinc-300 shadow-lg pointer-events-none whitespace-normal"
+            >
+              {item.description}
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );

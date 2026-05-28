@@ -93,8 +93,13 @@ export function VideoCard({
         <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-400 pointer-events-none" />
       )}
       {dropFeedback?.mode === "merge" && (
-        <div className="absolute top-1 right-1 w-5 h-5 rounded-sm bg-amber-400 text-zinc-900 text-[10px] flex items-center justify-center font-bold pointer-events-none">
-          ＋
+        // Explain the action — same amber as the ring border so they read as
+        // one piece. pointer-events-none keeps the drag transparent through it.
+        <div className="absolute inset-x-2 top-2 flex justify-center pointer-events-none">
+          <div className="px-2.5 py-1 rounded-full bg-amber-400 text-zinc-900 text-[11px] font-semibold flex items-center gap-1 shadow-lg whitespace-nowrap">
+            <span className="text-sm leading-none">＋</span>
+            <span>合并为新文件夹</span>
+          </div>
         </div>
       )}
       {badge}

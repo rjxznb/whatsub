@@ -105,6 +105,20 @@ pub(crate) fn read_index() -> AppResult<Library> {
             .map(|v| LibraryItemRef::Video { id: v.id.clone() })
             .collect();
     } else {
+        // Self-heal: drop refs in top_level_order that no longer have a backing
+        // video / folder. Older delete paths (notably library_delete + the
+        // "下载到本地" placeholder error path) removed entries from `videos`
+        // without cleaning `top_level_order`; the dangling ref then made every
+        // set_top_level_order_in_memory call reject ("unknown video id ...")
+        // and the Library page's drag-reorder snap back on release.
+        let video_ids: std::collections::HashSet<String> =
+            lib.videos.iter().map(|v| v.id.clone()).collect();
+        let folder_ids: std::collections::HashSet<String> =
+            lib.folders.iter().map(|f| f.id.clone()).collect();
+        lib.top_level_order.retain(|r| match r {
+            LibraryItemRef::Video { id } => video_ids.contains(id),
+            LibraryItemRef::Folder { id } => folder_ids.contains(id),
+        });
         // Surface orphan videos — present in `videos` but neither in
         // `top_level_order` nor any folder. Background/queue imports upsert into
         // `videos` only, so without this they'd never show in the main Library
@@ -166,6 +180,14 @@ pub fn library_upsert(entry: LibraryEntry) -> AppResult<()> {
 pub fn library_delete(id: String) -> AppResult<()> {
     let mut lib = read_index()?;
     lib.videos.retain(|v| v.id != id);
+    // Also clean up references so a later reorder doesn't see this id dangling
+    // in top_level_order — set_top_level_order_in_memory used to reject the
+    // whole reorder on any unknown id, snapping the Library cards back.
+    lib.top_level_order
+        .retain(|r| !matches!(r, LibraryItemRef::Video { id: vid } if vid == &id));
+    for f in lib.folders.iter_mut() {
+        f.video_ids.retain(|vid| vid != &id);
+    }
     write_index(&lib)?;
     let dir = paths::video_dir(&id)?;
     if dir.exists() {
@@ -427,21 +449,24 @@ fn set_top_level_order_in_memory(
     lib: &mut Library,
     refs: Vec<LibraryItemRef>,
 ) -> Result<(), String> {
-    for r in &refs {
-        match r {
-            LibraryItemRef::Video { id } => {
-                if !lib.videos.iter().any(|v| &v.id == id) {
-                    return Err(format!("unknown video id {}", id));
-                }
-            }
-            LibraryItemRef::Folder { id } => {
-                if !lib.folders.iter().any(|f| &f.id == id) {
-                    return Err(format!("unknown folder id {}", id));
-                }
-            }
-        }
-    }
-    lib.top_level_order = refs;
+    // Tolerant: silently drop refs whose backing entry/folder no longer exists
+    // (rather than reject the whole reorder). The frontend builds the new list
+    // from its in-memory library.topLevelOrder which can contain stale refs
+    // left behind by earlier delete paths; rejecting here makes the user's
+    // drag-reorder snap back on release. We persist the cleaned list — the
+    // next library_list returns it and the UI converges.
+    let video_ids: std::collections::HashSet<String> =
+        lib.videos.iter().map(|v| v.id.clone()).collect();
+    let folder_ids: std::collections::HashSet<String> =
+        lib.folders.iter().map(|f| f.id.clone()).collect();
+    let cleaned: Vec<LibraryItemRef> = refs
+        .into_iter()
+        .filter(|r| match r {
+            LibraryItemRef::Video { id } => video_ids.contains(id),
+            LibraryItemRef::Folder { id } => folder_ids.contains(id),
+        })
+        .collect();
+    lib.top_level_order = cleaned;
     Ok(())
 }
 
@@ -647,6 +672,37 @@ mod tests {
         assert_eq!(lib.videos.len(), 0);
         assert!(lib.folders.is_empty());
         assert!(lib.top_level_order.is_empty());
+    }
+
+    #[test]
+    fn set_top_level_order_drops_dangling_refs_silently() {
+        // Regression: a stale ref in top_level_order (e.g. left behind by a
+        // failed 下载到本地 placeholder) used to make set_top_level_order_in_memory
+        // return Err("unknown video id …"), which the Library page's drag handler
+        // caught + reloaded from disk — visibly snapping cards back on release.
+        // Now: dangling refs are filtered out, the reorder still succeeds.
+        let mut lib = Library::default();
+        upsert_in_memory(&mut lib, sample("v1"));
+        upsert_in_memory(&mut lib, sample("v2"));
+        let res = set_top_level_order_in_memory(
+            &mut lib,
+            vec![
+                LibraryItemRef::Video { id: "v2".into() },
+                LibraryItemRef::Video { id: "ghost".into() }, // dangling
+                LibraryItemRef::Video { id: "v1".into() },
+            ],
+        );
+        assert!(res.is_ok(), "should tolerate a dangling ref, got {:?}", res);
+        assert_eq!(lib.top_level_order.len(), 2);
+        let ids: Vec<&str> = lib
+            .top_level_order
+            .iter()
+            .map(|r| match r {
+                LibraryItemRef::Video { id } => id.as_str(),
+                LibraryItemRef::Folder { id } => id.as_str(),
+            })
+            .collect();
+        assert_eq!(ids, vec!["v2", "v1"]);
     }
 
     #[test]

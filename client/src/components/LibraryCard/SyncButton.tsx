@@ -111,8 +111,13 @@ export function SyncButton({ entry, onChanged }: Props) {
     if (state === "idle") {
       setDialog({
         title: "同步到云？",
+        // Cap notice up-front so users don't discover the limit by failure.
+        // Generic ("免费 / Pro" instead of fetching the user's tier) keeps
+        // the dialog stateless — sub status is shown unambiguously by what
+        // gets rejected on confirm.
         message:
-          "上传字幕 + 视频到云端，手机 / 其他设备的 whatSub 可免 VPN 观看。",
+          "上传字幕 + 视频到云端，手机 / 其他设备的 whatSub 可免 VPN 观看。\n\n" +
+          "单个视频上限：免费 100MB / 20 分钟，Pro 会员 500MB / 60 分钟。",
         confirmLabel: "同步",
         onConfirm: () => void doSync(),
       });

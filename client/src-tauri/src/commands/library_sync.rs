@@ -31,6 +31,28 @@ pub struct SyncOk {
     pub video_uploaded: bool,
 }
 
+/// GET /api/library/quota response. `limits` was added 2026-05-26 (per-video
+/// size + duration tier). `serde(default)` keeps deserialization backward-
+/// compat with older backends that only returned {used, limit}.
+#[derive(serde::Deserialize)]
+struct QuotaResp {
+    used: i64,
+    limit: i64,
+    #[serde(default)]
+    limits: Option<LibraryLimitsResp>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct LibraryLimitsResp {
+    #[serde(rename = "maxVideos")]
+    #[allow(dead_code)]
+    max_videos: i64,
+    #[serde(rename = "maxVideoBytes")]
+    max_video_bytes: i64,
+    #[serde(rename = "maxVideoSeconds")]
+    max_video_seconds: i64,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct CloudLibraryEntry {
     pub id: String,
@@ -113,16 +135,17 @@ pub async fn library_sync_to_cloud(
         }
     };
 
-    // Quota pre-check: only for NEW cloud videos (not re-syncs of an already-
-    // uploaded entry). If used >= limit we return early WITHOUT uploading so no
-    // orphan OSS object is created. If the GET /quota request itself fails
-    // (network/parse) we fall through and let the POST /sync backstop enforce.
-    if entry.synced_at.is_none() {
-        #[derive(serde::Deserialize)]
-        struct QuotaResp {
-            used: i64,
-            limit: i64,
-        }
+    // Pre-checks: always fetch /quota (cheap), use it for:
+    //   (a) count enforcement on NEW uploads (`used >= limit` → 403-equivalent)
+    //   (b) per-video DURATION cap pre-transcode (save ~30s-2min of CPU on
+    //       over-limit videos — the cheapest fence)
+    //   (c) Carry `limits` forward to upload_video for the post-transcode SIZE
+    //       check (matches the backend's HEAD backstop)
+    // Existing data policy: count + duration only enforce on NEW uploads —
+    // re-syncs of already-uploaded entries keep working. Size still enforces
+    // since a re-sync that re-uploads is effectively a new OSS object.
+    let mut limits_for_upload: Option<LibraryLimitsResp> = None;
+    {
         let quota_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
             .build();
@@ -135,23 +158,42 @@ pub async fn library_sync_to_cloud(
             if let Ok(qresp) = quota_result {
                 if let Ok(qtext) = qresp.text().await {
                     if let Ok(q) = serde_json::from_str::<QuotaResp>(&qtext) {
-                        if q.used >= q.limit {
+                        if entry.synced_at.is_none() && q.used >= q.limit {
                             return Err(format!(
                                 "quota_exceeded {{\"used\":{}, \"limit\":{}}}",
                                 q.used, q.limit
                             ));
                         }
+                        if entry.synced_at.is_none() {
+                            if let Some(ref lim) = q.limits {
+                                if entry.duration_sec > lim.max_video_seconds as f64 {
+                                    return Err(format!(
+                                        "video_too_long {{\"duration\":{}, \"limit\":{}}}",
+                                        entry.duration_sec as i64, lim.max_video_seconds
+                                    ));
+                                }
+                            }
+                        }
+                        limits_for_upload = q.limits;
                     }
                 }
             }
         }
     }
 
-    // Transcode source.mp4 → 720p mobile.mp4, request a presigned PUT, upload
-    // direct to OSS. Best-effort: any failure → no videoKey → iOS falls back to
-    // the YouTube embed for this entry.
-    let video_key: Option<String> =
-        upload_video(&app, video_dir, &id, &auth_state.session_token, entry.duration_sec).await;
+    // Transcode source.mp4 → 720p mobile.mp4, size-check the result, request a
+    // presigned PUT, upload to OSS. Ok(Some(key)) on success, Ok(None) on
+    // best-effort failure (caller syncs captions-only → iOS falls back to
+    // YouTube embed), Err(msg) on user-facing hard errors (video_too_large).
+    let video_key: Option<String> = upload_video(
+        &app,
+        video_dir,
+        &id,
+        &auth_state.session_token,
+        entry.duration_sec,
+        limits_for_upload,
+    )
+    .await?;
 
     // 4. POST
     let body = serde_json::json!({
@@ -323,31 +365,63 @@ pub async fn library_list_synced<R: Runtime>(
     Ok(out)
 }
 
-/// Transcode source.mp4 → 720p mobile.mp4, obtain a presigned PUT URL from
-/// the backend, and upload straight to OSS. Returns the `videoKey` on success.
-/// Fully best-effort: any step failure returns `None` (caller omits videoKey →
-/// iOS falls back to the YouTube embed).
+/// Transcode source.mp4 → 720p mobile.mp4, size-check the result, obtain a
+/// presigned PUT URL, upload straight to OSS.
+///
+/// Returns:
+/// - `Ok(Some(key))` — uploaded; caller writes videoKey into /sync.
+/// - `Ok(None)` — best-effort failure (no source / transcode failed / network
+///   hiccup on /upload-url or OSS PUT). Caller syncs captions-only → iOS
+///   falls back to the YouTube embed.
+/// - `Err(msg)` — user-facing hard error to display: `video_too_large
+///   {bytes, limit}` or `http 413: ...`. Bubbles out of library_sync_to_cloud
+///   via `?` so the TS friendlySyncError can show the upsell dialog.
 async fn upload_video(
     app: &AppHandle,
     video_dir: &str,
     id: &str,
     token: &str,
     duration_sec: f64,
-) -> Option<String> {
+    limits: Option<LibraryLimitsResp>,
+) -> Result<Option<String>, String> {
     let src = std::path::Path::new(video_dir).join("source.mp4");
     if !src.exists() {
-        return None;
+        return Ok(None);
     }
     let mobile = std::path::Path::new(video_dir).join("mobile.mp4");
 
-    // Step 1: transcode to 720p H.264 (never upscales)
+    // Step 1: transcode to 720p H.264 (never upscales). Best-effort.
     if let Err(e) = crate::pipeline::ffmpeg::transcode_720p(app, &src, &mobile, id, duration_sec, None).await {
         eprintln!("[upload_video] {id}: transcode failed: {e}");
-        return None;
+        return Ok(None);
     }
 
-    // Transcode done — signal the PUT phase (frontend shows an indeterminate
-    // "正在上传…" spinner; we don't track byte-level PUT progress).
+    // Step 2: read transcoded bytes + client-side size pre-check. Doing it
+    // BEFORE /upload-url means a violator never even gets a presigned URL —
+    // matches the backend's claimed-contentLength check. Backend /sync HEAD
+    // re-verifies as backstop against a malicious client that forges this.
+    let bytes = match std::fs::read(&mobile) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[upload_video] {id}: mobile.mp4 read failed: {e}");
+            return Ok(None);
+        }
+    };
+    let size_mb = bytes.len() / 1_000_000;
+
+    if let Some(ref lim) = limits {
+        if (bytes.len() as i64) > lim.max_video_bytes {
+            let _ = std::fs::remove_file(&mobile);
+            return Err(format!(
+                "video_too_large {{\"bytes\":{}, \"limit\":{}}}",
+                bytes.len(),
+                lim.max_video_bytes
+            ));
+        }
+    }
+
+    // Transcode + size-check done — signal the PUT phase (frontend shows an
+    // indeterminate "正在上传…" spinner; we don't track byte-level PUT progress).
     crate::core::progress::emit(
         app,
         crate::core::progress::PipelineEvent::Uploading {
@@ -356,11 +430,13 @@ async fn upload_video(
         },
     );
 
-    // Step 2: request a presigned PUT URL from the backend
+    // Step 3: request a presigned PUT URL. Send contentLength + durationSec so
+    // the server can early-fail with 413 even if our client-side check missed
+    // (e.g. older client + new limits, or limits not fetched).
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
         .build()
-        .ok()?;
+        .map_err(|e| format!("client build: {e}"))?;
 
     #[derive(serde::Deserialize)]
     struct UploadUrl {
@@ -374,37 +450,69 @@ async fn upload_video(
         .post(format!("{API_BASE}/upload-url"))
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
-        .body(serde_json::json!({ "id": id, "contentType": "video/mp4" }).to_string())
+        .body(
+            serde_json::json!({
+                "id": id,
+                "contentType": "video/mp4",
+                "contentLength": bytes.len() as i64,
+                "durationSec": duration_sec as i64,
+            })
+            .to_string(),
+        )
         .send()
         .await
     {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[upload_video] {id}: /upload-url request failed: {e}");
-            return None;
+            let _ = std::fs::remove_file(&mobile);
+            return Ok(None);
         }
     };
+
+    // 413 is a USER-FACING error (over limit) — propagate, don't degrade to
+    // captions-only. Other HTTP errors are best-effort (network / 5xx).
+    if uu_resp.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+        let body = uu_resp.text().await.unwrap_or_default();
+        let _ = std::fs::remove_file(&mobile);
+        return Err(format!("http 413: {}", truncate(&body, 200)));
+    }
     let uu_resp = match uu_resp.error_for_status() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[upload_video] {id}: /upload-url HTTP error: {e}");
-            return None;
+            let _ = std::fs::remove_file(&mobile);
+            return Ok(None);
         }
     };
-    let uu_text = uu_resp.text().await.ok()?;
-    let uu: UploadUrl = serde_json::from_str(&uu_text).ok()?;
+    let uu_text = match uu_resp.text().await {
+        Ok(t) => t,
+        Err(_) => {
+            let _ = std::fs::remove_file(&mobile);
+            return Ok(None);
+        }
+    };
+    let uu: UploadUrl = match serde_json::from_str(&uu_text) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = std::fs::remove_file(&mobile);
+            return Ok(None);
+        }
+    };
 
-    // Step 3: PUT the file straight to OSS.
+    // Step 4: PUT the file straight to OSS.
     // Content-Type MUST exactly match the presigned signature ("video/mp4").
-    let bytes = std::fs::read(&mobile).ok()?;
-    let size_mb = bytes.len() / 1_000_000;
     eprintln!("[upload_video] {id}: uploading {size_mb} MB to OSS…");
     // Generous timeout — a multi-hundred-MB 720p file over a home upstream can
     // take many minutes; the old 120s timed out on long videos (e.g. full games).
-    let put_resp = match reqwest::Client::builder()
+    let put_client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30 * 60))
         .build()
-        .ok()?
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    let put_resp = match put_client
         .put(&uu.put_url)
         .header("content-type", "video/mp4")
         .body(bytes)
@@ -414,20 +522,20 @@ async fn upload_video(
         Ok(r) => r,
         Err(e) => {
             eprintln!("[upload_video] {id}: OSS PUT failed ({size_mb} MB, timeout/network): {e}");
-            return None;
+            return Ok(None);
         }
     };
 
     if !put_resp.status().is_success() {
         eprintln!("[upload_video] {id}: OSS PUT rejected: HTTP {}", put_resp.status());
-        return None;
+        return Ok(None);
     }
 
     // Clean up the temp transcoded file after a successful upload.
     let _ = std::fs::remove_file(&mobile);
 
     eprintln!("[upload_video] {id}: OSS upload OK ({size_mb} MB), key={}", uu.video_key);
-    Some(uu.video_key)
+    Ok(Some(uu.video_key))
 }
 
 #[tauri::command]

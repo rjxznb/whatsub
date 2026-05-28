@@ -33,7 +33,10 @@ export async function materializeFromCloud(id: string): Promise<void> {
   await invoke("library_materialize_from_cloud", { id });
 }
 
-/** Maps the prefixed Rust error strings to friendly Chinese for tooltips/dialogs. */
+/** Maps the prefixed Rust error strings to friendly Chinese for tooltips/dialogs.
+ *  Two error shapes for per-video-cap rejections (free 100MB/20min, sub 500MB/60min):
+ *    - Client pre-check: `video_too_large {"bytes":N,"limit":M}` / `video_too_long {...}`
+ *    - Backend backstop: `http 413: {"error":"video_too_large", ...}` (same shape, wrapped) */
 export function friendlySyncError(raw: string): string {
   if (raw === "auth_required") return "需要先登录";
   if (raw === "not_found") return "本地条目找不到";
@@ -48,9 +51,27 @@ export function friendlySyncError(raw: string): string {
     const tail = m ? `（${m[1]}/${m[2]}）` : "";
     return `云端视频已达上限${tail}：删掉一些已同步的，或购买授权解锁 50 个`;
   }
+  if (raw.includes("video_too_large")) {
+    const m = raw.match(/"bytes":\s*(\d+).*?"limit":\s*(\d+)/);
+    const tail = m ? `（${fmtMB(+m[1])} > 上限 ${fmtMB(+m[2])}）` : "";
+    return `视频文件超过上限${tail}：升级 Pro 会员可同步更大视频`;
+  }
+  if (raw.includes("video_too_long")) {
+    const m = raw.match(/"duration":\s*(\d+).*?"limit":\s*(\d+)/);
+    const tail = m ? `（${fmtMin(+m[1])} > 上限 ${fmtMin(+m[2])}）` : "";
+    return `视频时长超过上限${tail}：升级 Pro 会员可同步更长视频`;
+  }
   if (raw === "video_upload_failed") {
     return "视频上传失败 · 点重试上传（字幕已同步，手机暂需 VPN）";
   }
   if (raw.startsWith("http ")) return `服务器返回 ${raw}`;
   return raw;
+}
+
+function fmtMB(bytes: number): string {
+  // 1 MiB rounding so 100 * 1024 * 1024 renders as 100MB.
+  return `${Math.round(bytes / (1024 * 1024))}MB`;
+}
+function fmtMin(seconds: number): string {
+  return `${Math.round(seconds / 60)}分钟`;
 }

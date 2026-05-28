@@ -77,6 +77,27 @@ export function SyncButton({ entry, onChanged }: Props) {
           onConfirm: () =>
             void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
         });
+      } else if (raw.includes("video_too_large")) {
+        // Per-video size cap (free 100MB / sub 500MB). Sub upsell since OSS storage
+        // + CDN egress are recurring costs; one-time license alone doesn't move the cap.
+        setDialog({
+          title: "视频文件超过上限",
+          message:
+            "该视频超过免费版限制 (100MB)。升级 Pro 会员 (¥12/月) 可同步 500MB 的视频。",
+          confirmLabel: "前往订阅",
+          onConfirm: () =>
+            void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
+        });
+      } else if (raw.includes("video_too_long")) {
+        // Per-video duration cap (free 20min / sub 60min). Same upsell as size.
+        setDialog({
+          title: "视频时长超过上限",
+          message:
+            "该视频超过免费版限制 (20 分钟)。升级 Pro 会员 (¥12/月) 可同步 60 分钟的视频。",
+          confirmLabel: "前往订阅",
+          onConfirm: () =>
+            void openUrl("https://whatsub.eversay.cc/#pricing").catch(() => {}),
+        });
       }
     } finally {
       setBusy(false);

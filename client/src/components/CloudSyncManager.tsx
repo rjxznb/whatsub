@@ -155,7 +155,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
                     ? "text-amber-300 bg-amber-400/10 border-amber-400/40"
                     : "text-zinc-400 bg-zinc-800 border-white/10"
                 }`}
-                title="云端视频额度（订阅 50 / 免费 3）"
+                title="云端视频额度（订阅 50 个 · 单个 500MB / 60 分钟　|　免费 3 个 · 单个 100MB / 20 分钟）"
               >
                 配额 {quota.used}/{quota.limit}
               </span>

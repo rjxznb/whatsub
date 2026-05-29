@@ -198,3 +198,55 @@ pub async fn transcode_720p(
     .await?;
     Ok(())
 }
+
+/// Extract a small mono AAC sidecar (.m4a) from the already-transcoded mp4.
+/// Used by `library_sync_to_cloud` (2026-05-29 audio sidecar feature) so iOS
+/// practice modes can fetch ~3-5% of the bytes (audio only) instead of pulling
+/// MP4 byte ranges that mostly contain video frames they don't display.
+///
+/// Cheap relative to the main transcode — re-encodes audio only (mobile.mp4
+/// is already h264+AAC, so video is skipped entirely with -vn). Typical 30-min
+/// video: ~5-10 seconds on a laptop CPU. +faststart so the moov atom is at
+/// the front for instant byte-range startup over CDN.
+///
+/// No cancellation token: the caller (upload_video) runs this best-effort
+/// after the video PUT succeeds; a hard cancellation isn't needed at this
+/// stage of the pipeline. No progress emission for the same reason — UI is
+/// already at "uploading 100%" by the time this runs.
+pub async fn extract_audio_aac(
+    app: &AppHandle,
+    src_mp4: &Path,
+    dst_m4a: &Path,
+    video_id: &str,
+) -> AppResult<()> {
+    let src = src_mp4.to_string_lossy().to_string();
+    let out = dst_m4a.to_string_lossy().to_string();
+    let app_for_log = app.clone();
+    let vid = video_id.to_string();
+    let log = move |line: &str| {
+        emit(
+            &app_for_log,
+            PipelineEvent::Log {
+                video_id: vid.clone(),
+                source: "ffmpeg-audio".into(),
+                line: line.into(),
+            },
+        );
+    };
+    run_sidecar(
+        app,
+        "ffmpeg",
+        &[
+            "-y", "-i", &src,
+            "-vn",                       // no video
+            "-c:a", "aac", "-b:a", "64k", // 64 kbps AAC
+            "-ac", "1",                  // mono
+            "-movflags", "+faststart",   // moov atom at the front for fast byte-range startup
+            &out,
+        ],
+        log,
+        None, // no cancellation — fast + best-effort
+    )
+    .await?;
+    Ok(())
+}

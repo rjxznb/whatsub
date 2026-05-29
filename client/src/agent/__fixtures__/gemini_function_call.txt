@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"text":"Let me check."}],"role":"model"}}]}
+
+data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"list_library","args":{"filter":"medical"}}}],"role":"model"},"finishReason":"STOP"}]}
+

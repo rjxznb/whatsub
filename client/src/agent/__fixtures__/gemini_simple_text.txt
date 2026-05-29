@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"}}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":" there."}],"role":"model"},"finishReason":"STOP"}]}
+

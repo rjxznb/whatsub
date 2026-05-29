@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "../../types/agent";
+import { ToolCallCard } from "./ToolCallCard";
 
 interface Props {
   msg: AssistantMessage;
@@ -27,10 +28,10 @@ export function AssistantBubble({ msg, streaming }: Props) {
             );
           }
           return (
-            <ToolCallPlaceholder
+            <ToolCallCard
               key={i}
-              name={b.name}
-              callId={b.callId}
+              callBlock={b}
+              parentStreaming={streaming}
             />
           );
         })}
@@ -41,24 +42,6 @@ export function AssistantBubble({ msg, streaming }: Props) {
           <div className="text-xs text-zinc-500">已停止</div>
         )}
       </div>
-    </div>
-  );
-}
-
-interface ToolCallPlaceholderProps {
-  name: string;
-  callId: string;
-  status?: string;
-}
-
-/**
- * Placeholder for tool_call blocks. T23 will replace this with the real
- * ToolCallCard component (1-line import swap).
- */
-export function ToolCallPlaceholder({ name }: ToolCallPlaceholderProps) {
-  return (
-    <div className="my-2 px-3 py-2 bg-zinc-800/50 border border-zinc-700 rounded text-xs text-zinc-300">
-      🔧 工具调用：{name}
     </div>
   );
 }

@@ -4,8 +4,10 @@ import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, Che
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
 import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
+import { useAgent } from "../store/agent";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
@@ -318,6 +320,8 @@ export function Settings() {
         <LicenseSection />
 
         <UpdateSection />
+
+        <ClearAgentHistorySection />
 
       </div>
     </div>
@@ -987,6 +991,45 @@ function UpdateSection() {
         {status.type === "installing" && (
           <span className="text-xs text-blue-300">安装中，即将重启...</span>
         )}
+      </div>
+    </section>
+  );
+}
+
+function ClearAgentHistorySection() {
+  const [clearing, setClearing] = useState(false);
+
+  async function handleClear() {
+    try {
+      const ok = await tauriConfirm("确认清空所有 AI 助手历史？此操作不可撤销。", {
+        title: "清空 AI 助手历史",
+        okLabel: "清空",
+        cancelLabel: "取消",
+        kind: "warning",
+      });
+      if (ok) {
+        setClearing(true);
+        useAgent.getState().clearAll();
+        setClearing(false);
+      }
+    } catch (e) {
+      console.warn("[Settings] clear agent history failed:", e);
+      setClearing(false);
+    }
+  }
+
+  return (
+    <section className="border-t border-zinc-800 pt-6">
+      <h2 className="font-semibold mb-3">AI 助手</h2>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleClear}
+          disabled={clearing}
+          className="px-3 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 text-rose-200 text-sm rounded disabled:opacity-50 transition-colors"
+        >
+          {clearing ? "清空中..." : "清空 AI 助手历史"}
+        </button>
       </div>
     </section>
   );

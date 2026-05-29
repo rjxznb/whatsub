@@ -3,8 +3,8 @@ import { TOOLS, getTool, listTools } from "./registry";
 import type { ToolDef } from "./types";
 
 describe("registry", () => {
-  it("TOOLS includes the registered tools (18 so far through T18)", () => {
-    expect(TOOLS.length).toBeGreaterThanOrEqual(18);
+  it("TOOLS has exactly 21 entries (spec contract) — through T19", () => {
+    expect(TOOLS.length).toBe(21);
     expect(TOOLS.map((t) => t.id)).toEqual(
       expect.arrayContaining([
         "corpus_browse",
@@ -25,6 +25,9 @@ describe("registry", () => {
         "sync_to_cloud",
         "materialize_from_cloud",
         "import_video",
+        "delete_video",
+        "unsync_from_cloud",
+        "retranscribe_video",
       ]),
     );
   });

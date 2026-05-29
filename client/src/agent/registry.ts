@@ -17,6 +17,9 @@ import { vocabUpdateNoteTool } from "./tools/vocab_update_note";
 import { syncToCloudTool } from "./tools/sync_to_cloud";
 import { materializeFromCloudTool } from "./tools/materialize_from_cloud";
 import { importVideoTool } from "./tools/import_video";
+import { deleteVideoTool } from "./tools/delete_video";
+import { unsyncFromCloudTool } from "./tools/unsync_from_cloud";
+import { retranscribeVideoTool } from "./tools/retranscribe_video";
 
 /** Tools are registered here. T14-T19 push their tools onto this array via
  *  static imports + the spread pattern; v1 keeps the registry static (no
@@ -45,6 +48,10 @@ export const TOOLS: ToolDef[] = [
   syncToCloudTool as unknown as ToolDef,
   materializeFromCloudTool as unknown as ToolDef,
   importVideoTool as unknown as ToolDef,
+  // library HIGH (T19)
+  deleteVideoTool as unknown as ToolDef,
+  unsyncFromCloudTool as unknown as ToolDef,
+  retranscribeVideoTool as unknown as ToolDef,
 ];
 
 export function getTool(id: string): ToolDef | undefined {

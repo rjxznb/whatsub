@@ -9,6 +9,7 @@ import { subtitlesToSrt, sanitizeFilename } from "../utils/srt";
 import { useAnalysis } from "../store/analysis";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
+import { usePlayerState } from "../store/playerState";
 import { useVocabulary } from "../store/vocab";
 import { loadAllDrafts, subscribeDrafts } from "../store/vocabDraft";
 import { makeVocabId } from "../types/vocab";
@@ -633,6 +634,28 @@ export function Player() {
   }, [videoId, reloadKey]);
 
   const currentIdx = useVideoSync(videoRef, analysis.subtitles);
+
+  // Bridge: expose active video to the AI Agent's ContextBuilder without
+  // coupling Player.tsx internals to the agent module. setActive on mount,
+  // clear on unmount.
+  useEffect(() => {
+    if (videoId && entry?.title) {
+      usePlayerState.getState().setActive({ videoId, videoTitle: entry.title });
+    }
+    return () => usePlayerState.getState().clear();
+  }, [videoId, entry?.title]);
+
+  // Throttle currentIdx + currentTime writes to 500ms (spec §7.4) — useVideoSync
+  // updates every frame; pushing each tick into zustand would thrash subscribers.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      usePlayerState.getState().setCue({
+        currentIdx: currentIdx >= 0 ? currentIdx : null,
+        currentTime: videoRef.current?.currentTime ?? null,
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, [currentIdx]);
 
   // Map of vocab entries saved from the CURRENT video, keyed by lowercased+
   // trimmed expression (= VocabEntry.id). Used by SubtitleList to render

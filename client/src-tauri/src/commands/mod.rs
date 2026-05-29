@@ -10,3 +10,4 @@ pub mod yt_dlp;
 pub mod auth;
 pub mod corpus;
 pub mod library_sync;
+pub mod agent;

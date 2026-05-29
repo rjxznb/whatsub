@@ -28,6 +28,12 @@ pub fn trial_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("trial.json"))
 }
 
+/// Returns %APPDATA%/whatsub/agent_history.json — AI agent conversation
+/// history persistence (capped at 5MB; oldest conversations dropped first).
+pub fn agent_history_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("agent_history.json"))
+}
+
 /// Multi-site cookie jar (JSON, source of truth). Holds per-site
 /// buckets keyed by site_key. Always re-derive cookies.txt from this.
 pub fn cookies_jar_path() -> Result<PathBuf, String> {

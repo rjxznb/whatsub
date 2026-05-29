@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { usePlayerState } from "./playerState";
 
 beforeEach(() => {
@@ -30,5 +30,17 @@ describe("usePlayerState", () => {
     usePlayerState.getState().setCue({ currentIdx: 5, currentTime: 12.3 });
     usePlayerState.getState().clear();
     expect(usePlayerState.getState().videoId).toBeNull();
+  });
+  it("setSeekHandler stores the fn; null clears it", () => {
+    const fn = vi.fn();
+    usePlayerState.getState().setSeekHandler(fn);
+    expect(usePlayerState.getState().seekHandler).toBe(fn);
+    usePlayerState.getState().setSeekHandler(null);
+    expect(usePlayerState.getState().seekHandler).toBeNull();
+  });
+  it("clear also nulls seekHandler", () => {
+    usePlayerState.getState().setSeekHandler(vi.fn());
+    usePlayerState.getState().clear();
+    expect(usePlayerState.getState().seekHandler).toBeNull();
   });
 });

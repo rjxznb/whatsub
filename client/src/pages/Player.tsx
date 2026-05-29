@@ -645,6 +645,17 @@ export function Player() {
     return () => usePlayerState.getState().clear();
   }, [videoId, entry?.title]);
 
+  // Bridge: register a seek callback on mount so the AI Agent's
+  // seek_to_time / jump_to_cue tools can drive playback without importing
+  // Player.tsx internals. Empty deps — videoRef is captured via closure
+  // and points to the same element for the lifetime of this mount.
+  useEffect(() => {
+    usePlayerState.getState().setSeekHandler((sec) => {
+      if (videoRef.current) videoRef.current.currentTime = sec;
+    });
+    return () => usePlayerState.getState().setSeekHandler(null);
+  }, []);
+
   // Throttle currentIdx + currentTime writes to 500ms (spec §7.4) — useVideoSync
   // updates every frame; pushing each tick into zustand would thrash subscribers.
   useEffect(() => {

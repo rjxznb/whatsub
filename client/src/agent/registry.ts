@@ -3,15 +3,25 @@ import { corpusBrowseTool } from "./tools/corpus_browse";
 import { corpusPhraseDetailTool } from "./tools/corpus_phrase_detail";
 import { listLibraryTool } from "./tools/list_library";
 import { listVocabTool } from "./tools/list_vocab";
+import { openVideoTool } from "./tools/open_video";
+import { openPageTool } from "./tools/open_page";
+import { seekToTimeTool } from "./tools/seek_to_time";
+import { jumpToCueTool } from "./tools/jump_to_cue";
 
 /** Tools are registered here. T14-T19 push their tools onto this array via
  *  static imports + the spread pattern; v1 keeps the registry static (no
  *  dynamic register() API to avoid plug-in surface). */
 export const TOOLS: ToolDef[] = [
+  // discovery (T14)
   corpusBrowseTool as unknown as ToolDef,
   corpusPhraseDetailTool as unknown as ToolDef,
   listLibraryTool as unknown as ToolDef,
   listVocabTool as unknown as ToolDef,
+  // navigation (T15)
+  openVideoTool as unknown as ToolDef,
+  openPageTool as unknown as ToolDef,
+  seekToTimeTool as unknown as ToolDef,
+  jumpToCueTool as unknown as ToolDef,
 ];
 
 export function getTool(id: string): ToolDef | undefined {

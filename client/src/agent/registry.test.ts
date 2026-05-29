@@ -3,14 +3,18 @@ import { TOOLS, getTool, listTools } from "./registry";
 import type { ToolDef } from "./types";
 
 describe("registry", () => {
-  it("TOOLS includes the registered tools (4 so far in T14)", () => {
-    expect(TOOLS.length).toBeGreaterThanOrEqual(4);
+  it("TOOLS includes the registered tools (8 so far through T15)", () => {
+    expect(TOOLS.length).toBeGreaterThanOrEqual(8);
     expect(TOOLS.map((t) => t.id)).toEqual(
       expect.arrayContaining([
         "corpus_browse",
         "corpus_phrase_detail",
         "list_library",
         "list_vocab",
+        "open_video",
+        "open_page",
+        "seek_to_time",
+        "jump_to_cue",
       ]),
     );
   });

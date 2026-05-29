@@ -3,8 +3,8 @@ import { TOOLS, getTool, listTools } from "./registry";
 import type { ToolDef } from "./types";
 
 describe("registry", () => {
-  it("TOOLS includes the registered tools (12 so far through T16)", () => {
-    expect(TOOLS.length).toBeGreaterThanOrEqual(12);
+  it("TOOLS includes the registered tools (15 so far through T17)", () => {
+    expect(TOOLS.length).toBeGreaterThanOrEqual(15);
     expect(TOOLS.map((t) => t.id)).toEqual(
       expect.arrayContaining([
         "corpus_browse",
@@ -19,6 +19,9 @@ describe("registry", () => {
         "generate_quiz",
         "mark_liaisons",
         "translate_phrase",
+        "vocab_add",
+        "vocab_remove",
+        "vocab_update_note",
       ]),
     );
   });

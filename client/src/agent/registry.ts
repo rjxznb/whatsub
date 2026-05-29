@@ -11,6 +11,9 @@ import { explainPassageTool } from "./tools/explain_passage";
 import { generateQuizTool } from "./tools/generate_quiz";
 import { markLiaisonsTool } from "./tools/mark_liaisons";
 import { translatePhraseTool } from "./tools/translate_phrase";
+import { vocabAddTool } from "./tools/vocab_add";
+import { vocabRemoveTool } from "./tools/vocab_remove";
+import { vocabUpdateNoteTool } from "./tools/vocab_update_note";
 
 /** Tools are registered here. T14-T19 push their tools onto this array via
  *  static imports + the spread pattern; v1 keeps the registry static (no
@@ -31,6 +34,10 @@ export const TOOLS: ToolDef[] = [
   generateQuizTool as unknown as ToolDef,
   markLiaisonsTool as unknown as ToolDef,
   translatePhraseTool as unknown as ToolDef,
+  // vocab write (T17)
+  vocabAddTool as unknown as ToolDef,
+  vocabRemoveTool as unknown as ToolDef,
+  vocabUpdateNoteTool as unknown as ToolDef,
 ];
 
 export function getTool(id: string): ToolDef | undefined {

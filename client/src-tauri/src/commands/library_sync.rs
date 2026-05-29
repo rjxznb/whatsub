@@ -53,6 +53,16 @@ struct LibraryLimitsResp {
     max_video_seconds: i64,
 }
 
+/// Return value of `upload_video` (since 2026-05-29 audio sidecar feature).
+/// `audio_key` is None when the best-effort audio extract/upload failed; iOS
+/// gracefully falls back to fetching from the video URL in that case. The
+/// video_key is non-optional because video upload failure short-circuits to
+/// `Ok(None)` before constructing this struct.
+struct UploadedKeys {
+    video_key: String,
+    audio_key: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct CloudLibraryEntry {
     pub id: String,
@@ -185,7 +195,7 @@ pub async fn library_sync_to_cloud(
     // presigned PUT, upload to OSS. Ok(Some(key)) on success, Ok(None) on
     // best-effort failure (caller syncs captions-only → iOS falls back to
     // YouTube embed), Err(msg) on user-facing hard errors (video_too_large).
-    let video_key: Option<String> = upload_video(
+    let uploaded: Option<UploadedKeys> = upload_video(
         &app,
         video_dir,
         &id,
@@ -194,6 +204,8 @@ pub async fn library_sync_to_cloud(
         limits_for_upload,
     )
     .await?;
+    let video_key: Option<String> = uploaded.as_ref().map(|u| u.video_key.clone());
+    let audio_key: Option<String> = uploaded.as_ref().and_then(|u| u.audio_key.clone());
 
     // 4. POST
     let body = serde_json::json!({
@@ -211,6 +223,7 @@ pub async fn library_sync_to_cloud(
         "analysisJson": analysis_json,
         "thumbData": thumb_b64,
         "videoKey": video_key,
+        "audioKey": audio_key,
     });
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -366,13 +379,18 @@ pub async fn library_list_synced<R: Runtime>(
 }
 
 /// Transcode source.mp4 → 720p mobile.mp4, size-check the result, obtain a
-/// presigned PUT URL, upload straight to OSS.
+/// presigned PUT URL, upload straight to OSS. After the video PUT succeeds,
+/// extract a small mono AAC sidecar (.m4a) and upload it via a second
+/// presigned PUT (kind=audio) so iOS practice modes can fetch ~3-5% of the
+/// bytes per cue (2026-05-29 audio sidecar feature).
 ///
 /// Returns:
-/// - `Ok(Some(key))` — uploaded; caller writes videoKey into /sync.
-/// - `Ok(None)` — best-effort failure (no source / transcode failed / network
-///   hiccup on /upload-url or OSS PUT). Caller syncs captions-only → iOS
-///   falls back to the YouTube embed.
+/// - `Ok(Some(UploadedKeys { video_key, audio_key }))` — video uploaded
+///   (audio_key may be None if its best-effort upload failed; iOS falls
+///   back to videoKey in that case).
+/// - `Ok(None)` — best-effort failure on video (no source / transcode failed
+///   / network hiccup on /upload-url or OSS PUT). Caller syncs captions-only
+///   → iOS falls back to the YouTube embed.
 /// - `Err(msg)` — user-facing hard error to display: `video_too_large
 ///   {bytes, limit}` or `http 413: ...`. Bubbles out of library_sync_to_cloud
 ///   via `?` so the TS friendlySyncError can show the upsell dialog.
@@ -383,7 +401,7 @@ async fn upload_video(
     token: &str,
     duration_sec: f64,
     limits: Option<LibraryLimitsResp>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<UploadedKeys>, String> {
     let src = std::path::Path::new(video_dir).join("source.mp4");
     if !src.exists() {
         return Ok(None);
@@ -528,14 +546,136 @@ async fn upload_video(
 
     if !put_resp.status().is_success() {
         eprintln!("[upload_video] {id}: OSS PUT rejected: HTTP {}", put_resp.status());
+        let _ = std::fs::remove_file(&mobile);
         return Ok(None);
     }
-
-    // Clean up the temp transcoded file after a successful upload.
-    let _ = std::fs::remove_file(&mobile);
-
     eprintln!("[upload_video] {id}: OSS upload OK ({size_mb} MB), key={}", uu.video_key);
-    Ok(Some(uu.video_key))
+
+    // Step 5 (audio sidecar, 2026-05-29): extract a small .m4a from mobile.mp4
+    // and PUT it to OSS via a separate /upload-url?kind=audio call. Strictly
+    // best-effort — any failure leaves audio_key=None and iOS falls back to
+    // the video URL. We do NOT remove mobile.mp4 before this because audio
+    // extraction reads from it.
+    let audio_m4a = std::path::Path::new(video_dir).join("audio.m4a");
+    let audio_key = upload_audio_sidecar(app, &mobile, &audio_m4a, id, token).await;
+    let _ = std::fs::remove_file(&mobile);
+    let _ = std::fs::remove_file(&audio_m4a);
+
+    Ok(Some(UploadedKeys {
+        video_key: uu.video_key,
+        audio_key,
+    }))
+}
+
+/// Best-effort: extract audio from the transcoded mobile.mp4, request a
+/// presigned PUT for the audio key (kind=audio so the backend routes to
+/// audioKeyFor + the library-audio/ prefix + skips the per-video size cap),
+/// PUT the audio bytes, return the key on success.
+///
+/// Returns None on any failure — caller's iOS clients gracefully fall back
+/// to the video URL. Logs every failure path so we can diagnose without
+/// nagging the user (the video sync already succeeded).
+async fn upload_audio_sidecar(
+    app: &AppHandle,
+    mobile_mp4: &std::path::Path,
+    audio_m4a: &std::path::Path,
+    id: &str,
+    token: &str,
+) -> Option<String> {
+    // Extract audio. ffmpeg is fast here (audio-only re-encode) — typical
+    // 30-min video ≈ 5-10s.
+    if let Err(e) = crate::pipeline::ffmpeg::extract_audio_aac(app, mobile_mp4, audio_m4a, id).await {
+        eprintln!("[upload_audio] {id}: extract_audio_aac failed: {e}");
+        return None;
+    }
+    let audio_bytes = match std::fs::read(audio_m4a) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[upload_audio] {id}: audio.m4a read failed: {e}");
+            return None;
+        }
+    };
+
+    #[derive(serde::Deserialize)]
+    struct AudioUploadUrl {
+        #[serde(rename = "putUrl")]
+        put_url: String,
+        #[serde(rename = "audioKey")]
+        audio_key: String,
+    }
+
+    let url_client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let url_resp = match url_client
+        .post(format!("{API_BASE}/upload-url"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(
+            serde_json::json!({
+                "id": id,
+                "kind": "audio",
+                "contentType": "audio/mp4",
+                "contentLength": audio_bytes.len() as i64,
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[upload_audio] {id}: /upload-url failed: {e}");
+            return None;
+        }
+    };
+    let url_resp = match url_resp.error_for_status() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[upload_audio] {id}: /upload-url HTTP error: {e}");
+            return None;
+        }
+    };
+    let auu: AudioUploadUrl = match url_resp.text().await.ok().and_then(|t| serde_json::from_str(&t).ok()) {
+        Some(v) => v,
+        None => {
+            eprintln!("[upload_audio] {id}: /upload-url parse failed");
+            return None;
+        }
+    };
+
+    // Audio is small (~3-5% of the video); 60s is plenty even on a slow
+    // upstream. Avoids the 30-min video-PUT timeout being overkill here.
+    let put_client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let put_resp = match put_client
+        .put(&auu.put_url)
+        .header("content-type", "audio/mp4")
+        .body(audio_bytes)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[upload_audio] {id}: OSS PUT failed: {e}");
+            return None;
+        }
+    };
+    if !put_resp.status().is_success() {
+        eprintln!("[upload_audio] {id}: OSS PUT rejected: HTTP {}", put_resp.status());
+        return None;
+    }
+    eprintln!("[upload_audio] {id}: OSS audio upload OK, key={}", auu.audio_key);
+    Some(auu.audio_key)
 }
 
 #[tauri::command]

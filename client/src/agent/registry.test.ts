@@ -3,8 +3,16 @@ import { TOOLS, getTool, listTools } from "./registry";
 import type { ToolDef } from "./types";
 
 describe("registry", () => {
-  it("TOOLS starts as an empty array (tools added in later tasks)", () => {
-    expect(TOOLS).toEqual([]);
+  it("TOOLS includes the registered tools (4 so far in T14)", () => {
+    expect(TOOLS.length).toBeGreaterThanOrEqual(4);
+    expect(TOOLS.map((t) => t.id)).toEqual(
+      expect.arrayContaining([
+        "corpus_browse",
+        "corpus_phrase_detail",
+        "list_library",
+        "list_vocab",
+      ]),
+    );
   });
   it("getTool returns undefined for unknown id", () => {
     expect(getTool("nonexistent")).toBeUndefined();

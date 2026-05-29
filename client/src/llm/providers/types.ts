@@ -1,4 +1,6 @@
 import type { Settings } from "../../types/settings";
+import type { ToolDef, AgentEvent } from "../../agent/types";
+import type { Message } from "../../types/agent";
 
 export interface ProviderRequest {
   systemPrompt: string;
@@ -14,3 +16,16 @@ export interface Provider {
 }
 
 export type ProviderFactory = (settings: Settings) => Provider;
+
+// — Agent extensions —
+
+export interface StreamWithToolsOpts {
+  systemPrompt: string;
+  history: Message[];
+  tools: ToolDef[];
+  signal: AbortSignal;
+}
+
+export interface AgentProvider {
+  streamWithTools(opts: StreamWithToolsOpts): AsyncGenerator<AgentEvent>;
+}

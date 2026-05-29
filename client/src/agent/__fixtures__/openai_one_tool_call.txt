@@ -1,0 +1,10 @@
+data: {"id":"x","choices":[{"index":0,"delta":{"role":"assistant","content":"Let me check."}}]}
+
+data: {"id":"x","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"list_library","arguments":""}}]}}]}
+
+data: {"id":"x","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"filter\":\"medical\"}"}}]}}]}
+
+data: {"id":"x","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+

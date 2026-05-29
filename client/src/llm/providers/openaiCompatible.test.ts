@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createOpenAICompatibleProvider } from "./openaiCompatible";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  createOpenAICompatibleProvider,
+  formatHistory,
+  parseOpenAIStream,
+} from "./openaiCompatible";
 import { DEFAULT_SETTINGS } from "../../types/settings";
+import type { AgentEvent } from "../../agent/types";
+import type { Message } from "../../types/agent";
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -50,5 +58,160 @@ describe("openaiCompatible provider", () => {
         // consume
       }
     }).rejects.toThrow();
+  });
+});
+
+async function* streamFromFixture(fixturePath: string): AsyncGenerator<string> {
+  const raw = fs.readFileSync(fixturePath, "utf8");
+  for (const chunk of raw.split("\n\n")) {
+    if (chunk.trim()) yield chunk + "\n\n";
+  }
+}
+
+describe("OpenAICompatible parseOpenAIStream", () => {
+  it("parses simple text fixture into text events + end_turn", async () => {
+    const events: AgentEvent[] = [];
+    const fixture = path.join(
+      __dirname,
+      "../../agent/__fixtures__/openai_simple_text.txt",
+    );
+    for await (const ev of parseOpenAIStream(streamFromFixture(fixture))) {
+      events.push(ev);
+    }
+    expect(
+      events
+        .filter((e) => e.type === "text")
+        .map((e) => (e as { type: "text"; delta: string }).delta)
+        .join(""),
+    ).toBe("Hello there.");
+    expect(events.find((e) => e.type === "stop_reason")).toMatchObject({
+      reason: "end_turn",
+    });
+  });
+
+  it("parses tool_call fixture into start/args/end + tool_use stop_reason", async () => {
+    const events: AgentEvent[] = [];
+    const fixture = path.join(
+      __dirname,
+      "../../agent/__fixtures__/openai_one_tool_call.txt",
+    );
+    for await (const ev of parseOpenAIStream(streamFromFixture(fixture))) {
+      events.push(ev);
+    }
+    expect(events.find((e) => e.type === "tool_call_start")).toMatchObject({
+      callId: "call_abc",
+      name: "list_library",
+    });
+    // tool_call_args must accumulate the arguments JSON fragment(s).
+    const argsCombined = events
+      .filter((e) => e.type === "tool_call_args")
+      .map((e) => (e as { type: "tool_call_args"; deltaJson: string }).deltaJson)
+      .join("");
+    expect(argsCombined).toBe(`{"filter":"medical"}`);
+    expect(events.find((e) => e.type === "tool_call_end")).toMatchObject({
+      callId: "call_abc",
+    });
+    expect(events.find((e) => e.type === "stop_reason")).toMatchObject({
+      reason: "tool_use",
+    });
+    // tool_call_start fires exactly once even though id/name are mentioned
+    // across multiple deltas.
+    const startCount = events.filter((e) => e.type === "tool_call_start").length;
+    expect(startCount).toBe(1);
+  });
+
+  it("handles chunk boundaries mid-line (buffer split)", async () => {
+    const raw = fs.readFileSync(
+      path.join(__dirname, "../../agent/__fixtures__/openai_simple_text.txt"),
+      "utf8",
+    );
+    // Yield in awkward 7-byte slices to exercise the line buffer.
+    async function* tinyChunks(): AsyncGenerator<string> {
+      for (let i = 0; i < raw.length; i += 7) yield raw.slice(i, i + 7);
+    }
+    const events: AgentEvent[] = [];
+    for await (const ev of parseOpenAIStream(tinyChunks())) events.push(ev);
+    expect(
+      events
+        .filter((e) => e.type === "text")
+        .map((e) => (e as { type: "text"; delta: string }).delta)
+        .join(""),
+    ).toBe("Hello there.");
+  });
+});
+
+describe("formatHistory", () => {
+  it("user → {role:user, content}", () => {
+    const history: Message[] = [
+      { role: "user", id: "u1", ts: 0, content: "hi" },
+    ];
+    expect(formatHistory(history)).toEqual([{ role: "user", content: "hi" }]);
+  });
+
+  it("assistant with tool_call → tool_calls array + JSON.stringified arguments", () => {
+    const history: Message[] = [
+      {
+        role: "assistant",
+        id: "a1",
+        ts: 0,
+        blocks: [
+          { type: "text", text: "Let me check." },
+          {
+            type: "tool_call",
+            callId: "call_abc",
+            name: "list_library",
+            args: { filter: "medical" },
+          },
+        ],
+        stopReason: "tool_use",
+        vendor: "deepseek",
+        model: "deepseek-chat",
+      },
+    ];
+    expect(formatHistory(history)).toEqual([
+      {
+        role: "assistant",
+        content: "Let me check.",
+        tool_calls: [
+          {
+            id: "call_abc",
+            type: "function",
+            function: {
+              name: "list_library",
+              arguments: JSON.stringify({ filter: "medical" }),
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("tool ok → tool_call_id + JSON result; tool error → errorMessage", () => {
+    const history: Message[] = [
+      {
+        role: "tool",
+        id: "t1",
+        ts: 0,
+        callId: "call_abc",
+        name: "list_library",
+        status: "ok",
+        result: { items: 3 },
+        durationMs: 12,
+      },
+      {
+        role: "tool",
+        id: "t2",
+        ts: 0,
+        callId: "call_def",
+        name: "list_library",
+        status: "error",
+        errorMessage: "boom",
+        durationMs: 0,
+      },
+    ];
+    expect(formatHistory(history)).toEqual([
+      { role: "tool", tool_call_id: "call_abc", content: JSON.stringify({ items: 3 }) },
+      { role: "tool", tool_call_id: "call_def", content: "boom" },
+    ]);
   });
 });

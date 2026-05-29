@@ -42,6 +42,10 @@ type UnifiedItem =
       speed?: string | null;
       eta?: string | null;
       error?: string | null;
+      /** Optional Rust-side phase note (e.g. "正在上传视频 · 8 MB",
+       *  "正在提取音频", "正在上传音频 · 0.3 MB"). When set, overrides the
+       *  default percent-based phase text — see phaseText(). */
+      note?: string | null;
       startedAt: number;
     }
   | {
@@ -74,6 +78,7 @@ export function DownloadQueueWidget() {
       speed: d.speed,
       eta: d.eta,
       error: d.error,
+      note: d.note,
       startedAt: d.startedAt,
     })),
     ...Object.values(analyses).map<UnifiedItem>((a) => ({
@@ -271,6 +276,10 @@ function phaseText(item: UnifiedItem): string {
       case "transcribing":
         return "转录字幕";
       case "uploading":
+        // Prefer Rust-emitted note if present (sub-step text like "正在上传视频 · 8 MB",
+        // "正在提取音频", "正在上传音频 · 0.3 MB") — those break the otherwise
+        // indistinguishable post-transcode silent phase into visible steps.
+        if (item.note) return item.note;
         return item.percent >= 100 ? "正在上传到云端…" : `上传到云端 · 转码 ${Math.round(item.percent)}%`;
       case "upload_failed":
         return "视频上传失败";

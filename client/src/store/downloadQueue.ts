@@ -37,6 +37,12 @@ export interface QueueItem {
   eta?: string | null;
   total?: string | null;
   error?: string | null;
+  /** Optional human-readable phase note set by the Rust pipeline. Currently
+   *  used during the post-transcode upload phase to break the previously
+   *  silent "正在上传到云端…" stretch into visible sub-steps (video PUT →
+   *  audio extract → audio PUT). When set, DownloadQueueWidget renders this
+   *  instead of the default percent-based phase text. */
+  note?: string | null;
   startedAt: number;
 }
 
@@ -109,7 +115,7 @@ type Transcribed = {
   duration_sec: number;
 };
 type Failed = { stage: "Failed"; video_id: string; error: string };
-type Uploading = { stage: "Uploading"; video_id: string; percent: number };
+type Uploading = { stage: "Uploading"; video_id: string; percent: number; note?: string };
 type PipelineEvent =
   | Started
   | Downloading
@@ -198,6 +204,11 @@ export function applyPipelineEvent(ev: PipelineEvent): void {
           phase: "uploading",
           percent: u.percent,
           error: null,
+          // u.note is undefined for transcode progress events (percent < 100);
+          // pass null in that case so the previous note clears once we leave
+          // a stage. The widget falls back to percent-based phaseText when
+          // note is null/undefined.
+          note: u.note ?? null,
         });
       }
       break;

@@ -440,11 +440,14 @@ async fn upload_video(
 
     // Transcode + size-check done — signal the PUT phase (frontend shows an
     // indeterminate "正在上传…" spinner; we don't track byte-level PUT progress).
+    // Stage note added 2026-05-29 so users see what's happening during the
+    // (now longer) silent post-transcode phase that includes audio extract.
     crate::core::progress::emit(
         app,
         crate::core::progress::PipelineEvent::Uploading {
             video_id: id.to_string(),
             percent: 100,
+            note: Some(format!("正在上传视频 · {size_mb} MB")),
         },
     );
 
@@ -556,6 +559,17 @@ async fn upload_video(
     // best-effort — any failure leaves audio_key=None and iOS falls back to
     // the video URL. We do NOT remove mobile.mp4 before this because audio
     // extraction reads from it.
+    //
+    // Both phases emit Uploading{percent:100, note:...} so the otherwise-silent
+    // post-transcode phase shows a clear text breakdown for the user.
+    crate::core::progress::emit(
+        app,
+        crate::core::progress::PipelineEvent::Uploading {
+            video_id: id.to_string(),
+            percent: 100,
+            note: Some("正在提取音频".to_string()),
+        },
+    );
     let audio_m4a = std::path::Path::new(video_dir).join("audio.m4a");
     let audio_key = upload_audio_sidecar(app, &mobile, &audio_m4a, id, token).await;
     let _ = std::fs::remove_file(&mobile);
@@ -647,6 +661,18 @@ async fn upload_audio_sidecar(
             return None;
         }
     };
+
+    // Phase note for the user — the audio extract was already announced; this
+    // marks the start of the actual upload PUT.
+    let audio_mb = (audio_bytes.len() as f64 / 1_000_000.0 * 10.0).round() / 10.0;
+    crate::core::progress::emit(
+        app,
+        crate::core::progress::PipelineEvent::Uploading {
+            video_id: id.to_string(),
+            percent: 100,
+            note: Some(format!("正在上传音频 · {audio_mb} MB")),
+        },
+    );
 
     // Audio is small (~3-5% of the video); 60s is plenty even on a slow
     // upstream. Avoids the 30-min video-PUT timeout being overkill here.

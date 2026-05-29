@@ -98,9 +98,14 @@ pub enum PipelineEvent {
     /// OSS upload progress for library cloud-sync. `percent` = 720p transcode
     /// 0–99; once transcode is done we emit percent=100 to mean "transcode
     /// finished, PUT in flight" (frontend shows an indeterminate spinner).
+    /// `note` lets us break the post-transcode indeterminate phase into
+    /// visible sub-steps — added 2026-05-29 because the audio sidecar
+    /// extract+upload adds noticeable silent time after the video PUT.
     Uploading {
         video_id: String,
         percent: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
 }
 

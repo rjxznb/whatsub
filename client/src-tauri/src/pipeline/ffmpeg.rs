@@ -174,6 +174,7 @@ pub async fn transcode_720p(
                         PipelineEvent::Uploading {
                             video_id: vid.clone(),
                             percent: pct,
+                            note: None,
                         },
                     );
                 }

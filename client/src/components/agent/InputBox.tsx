@@ -134,21 +134,23 @@ export function InputBox({
     }
   }, [initialValue]);
 
-  // Auto-resize: floor at 36 (= button h-9) so single-line input visually
-  // matches the send button's height.
-  //
+  // Auto-resize for multi-line ONLY. Single-line is hard-locked to 36
+  // (= button h-9) regardless of scrollHeight measurement, so the InputBox
+  // height is identical across icon→bar→panel mode transitions and across
+  // remounts. Previous behavior used Math.max(36, scrollHeight) which let
+  // tiny scrollHeight variations (≤ 36) collapse to 36 anyway BUT made
+  // multi-line detection ambiguous; this version is explicit:
+  //   - text has no newlines AND scrollHeight ≤ 40 → height = 36
+  //   - else (multi-line / scrollHeight > 40)        → height = min(96, scrollHeight)
   // useLayoutEffect (not useEffect): runs synchronously after DOM mutation,
-  // BEFORE the browser paints. Without this, on first mount the browser
-  // paints the textarea at its UA-default size (~40-45px depending on
-  // WebView2's line-height), the user sees a tall textarea for one frame,
-  // then the regular useEffect fires and shrinks it to 36 → visible "tall
-  // then suddenly short" flicker on the first keystroke.
+  // BEFORE the browser paints — no one-frame UA-default-size flash.
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
     const natural = el.scrollHeight;
-    el.style.height = Math.max(36, Math.min(natural, 96)) + "px";
+    const isMultiLine = text.includes("\n") || natural > 40;
+    el.style.height = (isMultiLine ? Math.min(natural, 96) : 36) + "px";
   }, [text]);
 
   const canSend = !streaming && !noLlm && text.trim().length > 0;

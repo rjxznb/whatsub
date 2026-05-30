@@ -40,7 +40,7 @@ beforeEach(() => {
     settings: DEFAULT_SETTINGS,
     loaded: true,
   });
-  // Wipe panelOpen flag so each test starts in the "closed" branch.
+  // Wipe panelOpen flag so each test starts in the "collapsed" branch.
   try {
     localStorage.removeItem("agentPanelOpen");
   } catch {
@@ -57,25 +57,27 @@ function renderWithRouter() {
 }
 
 describe("AgentRoot", () => {
-  it("always renders the ChatWidget button", () => {
+  it("always renders the ChatBar in collapsed state", () => {
     renderWithRouter();
-    // Default = panel closed → button has aria-label "打开 AI 助手".
-    const btn = screen.getByRole("button", { name: "打开 AI 助手" });
-    expect(btn).toBeTruthy();
-  });
-
-  it("does not render the chat dialog while panelOpen=false", () => {
-    renderWithRouter();
-    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
-  });
-
-  it("clicking the widget opens the panel and shows EmptyState", () => {
-    renderWithRouter();
-    const widget = screen.getByRole("button", { name: "打开 AI 助手" });
-    fireEvent.click(widget);
+    // ChatBar is always mounted as a dialog with aria-label "AI 助手".
+    // In the collapsed state aria-expanded should be "false".
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
     expect(dialog).toBeTruthy();
-    // EmptyState's noLlm copy renders because DEFAULT_SETTINGS has no apiKey.
+    expect(dialog.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("does not render the header content while collapsed", () => {
+    renderWithRouter();
+    // ConversationHeader's 选择会话 button only appears when expanded.
+    expect(screen.queryByRole("button", { name: "选择会话" })).toBeNull();
+  });
+
+  it("clicking the bar expands it and shows EmptyState (noLlm copy)", () => {
+    renderWithRouter();
+    const dialog = screen.getByRole("dialog", { name: "AI 助手" });
+    fireEvent.click(dialog);
+    // After expand: aria-expanded flips and the EmptyState noLlm copy renders.
+    expect(dialog.getAttribute("aria-expanded")).toBe("true");
     expect(dialog.textContent).toContain("AI 助手需要先配置 LLM");
   });
 
@@ -142,8 +144,8 @@ describe("AgentRoot", () => {
       hydrated: true,
     });
     renderWithRouter();
-    fireEvent.click(screen.getByRole("button", { name: "打开 AI 助手" }));
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
+    fireEvent.click(dialog);
     // EmptyState noLlm copy must NOT be present once messages exist.
     expect(dialog.textContent).not.toContain("AI 助手需要先配置 LLM");
     // The user message content should appear.

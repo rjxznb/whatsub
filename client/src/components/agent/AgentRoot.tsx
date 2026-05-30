@@ -1,16 +1,19 @@
 // src/components/agent/AgentRoot.tsx
 //
-// Single composite that mounts the chat widget + slide-out panel + wires the
-// runtime entrypoint. App.tsx mounts <AgentRoot /> once inside the BrowserRouter
-// so this component has access to useNavigate(); App.tsx itself only adds one
-// import + one JSX line.
+// Single composite that mounts the Spotlight-style ChatBar (UX revision
+// 2026-05-30 — replaces the old ChatWidget+ChatPanel pattern) + wires the
+// runtime entrypoint. App.tsx mounts <AgentRoot /> once inside the
+// BrowserRouter so this component has access to useNavigate(); App.tsx itself
+// only adds one import + one JSX line.
 //
-// Responsibilities (per Task 26 spec):
+// Responsibilities (per Task 26 spec + Task 30 UX refactor):
 //   1. Hydrate useAgent once on mount.
 //   2. setNavigator(useNavigate()) so the nav tools (T15) can do
 //      navigate("/library") without dragging React Router into agent core.
-//   3. Own panelOpen (localStorage-persisted) + unread flag + streaming msg id.
-//   4. Own the AbortController for the in-flight turn. Panel close aborts +
+//   3. Own panelOpen (localStorage-persisted, same key as before for
+//      backwards-compat — semantics now "expanded vs collapsed") + unread
+//      flag + streaming msg id.
+//   4. Own the AbortController for the in-flight turn. Bar collapse aborts +
 //      rejects pending MID confirmations with "no_panel_closed"; stop button
 //      aborts only.
 //   5. Switch between MessageList+InlineConfirmList (has messages) and
@@ -29,8 +32,8 @@ import { getProvider } from "../../llm/providers";
 import { getVendorKey, getModelName } from "../../llm/llmIdentity";
 import type { Message, UserMessage } from "../../types/agent";
 import type { Settings } from "../../types/settings";
-import { ChatWidget } from "./ChatWidget";
-import { ChatPanel } from "./ChatPanel";
+import { ChatBar } from "./ChatBar";
+import { ConversationHeader } from "./ConversationHeader";
 import { MessageList } from "./MessageList";
 import { InlineConfirmList } from "./InlineConfirmList";
 import { InputBox } from "./InputBox";
@@ -61,7 +64,10 @@ export function AgentRoot() {
     }
   });
   const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
-  const [unreadFlag, setUnreadFlag] = useState(false);
+  // unreadFlag is kept in state so future ChatBar variants can render an
+  // "unread" dot when an assistant message lands while collapsed. The current
+  // bar doesn't render it yet, hence the `_` prefix to silence noUnusedLocals.
+  const [_unreadFlag, setUnreadFlag] = useState(false);
   const [suggestionToPrefill, setSuggestionToPrefill] = useState<
     string | undefined
   >(undefined);
@@ -201,10 +207,7 @@ export function AgentRoot() {
   const hasMessages = (activeConv?.messages.length ?? 0) > 0;
 
   const body = hasMessages ? (
-    <>
-      <MessageList streamingMsgId={streamingMsgId} />
-      <InlineConfirmList />
-    </>
+    <MessageList streamingMsgId={streamingMsgId} />
   ) : (
     <EmptyState
       noLlm={noLlm}
@@ -226,20 +229,18 @@ export function AgentRoot() {
     />
   );
 
+  const header = <ConversationHeader onClose={() => setPanelOpen(false)} />;
+
   return (
-    <>
-      <ChatWidget
-        open={panelOpen}
-        hasUnread={unreadFlag}
-        onClick={() => setPanelOpen((v) => !v)}
-      />
-      <ChatPanel
-        open={panelOpen}
-        onClose={() => setPanelOpen(false)}
-        inputBox={inputBox}
-      >
-        {body}
-      </ChatPanel>
-    </>
+    <ChatBar
+      expanded={panelOpen}
+      onExpand={() => setPanelOpen(true)}
+      onCollapse={() => setPanelOpen(false)}
+      streaming={streamingMsgId != null}
+      header={header}
+      body={body}
+      inlineConfirms={<InlineConfirmList />}
+      inputBox={inputBox}
+    />
   );
 }

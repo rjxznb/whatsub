@@ -278,7 +278,10 @@ export function AgentRoot() {
     />
   );
 
-  const header = <ConversationHeader onClose={() => setMode(pageDefault)} />;
+  // ✕ in the header steps down from panel to bar (matches the click-outside
+  // step-down). User can then close the bar via another click-outside or
+  // keep typing.
+  const header = <ConversationHeader onClose={() => setMode("bar")} />;
 
   return (
     <ChatBar
@@ -286,7 +289,6 @@ export function AgentRoot() {
       onModeChange={setMode}
       streaming={streamingMsgId != null}
       hasUnread={unreadFlag}
-      pageDefaultMode={pageDefault}
       header={header}
       body={body}
       inlineConfirms={<InlineConfirmList />}

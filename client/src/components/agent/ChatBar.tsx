@@ -42,8 +42,6 @@ interface Props {
   streaming: boolean;
   /** Show the unread dot on the icon when collapsed. */
   hasUnread: boolean;
-  /** Whichever collapsed state the current page defaults to ("icon" or "bar"). */
-  pageDefaultMode: "icon" | "bar";
   header: ReactNode;
   body: ReactNode;
   inlineConfirms: ReactNode;
@@ -131,7 +129,6 @@ export function ChatBar({
   onModeChange,
   streaming,
   hasUnread,
-  pageDefaultMode,
   header,
   body,
   inlineConfirms,
@@ -191,21 +188,27 @@ export function ChatBar({
     }
   }, [mode, iconPos.x, iconPos.y]);
 
-  // Click-outside-to-collapse (panel only, suppressed while streaming).
+  // Click-outside-to-collapse — STEP DOWN by one level, not jump to default.
+  // Suppressed during streaming (panel only — bar mode doesn't stream so no
+  // suppression needed there).
+  //   panel → bar (history closes, input row remains so the user can keep
+  //                typing if they were mid-thought)
+  //   bar   → icon (fully collapse to the floating logo)
+  //   icon  → no-op (can't collapse further; click-outside is irrelevant)
   // mousedown beats click — collapse wins the race against any button on the
   // page below registering its click.
   useEffect(() => {
-    if (mode !== "panel") return;
+    if (mode === "icon") return;
     const onDocMouseDown = (e: MouseEvent) => {
-      if (streaming) return;
+      if (mode === "panel" && streaming) return;
       const node = containerRef.current;
       if (!node) return;
       if (e.target instanceof Node && node.contains(e.target)) return;
-      onModeChange(pageDefaultMode);
+      onModeChange(mode === "panel" ? "bar" : "icon");
     };
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [mode, streaming, pageDefaultMode, onModeChange]);
+  }, [mode, streaming, onModeChange]);
 
   // Drag start: only fires when mousedown lands on the container's
   // non-interactive area. Buttons + textarea + input + select +

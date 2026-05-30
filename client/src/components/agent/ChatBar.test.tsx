@@ -8,7 +8,6 @@ function defaults(overrides: Partial<Parameters<typeof ChatBar>[0]> = {}) {
     onModeChange: vi.fn(),
     streaming: false,
     hasUnread: false,
-    pageDefaultMode: "bar" as "icon" | "bar",
     header: <div>HEADER</div>,
     body: <div>BODY</div>,
     inlineConfirms: <div>CONFIRMS</div>,
@@ -149,8 +148,8 @@ describe("ChatBar — drag exclusion (interactive elements)", () => {
   });
 });
 
-describe("ChatBar — click outside collapse (panel)", () => {
-  it("click outside while panel + not streaming → onModeChange(pageDefaultMode)", () => {
+describe("ChatBar — click outside collapse (step-down)", () => {
+  it("click outside while panel + not streaming → step down to bar", () => {
     const onModeChange = vi.fn();
     render(
       <>
@@ -159,16 +158,15 @@ describe("ChatBar — click outside collapse (panel)", () => {
           {...defaults({
             mode: "panel",
             onModeChange,
-            pageDefaultMode: "icon",
           })}
         />
       </>,
     );
     fireEvent.mouseDown(screen.getByTestId("outside-target"));
-    expect(onModeChange).toHaveBeenCalledWith("icon");
+    expect(onModeChange).toHaveBeenCalledWith("bar");
   });
 
-  it("click outside while streaming is SUPPRESSED", () => {
+  it("click outside while panel + STREAMING is suppressed (no collapse)", () => {
     const onModeChange = vi.fn();
     render(
       <>
@@ -186,7 +184,7 @@ describe("ChatBar — click outside collapse (panel)", () => {
     expect(onModeChange).not.toHaveBeenCalled();
   });
 
-  it("click outside while bar (not panel) does NOT collapse", () => {
+  it("click outside while bar → step down to icon (bar streaming N/A)", () => {
     const onModeChange = vi.fn();
     render(
       <>
@@ -195,8 +193,7 @@ describe("ChatBar — click outside collapse (panel)", () => {
       </>,
     );
     fireEvent.mouseDown(screen.getByTestId("outside-target"));
-    // bar's outside listener never installs.
-    expect(onModeChange).not.toHaveBeenCalled();
+    expect(onModeChange).toHaveBeenCalledWith("icon");
   });
 });
 

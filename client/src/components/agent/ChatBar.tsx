@@ -71,17 +71,26 @@ function viewportH(): number {
 function defaultIconPos(): Position {
   return {
     x: Math.max(0, viewportW() - ICON_W - 20),
-    y: Math.max(0, viewportH() - ICON_H - 24),
+    y: Math.max(0, viewportH() - ICON_H - 48),
   };
 }
 function defaultBarPos(): Position {
   return {
     x: Math.max(0, viewportW() / 2 - BAR_W / 2),
-    y: Math.max(0, viewportH() - BAR_H - 24),
+    // 48px bottom margin (was 24): leaves clearance for taskbars and the bar's
+    // border/shadow without bleeding into the viewport edge. Tauri windows
+    // sometimes report a viewport height that doesn't subtract the OS chrome
+    // (taskbar etc.); 48px gives breathing room either way.
+    y: Math.max(0, viewportH() - BAR_H - 48),
   };
 }
 
-function loadPos(key: string, fallback: () => Position): Position {
+function loadPos(
+  key: string,
+  fallback: () => Position,
+  w: number,
+  h: number,
+): Position {
   try {
     const raw = localStorage.getItem(key);
     if (raw) {
@@ -93,7 +102,11 @@ function loadPos(key: string, fallback: () => Position): Position {
         Number.isFinite(p.x) &&
         Number.isFinite(p.y)
       ) {
-        return { x: p.x, y: p.y };
+        // Defensive clamp: a saved position from an earlier session with a
+        // larger viewport (or a bug in a previous code version) can put the
+        // bar partly off-screen on this run. Force it inside the current
+        // viewport before using.
+        return clampToViewport({ x: p.x, y: p.y }, w, h);
       }
     }
   } catch {
@@ -135,11 +148,22 @@ export function ChatBar({
   inputBox,
 }: Props) {
   const [iconPos, setIconPos] = useState<Position>(() =>
-    loadPos(ICON_POS_KEY, defaultIconPos),
+    loadPos(ICON_POS_KEY, defaultIconPos, ICON_W, ICON_H),
   );
   const [barPos, setBarPos] = useState<Position>(() =>
-    loadPos(BAR_POS_KEY, defaultBarPos),
+    loadPos(BAR_POS_KEY, defaultBarPos, BAR_W, BAR_H),
   );
+
+  // Re-clamp on viewport resize so a previously-fine position doesn't end up
+  // off-screen after the user resizes the Tauri window.
+  useEffect(() => {
+    const onResize = () => {
+      setIconPos((p) => clampToViewport(p, ICON_W, ICON_H));
+      setBarPos((p) => clampToViewport(p, BAR_W, BAR_H));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const containerRef = useRef<HTMLDivElement>(null);
   // Drag state lives in a ref so the document-level mousemove closure sees
   // synchronous updates (we mirror selected fields into React state where

@@ -239,14 +239,28 @@ export function ChatBar({
         x: drag.startPos.x + dx,
         y: drag.startPos.y + dy,
       };
-      const w = drag.mode === "icon" ? ICON_W : BAR_W;
-      const h =
-        drag.mode === "icon"
-          ? ICON_H
-          : drag.mode === "bar"
-            ? BAR_H
-            : panelHeightPx();
-      const clamped = clampToViewport(next, w, h);
+      let clamped: Position;
+      if (drag.mode === "icon") {
+        clamped = clampToViewport(next, ICON_W, ICON_H);
+      } else if (drag.mode === "bar") {
+        clamped = clampToViewport(next, BAR_W, BAR_H);
+      } else {
+        // panel: barPos.y represents the bar's top, but the rendered panel
+        // anchors its BOTTOM to barPos.y + BAR_H. To keep the panel fully
+        // inside the viewport while dragging vertically:
+        //   panel top    = barPos.y + BAR_H - h ≥ 0
+        //     → barPos.y ≥ h - BAR_H
+        //   panel bottom = barPos.y + BAR_H ≤ viewportH
+        //     → barPos.y ≤ viewportH - BAR_H
+        // Using BAR_W for horizontal (bar and panel share width).
+        const panelH = panelHeightPx();
+        const yMin = Math.max(0, panelH - BAR_H);
+        const yMax = Math.max(yMin, viewportH() - BAR_H);
+        clamped = {
+          x: Math.max(0, Math.min(viewportW() - BAR_W, next.x)),
+          y: Math.max(yMin, Math.min(yMax, next.y)),
+        };
+      }
       if (drag.mode === "icon") setIconPos(clamped);
       else setBarPos(clamped); // bar AND panel share barPos
     };

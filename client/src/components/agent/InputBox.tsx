@@ -234,7 +234,17 @@ export function InputBox({
     // breathing margin (6px above + below) inside the bar. items-end keeps
     // the send button anchored to the bottom row when the textarea
     // auto-grows for multi-line input.
-    <div className="flex items-end gap-2 px-2 py-1.5">
+    //
+    // minHeight: 48 = BAR_H (50) - bar border (2). Guarantees the input box
+    // area never collapses below the "a" baseline the user sees on the
+    // first paint — important inside panel mode where the bar's own
+    // min-height: 50 isn't active (panel uses explicit height instead).
+    // Without this, typing inside panel mode could shrink the bottom input
+    // box to just the textarea's scrollHeight.
+    <div
+      className="flex items-end gap-2 px-2 py-1.5"
+      style={{ minHeight: 48 }}
+    >
       <textarea
         ref={textareaRef}
         value={text}

@@ -447,25 +447,38 @@ export function ChatBar({
         transition: transitionCss,
       }}
     >
-      {expanded && (
-        <>
-          <div className="shrink-0 cursor-default">{header}</div>
-          <div className="flex-1 min-h-0 overflow-y-auto cursor-default">
-            {body}
-          </div>
-          {inlineConfirms}
-        </>
-      )}
+      {/* Inner content wrapper — fades out during the icon-collapse animation
+          so the bar's chrome (bg/border/shadow) is the only thing visibly
+          shrinking toward iconPos. Without the fade, the text + button get
+          squeezed into the ~40x40 endpoint and produce a moment of "tiny
+          crushed bar with residual text" before the JSX swap to the icon. */}
       <div
-        className="shrink-0 cursor-default"
-        onFocusCapture={() => {
-          // Clicking into the textarea (or any focusable child of inputBox)
-          // is the most natural "I want to chat" gesture from the bar — flip
-          // to panel so the user sees history above their cursor.
-          if (mode === "bar") onModeChange("panel");
+        className="flex flex-col h-full w-full"
+        style={{
+          opacity: renderingIconCollapse ? 0 : 1,
+          transition: `opacity ${Math.max(STRETCH_MS - 80, 120)}ms ease-out`,
         }}
       >
-        {inputBox}
+        {expanded && (
+          <>
+            <div className="shrink-0 cursor-default">{header}</div>
+            <div className="flex-1 min-h-0 overflow-y-auto cursor-default">
+              {body}
+            </div>
+            {inlineConfirms}
+          </>
+        )}
+        <div
+          className="shrink-0 cursor-default"
+          onFocusCapture={() => {
+            // Clicking into the textarea (or any focusable child of inputBox)
+            // is the most natural "I want to chat" gesture from the bar —
+            // flip to panel so the user sees history above their cursor.
+            if (mode === "bar") onModeChange("panel");
+          }}
+        >
+          {inputBox}
+        </div>
       </div>
     </div>
   );

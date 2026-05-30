@@ -2,6 +2,70 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { Send, Square } from "lucide-react";
 import { useAgent } from "../../store/agent";
 
+// ────────────────────────────────────────────────────────────────────────────
+// Animated placeholder ("typewriter") — cycles through these prompts when
+// the textarea is empty and idle. Each phrase is typed character-by-character,
+// held for a beat, then deleted character-by-character before the next one.
+// ────────────────────────────────────────────────────────────────────────────
+const PLACEHOLDER_PHRASES = [
+  "找几个 medical 场景的视频",
+  "解释一下这一段对话",
+  "把这段话加到生词本",
+  "从云端下载这个视频",
+  "查 “appointment” 的用法",
+  "出 5 道题考考我",
+];
+
+const TYPE_MS = 90;
+const HOLD_MS = 1600;
+const DELETE_MS = 35;
+const BETWEEN_MS = 400;
+
+/** Drives a typewriter animation through `phrases` when `active` is true.
+ *  Pauses (preserving state) when active flips false; resumes from the same
+ *  spot when it flips back. Returns the currently-visible substring. */
+function useTypewriter(active: boolean, phrases: string[]): string {
+  const [phraseIdx, setPhraseIdx] = useState(0);
+  const [charsShown, setCharsShown] = useState(0);
+  const [phase, setPhase] = useState<
+    "typing" | "holding" | "deleting" | "between"
+  >("typing");
+
+  useEffect(() => {
+    if (!active) return;
+    const phrase = phrases[phraseIdx] ?? "";
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    if (phase === "typing") {
+      if (charsShown < phrase.length) {
+        timeout = setTimeout(() => setCharsShown((c) => c + 1), TYPE_MS);
+      } else {
+        timeout = setTimeout(() => setPhase("holding"), 0);
+      }
+    } else if (phase === "holding") {
+      timeout = setTimeout(() => setPhase("deleting"), HOLD_MS);
+    } else if (phase === "deleting") {
+      if (charsShown > 0) {
+        timeout = setTimeout(() => setCharsShown((c) => c - 1), DELETE_MS);
+      } else {
+        timeout = setTimeout(() => setPhase("between"), 0);
+      }
+    } else {
+      // between phrases
+      timeout = setTimeout(() => {
+        setPhraseIdx((i) => (i + 1) % phrases.length);
+        setPhase("typing");
+      }, BETWEEN_MS);
+    }
+
+    return () => {
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [active, phraseIdx, charsShown, phase, phrases]);
+
+  return (phrases[phraseIdx] ?? "").slice(0, charsShown);
+}
+
 interface Props {
   /** True while a runtime turn is in flight; toggles send→stop button. */
   streaming?: boolean;
@@ -148,11 +212,15 @@ export function InputBox({
     }
   };
 
+  // Animated typewriter placeholder — cycles through a list of example
+  // prompts when the textarea is empty and the agent is idle.
+  const typewriterIdle = text.length === 0 && !noLlm && !streaming;
+  const typedPlaceholder = useTypewriter(typewriterIdle, PLACEHOLDER_PHRASES);
   const placeholder = noLlm
     ? "请先配置 LLM 后再使用"
     : streaming
       ? "agent 正在思考…"
-      : "问点什么…";
+      : typedPlaceholder || "问点什么…";
 
   return (
     // px-2 horizontal + py-1.5 vertical padding gives the button a small

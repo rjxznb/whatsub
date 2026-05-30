@@ -219,19 +219,30 @@ function renderWithNav(initialPath: string, navTo: string) {
 
 describe("AgentRoot — navigation nudges", () => {
   it("navigating from /library to /player/X with mode=bar switches to icon", () => {
-    renderWithNav("/library", "/player/abc");
-    // Confirm we started in bar mode.
-    expect(
-      screen.getByRole("dialog", { name: "AI 助手" }).getAttribute("aria-expanded"),
-    ).toBe("false");
-    act(() => {
-      fireEvent.click(screen.getByTestId("nav-trigger"));
-    });
-    // After navigation: page-default for /player/X is "icon"; mode follows.
-    expect(
-      screen.getByRole("button", { name: "打开 AI 助手" }),
-    ).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
+    vi.useFakeTimers();
+    try {
+      renderWithNav("/library", "/player/abc");
+      // Confirm we started in bar mode.
+      expect(
+        screen.getByRole("dialog", { name: "AI 助手" }).getAttribute("aria-expanded"),
+      ).toBe("false");
+      act(() => {
+        fireEvent.click(screen.getByTestId("nav-trigger"));
+      });
+      // Bar → icon transition takes STRETCH_MS for the collapse animation.
+      // Advance fake timers past it so the bar JSX unmounts.
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      // After navigation + collapse animation: page-default for /player/X is
+      // "icon"; mode follows and the icon JSX is mounted.
+      expect(
+        screen.getByRole("button", { name: "打开 AI 助手" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("panel mode is sticky across navigation (does NOT collapse on nav)", () => {

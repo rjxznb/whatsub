@@ -30,7 +30,7 @@ Each sub-project ships independently. v1 alone should feel useful.
 |---|---|---|
 | Scope | Full coverage — navigation + library + in-video AI + limited settings | Q1 (full coverage) |
 | Tool-call visibility | Summary mode (natural-language results) + click-to-expand cards | Q2 (摘要模式) |
-| Panel layout | Floating bottom-right widget, panel 380×560, zero layout cost when closed | Q3 (底部浮窗) |
+| Panel layout | Spotlight-style bottom-center bar (600px wide), collapsed 52px → expanded 60vh; click-outside collapses + interrupts (streaming suppresses the click-outside collapse to protect in-flight chains) | UX revision 2026-05-30 |
 | Confirmation strategy | Hybrid: LOW=none, MID=inline card + Toast if panel closed, HIGH=system modal | Q4 (混合) |
 | Context budget | Light — current page + basic state injected per turn | Q5 (轻度) |
 | History | Persistent JSON, manual clear, multi-conversation | Q6 (永久持久化) |
@@ -589,45 +589,43 @@ This caps any single LLM request body at ~5K input tokens regardless of total co
 
 ## 6. UI components
 
-### 6.1 ChatWidget — the floating button
+### 6.A ChatBar — bottom-center Spotlight-style container
 
-Specs:
+Replaces the earlier ChatWidget (floating button) + ChatPanel (380×560 anchored layer) pattern after the 2026-05-30 UX revision. One component, two states.
 
-- 56×56 px circular button.
-- Position: `fixed; bottom: 20px; right: 20px;`.
-- z-index: `50` — above Toast notifications (`z-40`), below ContextMenu/system modal (`z-50+`).
-- Always rendered (every page including full-screen video).
-- Background: `bg-blue-500/95 backdrop-blur-sm`, hover `bg-blue-400`.
-- Icon: 🤖 (lucide-react `Bot` icon, 28px).
-- **Red dot** (8×8 absolute top-right) shows if there's an "unread" agent message — fired when an `assistant` message lands while panel was closed.
-
-Click → opens ChatPanel.
-
-### 6.2 ChatPanel — the floating layer
-
-Specs:
-
-- 380×560 px, **fixed size** (not resizable).
-- Position: anchored to ChatWidget, expanding **up-and-left**. `bottom: 84px; right: 20px;`.
+**Sizing:**
+- Width: fixed 600px (mobile not supported — desktop app).
+- Position: `fixed bottom: 24px; left: 50%; transform: translateX(-50%);`
+- Z-index: 50 (above Toast, below system ConfirmDialog).
 - Background: `bg-zinc-900/95 backdrop-blur-xl border border-zinc-800 rounded-lg shadow-2xl`.
-- Animation: fade-in + slight upward slide (0.2s, ease-out).
-- Click outside / press Esc / click ✕ → close.
+- Height: transitions between `52px` (collapsed) and `min(60vh, 600px)` (expanded) via CSS `transition: height 220ms ease-out`.
 
-Layout:
+**Collapsed state:**
+- Only the input row visible (an InputBox at fixed height ~52px).
+- Input placeholder reads "问点什么…" idle, "agent 正在思考…" while streaming, "AI 助手未配置 LLM" when noLlm.
+- An "unread" tiny dot may appear at the left of the input if an assistant message landed while collapsed. Cleared on expand.
 
-```
-┌──────────────────────────────────────┐ Header 40px
-│ ▼ <title>     ⊕  ☰  ✕                │
-├──────────────────────────────────────┤
-│                                      │
-│   MessageList (flex-1, scroll-y)     │
-│                                      │
-├──────────────────────────────────────┤ InputBox 56px
-│ ┌──────────────────────────┐  ⊳     │
-│ │ 问点什么…                │        │
-│ └──────────────────────────┘        │
-└──────────────────────────────────────┘
-```
+**Expanded state:**
+- Single visual container (same border/bg) growing UP from the input row.
+- Vertical layout: ConversationHeader (40px) → MessageList | EmptyState (flex-1, overflow-y) → InlineConfirmList (auto height, only if pending) → InputBox (52px, sticky at bottom).
+- Width stays 600px; height grows to `min(60vh, 600px)`.
+
+**Triggers — expand:**
+- Click anywhere inside the container (including the input).
+- Focus event on the input (e.g. keyboard tab into the page).
+- First keypress while focused on the input.
+
+**Triggers — collapse (with stream-aborting side effect):**
+- Click anywhere OUTSIDE the container (suppressed during streaming — see locked rules below).
+- Click ✕ in the ConversationHeader.
+
+Each collapse calls `AbortController.abort()` on the in-flight runtime turn AND `useAgentConfirms.rejectAllPanelClosed()` to resolve any pending MID confirms with `panel_closed`. (Per the locked spec §1.2 / §6.4 "panel close = interrupt".)
+
+**Streaming protection:** while `streamingMsgId != null`, the document-level click-outside handler short-circuits. User must explicitly click ✕ or the input row's ⏹ stop button to disengage during streaming. Stops accidental loss of in-progress work when user clicks on Library / Player chrome behind the bar.
+
+**Esc key:** intentionally NOT bound. User declined Esc as a collapse trigger during the 2026-05-30 brainstorming.
+
+The bar is rendered unconditionally inside `AgentRoot` (which lives once in App.tsx inside the Router). No more floating widget; no more separate ChatPanel layer.
 
 ### 6.3 MessageBubble — three variants
 

@@ -19,16 +19,21 @@ export function ConversationHeader({ onClose }: Props) {
 
   return (
     <div className="h-10 flex items-center px-2 border-b border-zinc-800 gap-1 relative">
-      {/* Title + dropdown chevron */}
+      {/* Title + dropdown chevron — capped at a max-width so the action
+          buttons (⊕ ☰ ✕) have room and the title never balloons to fill
+          the entire panel header. Truncates with ellipsis when too long. */}
       <button
         type="button"
         onClick={() => setDropdownOpen((v) => !v)}
-        className="flex items-center gap-1 text-sm text-zinc-100 hover:bg-zinc-800 px-2 py-1 rounded flex-1 truncate text-left"
+        className="flex items-center gap-1 text-sm text-zinc-100 hover:bg-zinc-800 px-2 py-1 rounded text-left max-w-[240px] min-w-0"
         aria-label="选择会话"
       >
         <ChevronDown size={14} className="text-zinc-400 shrink-0" />
         <span className="truncate">{title}</span>
       </button>
+      {/* Spacer pushes the buttons right; replaces the flex-1 on the title
+          button so the title hugs its content + cap instead of stretching. */}
+      <div className="flex-1" />
 
       {/* ⊕ New */}
       <button

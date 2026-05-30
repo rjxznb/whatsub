@@ -2926,6 +2926,34 @@ git commit -m "fix(ai-agent): close-out tweaks from manual sanity pass"
 
 ---
 
+## Task 29: youtube_search tool (added 2026-05-30, user-requested gap fix)
+
+**Files:**
+- Create: `client/src-tauri/src/commands/youtube_search.rs`
+- Modify: `client/src-tauri/src/commands/mod.rs` (add `pub mod youtube_search;`)
+- Modify: `client/src-tauri/src/lib.rs` (register `youtube_search` command)
+- Create: `client/src/agent/tools/youtube_search.ts`
+- Create: `client/src/agent/tools/youtube_search.test.ts`
+- Modify: `client/src/agent/registry.ts` (add 22nd tool)
+- Modify: `client/src/agent/registry.test.ts` (toBe(22))
+
+**Why:** The original 21-tool MVP let the agent search the user's local library and the curated public corpus but offered no path to discover new YouTube videos by topic. `youtube_search` closes that gap as a LOW-risk Discovery-tier tool, wrapping yt-dlp's `ytsearchN:` flat-playlist mode — no YouTube Data API quota, reuses the existing user-updated yt-dlp binary.
+
+**Steps (concise, mirroring T14-T19 style):**
+
+1. **Rust command** (`commands/youtube_search.rs`): pure-fn `parse_search_output(stdout: &str) -> Vec<YouTubeSearchHit>` (one JSON object per line, defense-in-depth filter to youtube.com domain) plus async `#[tauri::command] youtube_search(app, query, limit)` that resolves yt-dlp via `commands::yt_dlp::resolve_appdata_yt_dlp()` (AppData first; bundled sidecar fallback handled by reusing the existing helper) and shells out with `--flat-playlist --dump-json --no-warnings --no-playlist --socket-timeout 10 --retries 2`. Four unit tests on `parse_search_output`.
+2. **mod.rs**: `pub mod youtube_search;`
+3. **lib.rs**: register `commands::youtube_search::youtube_search` in `invoke_handler`.
+4. **TS tool** (`agent/tools/youtube_search.ts`): wraps `invoke("youtube_search", ...)`, applies TS-side `min/maxDurationSec` post-filter. `riskTier: "LOW"`, `availableOn: () => true`, naturalised running/done labels.
+5. **TS tests**: cover unfiltered, min-only, max-only, riskTier, availableOn.
+6. **Registry**: insert `youtubeSearchTool` after `listVocabTool` (Discovery cluster). Bump `registry.test.ts` to `TOOLS.length === 22` and add `"youtube_search"` to the expected-ids array.
+
+**Spec contract refresh:** §1.3 (final count: 22), §3.1 (new row), §3.7.5 (security boundary), §3.9 (page-filtered token table +1 per page), §9.4 (manual checklist), §11 (known-limitation 11).
+
+See the same-branch commit history (`feat(ai-agent/tools): youtube_search`) for the exact code that landed.
+
+---
+
 ## Final notes for the implementer
 
 - **The 21-tool count is the contract.** If a tool feels wrong or missing as you implement, raise it to the controller (don't silently add/remove).

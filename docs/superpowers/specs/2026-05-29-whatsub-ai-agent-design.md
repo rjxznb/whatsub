@@ -62,10 +62,12 @@ Explicitly **out of scope** to prevent scope creep. Adding any of these to v1 re
 - Multiple agent personalities
 - Recursive tool-calling (tools that themselves call tools — flat model only)
 - Streaming JSON Lines parser for tool args (buffer whole then parse)
-- Web search / external network tools
+- Arbitrary URL opening / unbounded web fetch (only yt-dlp ytsearch + import_video are allowed as the YouTube entrypoint)
 - Multi-tenant / user account switching
 
 **Specific tools deferred from the 23-candidate list:**
+
+v1 final tool count: **22** (was 21 — `youtube_search` added 2026-05-30 per user-identified gap; see §3.1).
 
 - `change_llm_provider` — blocked on existing vendorKeys stash bug (CLAUDE.md TODO)
 - `change_whisper_model` — would trigger 1-2GB silent download; user should manually opt in
@@ -180,6 +182,7 @@ Every tool has a `description` (English, agent-facing), a JSON Schema for `param
 
 | ID | Description (LLM-facing, abbrev) | Wraps |
 |---|---|---|
+| `youtube_search` | Search YouTube for videos matching a query (uses yt-dlp ytsearchN). Returns titles + URLs + metadata; does NOT download. | new (Rust + yt-dlp sidecar) |
 | `corpus_browse` | Search public corpus by tag list (intersection AND) and optional keyword | existing `corpus_browse` |
 | `corpus_phrase_detail` | Get full detail of a corpus phrase including example instances | existing `corpus_phrase_detail` |
 | `list_library` | List user's library entries, optional filter by scene/status/syncedAt | existing `library_list` + TS filter |
@@ -251,6 +254,14 @@ Why `retranscribe` is HIGH (not MID): overwrites existing `analysis.json`, losin
 
 Re-add to v1.x once those concerns are addressed.
 
+### 3.7.5 Security boundary for `youtube_search`
+
+The tool only invokes yt-dlp with the `ytsearchN:<query>` mode. It cannot
+download arbitrary URLs, only return search metadata. Results are filtered
+to youtube.com / youtu.be domain entries before returning to the agent.
+`import_video` remains the only path to actually fetch a video, and it
+has its own URL validation upstream in the existing pipeline.
+
 ### 3.8 ToolDef interface (canonical)
 
 ```ts
@@ -303,11 +314,11 @@ export interface ToolRegistry {
 
 | Page | Tools visible | Tokens (approx) |
 |---|---|---|
-| Library | 17 | ~1020 |
-| Player | 21 (all) | ~1260 |
-| Vocab | 16 | ~960 |
-| Corpus | 16 | ~960 |
-| Settings | 16 | ~960 |
+| Library | 18 | ~1020 |
+| Player | 22 (all) | ~1260 |
+| Vocab | 17 | ~960 |
+| Corpus | 17 | ~960 |
+| Settings | 17 | ~960 |
 
 Worth-it for a default-on optimization. `availableOn(page)` returns false for `seek_to_time` / `jump_to_cue` / `explain_passage` / `generate_quiz` / `mark_liaisons` when not on a Player page.
 
@@ -1161,6 +1172,7 @@ Before any agent feature ships, manually run through these in dev build:
 □ Open ChatWidget on Library page · panel opens 380×560 right-bottom
 □ Send "你好" → LLM responds in Chinese (system prompt working)
 □ Send "查我库里 medical 视频" → list_library called → text result
+□ Send "找几个 medical 场景的视频" → youtube_search fires → 10 YouTube results listed → agent offers to import_video on user's pick
 □ Send "把第二个加生词本" → vocab_add MID confirm card → confirm → toast
 □ Send 3 vocab adds in one prompt → batch inline confirm
 □ Send "删掉这个视频" → delete_video HIGH system modal → cancel → cancelled_by_user
@@ -1215,6 +1227,7 @@ Total LOC salvageable: ~600 (prompts ~250 + pricing ~50 + helpers ~50 + tests fo
 8. **No cost transparency UI.** Per locked decision, the InputBox doesn't accumulate ¥ per turn. Users see their LLM spend via their vendor's dashboard.
 9. **InlineConfirmCard has no timeout while panel is open.** Closing the panel cancels any awaiting cards with `confirmDecision: "panel_closed"`. No background Toast nudge — close means user disengaged. (§6.4)
 10. **Settings-level tools deliberately omitted.** `change_whisper_model` and `change_llm_provider` excluded; users adjust those via Settings UI.
+11. **YouTube search is yt-dlp-driven.** Subject to yt-dlp's GFW retry behavior and the bundled yt-dlp version's compatibility with current YouTube. If results are stale or empty, user can update yt-dlp via Settings → 更新 yt-dlp. `youtube_search` does NOT consume YouTube Data API quota.
 
 ---
 

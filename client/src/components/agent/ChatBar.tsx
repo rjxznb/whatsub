@@ -53,10 +53,11 @@ interface Props {
 const ICON_W = 40;
 const ICON_H = 40;
 const BAR_W = 600;
-// InputBox content height ≈ 53px (p-2 8+8 + button h-9 36), and the bar has
-// border-1 (box-border) so usable inner = BAR_H - 2. 60 leaves a few px of
-// breathing room so the send button isn't clipped by overflow-hidden.
-const BAR_H = 60;
+// Bar's single-line minimum height. InputBox content ≈ 52px (p-2 + h-9 button),
+// + 2px for the bar's border (box-border) → 54px exact fit.
+// In bar mode, the container uses min-height (not explicit height) so the
+// textarea's auto-resize can grow the bar vertically for multi-line input.
+const BAR_H = 54;
 const STRETCH_MS = 280;
 const DRAG_THRESHOLD_PX = 5;
 const ICON_POS_KEY = "agentIconPos";
@@ -335,11 +336,22 @@ export function ChatBar({
   const renderTop = stretchFrom ? stretchFrom.y : realTop;
   const renderLeft = stretchFrom ? stretchFrom.x : barPos.x;
   const renderWidth = stretchFrom ? stretchFrom.w : BAR_W;
-  const renderHeight = stretchFrom ? stretchFrom.h : h;
+  // Height handling differs by state:
+  //   - stretch animation: explicit (frame-1 = icon's height = 40px)
+  //   - panel: explicit (panelHeightPx())
+  //   - bar steady state: no fixed height — uses min-height: BAR_H so the
+  //     textarea's auto-resize can grow the bar vertically for multi-line
+  //     input. Setting an explicit height here would clip the textarea
+  //     and the button, which is what was making the send icon disappear.
+  const renderHeight: number | undefined = stretchFrom
+    ? stretchFrom.h
+    : expanded
+      ? h
+      : undefined;
 
   const transitionCss = dragging
     ? "none"
-    : `top ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), left ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), width ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), height ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+    : `top ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), left ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), width ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), height ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), min-height ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
 
   return (
     <div
@@ -353,7 +365,7 @@ export function ChatBar({
         top: renderTop,
         left: renderLeft,
         width: renderWidth,
-        height: renderHeight,
+        ...(renderHeight !== undefined ? { height: renderHeight } : { minHeight: BAR_H }),
         transition: transitionCss,
       }}
     >

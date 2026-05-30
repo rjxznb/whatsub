@@ -96,6 +96,10 @@ pub fn run() {
             commands::library_sync::library_materialize_from_cloud,
             commands::library::library_upsert_placeholder,
             commands::youtube_search::youtube_search,
+            commands::import_queue_http::import_queue_enqueue_http,
+            commands::import_queue_http::import_queue_list_pending_http,
+            commands::import_queue_http::import_queue_claim_http,
+            commands::import_queue_http::import_queue_set_status_http,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

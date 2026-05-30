@@ -15,6 +15,7 @@ import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
 import { useAuth } from "./store/auth";
+import { useLibrary } from "./store/library";
 import { startImportQueuePolling } from "./store/importQueue";
 import "./App.css";
 
@@ -30,6 +31,21 @@ function ImportQueuePoller() {
       startImportQueuePolling();
     }
   }, [status]);
+  return null;
+}
+
+/** Listens globally for pipeline-event Transcribed/Failed and reloads the
+ *  library store. Without this, a video imported via the agent (or any other
+ *  in-app import path) only appears in Library after the user navigates away
+ *  and back, because useLibrary's in-memory state isn't aware that the
+ *  underlying library.json was rewritten by Rust mid-pipeline. The reload
+ *  is idempotent + cheap — just re-reads library.json. */
+function LibraryRefreshListener() {
+  useTauriEvent<{ stage: string; video_id?: string }>("pipeline-event", (e) => {
+    if (e.stage === "Transcribed" || e.stage === "Failed") {
+      void useLibrary.getState().reload();
+    }
+  });
   return null;
 }
 
@@ -73,6 +89,7 @@ function App() {
         <LicenseSessionGate>
           <BrowserRouter>
             <BackendListener />
+            <LibraryRefreshListener />
             <ImportQueuePoller />
             <Routes>
               <Route path="/" element={<Navigate to="/library" replace />} />

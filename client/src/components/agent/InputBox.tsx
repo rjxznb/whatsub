@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { Send, Square } from "lucide-react";
 import { useAgent } from "../../store/agent";
 
@@ -70,9 +70,15 @@ export function InputBox({
   }, [initialValue]);
 
   // Auto-resize: floor at 36 (= button h-9) so single-line input visually
-  // matches the send button's height. Tailwind min-h-9 / max-h-24 on the
-  // textarea also CSS-clamps in case the useEffect mis-measures.
-  useEffect(() => {
+  // matches the send button's height.
+  //
+  // useLayoutEffect (not useEffect): runs synchronously after DOM mutation,
+  // BEFORE the browser paints. Without this, on first mount the browser
+  // paints the textarea at its UA-default size (~40-45px depending on
+  // WebView2's line-height), the user sees a tall textarea for one frame,
+  // then the regular useEffect fires and shrinks it to 36 → visible "tall
+  // then suddenly short" flicker on the first keystroke.
+  useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
@@ -162,7 +168,10 @@ export function InputBox({
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}
-        style={{ minHeight: 36, maxHeight: 96 }}
+        // Explicit initial height = 36 so the very first paint matches the
+        // post-useLayoutEffect steady state (no first-frame flash at UA
+        // default size before the resize logic runs).
+        style={{ height: 36, minHeight: 36, maxHeight: 96 }}
         className="flex-1 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-1.5 leading-tight focus:outline-none disabled:opacity-50"
         aria-label="输入消息"
       />

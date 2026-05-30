@@ -26,7 +26,7 @@
 //   agentBarPos   : the bar AND panel (panel grows upward from bar bottom)
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Bot } from "lucide-react";
+import whatsubIcon from "../../assets/whatsub-icon.png";
 
 export type ChatBarMode = "icon" | "bar" | "panel";
 
@@ -258,7 +258,7 @@ export function ChatBar({
         }}
       >
         <div className="relative h-full w-full bg-zinc-900/90 ring-1 ring-zinc-700 hover:ring-zinc-600 rounded-lg shadow-lg flex items-center justify-center gap-1.5 backdrop-blur-sm transition-colors">
-          <Bot size={14} className="text-zinc-300" />
+          <img src={whatsubIcon} alt="" width={18} height={18} className="rounded" draggable={false} />
           <span className="text-xs text-zinc-300 font-medium">AI</span>
           {hasUnread && (
             <span

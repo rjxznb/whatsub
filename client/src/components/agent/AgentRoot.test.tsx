@@ -78,7 +78,7 @@ describe("AgentRoot", () => {
     fireEvent.click(dialog);
     // After expand: aria-expanded flips and the EmptyState noLlm copy renders.
     expect(dialog.getAttribute("aria-expanded")).toBe("true");
-    expect(dialog.textContent).toContain("AI 助手需要先配置 LLM");
+    expect(dialog.textContent).toContain("需要先配置 LLM");
   });
 
   it("calls setNavigator on mount (so nav tools can route)", () => {

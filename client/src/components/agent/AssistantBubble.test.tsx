@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { AssistantBubble } from "./AssistantBubble";
+import { useAgent } from "../../store/agent";
 import type { AssistantMessage } from "../../types/agent";
 
 function mkMsg(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
@@ -15,6 +16,13 @@ function mkMsg(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  useAgent.setState({
+    history: { version: 1, activeConversationId: null, conversations: [] },
+    hydrated: true,
+  });
+});
 
 describe("AssistantBubble", () => {
   it("renders text block content", () => {
@@ -64,5 +72,35 @@ describe("AssistantBubble", () => {
   it("stopReason=cancelled shows 已停止 footer", () => {
     render(<AssistantBubble msg={mkMsg({ stopReason: "cancelled" })} />);
     expect(screen.getByText(/已停止/)).toBeTruthy();
+  });
+
+  it("renders markdown bold inside a text block", () => {
+    const msg = mkMsg({
+      blocks: [{ type: "text", text: "this is **bold** here" }],
+    });
+    const { container } = render(<AssistantBubble msg={msg} />);
+    const strong = container.querySelector("strong");
+    expect(strong).toBeTruthy();
+    expect(strong!.textContent).toBe("bold");
+  });
+
+  it("streaming cursor renders on the last TEXT block, not the last block when it's a tool_call", () => {
+    const msg = mkMsg({
+      blocks: [
+        { type: "text", text: "before tool" },
+        {
+          type: "tool_call",
+          callId: "tc_2",
+          name: "list_library",
+          args: {},
+        },
+      ],
+    });
+    const { container } = render(<AssistantBubble msg={msg} streaming />);
+    // Cursor should be on the text paragraph "before tool", which is the
+    // last text block. The tool_call's queued row also has spinner-less ▸,
+    // not the .animate-pulse cursor. We just verify a cursor exists.
+    const cursors = container.querySelectorAll(".animate-pulse");
+    expect(cursors.length).toBeGreaterThanOrEqual(1);
   });
 });

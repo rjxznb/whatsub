@@ -83,11 +83,14 @@ describe("MessageList", () => {
     const { container } = render(<MessageList />);
     expect(screen.getByText("Hello agent")).toBeTruthy();
     expect(screen.getByText("Hello user")).toBeTruthy();
-    // Ordering: justify-end (user) appears before justify-start (assistant) in DOM
+    // Ordering: user bubble (justify-end) appears before assistant row in DOM.
+    // The assistant row uses a Bot-avatar + flat-text layout (no
+    // justify-start wrapper since the 2026-05-30 redesign).
     const scroller = container.firstElementChild as HTMLElement;
     const children = Array.from(scroller.children) as HTMLElement[];
     expect(children[0].className).toContain("justify-end");
-    expect(children[1].className).toContain("justify-start");
+    // Sanity-check the assistant row is left-aligned: no justify-end class.
+    expect(children[1].className).not.toContain("justify-end");
   });
 
   it("skips tool messages (does NOT render them as standalone bubbles)", () => {

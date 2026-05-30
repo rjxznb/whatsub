@@ -11,17 +11,19 @@ interface Props {
 }
 
 /**
- * Renders a tool call's lifecycle inside an AssistantBubble. State is derived
- * from the matching ToolMessage (looked up by callId) in the active conversation:
+ * Claude.ai-inspired tool call row: a single subtle text row with hover
+ * background; clickable rows expand to show args/result/error JSON.
+ * Critically: NO colored backgrounds (no amber/emerald/rose boxes) — just
+ * text color shifts indicate state.
  *
- *   - no ToolMessage + !parentStreaming → queued   (▸ 准备调用 X)
- *   - no ToolMessage + parentStreaming  → running  (⟳ <runningLabel>)
- *   - ToolMessage.status === "ok"       → done OK  (folded ✓ <doneLabel>)
- *   - ToolMessage.status === "error"    → failed   (expanded by default)
- *   - ToolMessage.status === "cancelled_by_user" → cancelled (⊘ 已取消)
+ * State derivation (from the matching ToolMessage by callId):
+ *   - no ToolMessage + !parentStreaming → queued
+ *   - no ToolMessage + parentStreaming  → running
+ *   - ToolMessage.status === "ok"       → done OK (folded)
+ *   - ToolMessage.status === "error"    → failed (expanded by default)
+ *   - ToolMessage.status === "cancelled_by_user" → cancelled
  */
 export function ToolCallCard({ callBlock, parentStreaming }: Props) {
-  // Find the matching ToolMessage in the active conversation.
   const toolMsg = useAgent((s) => {
     const conv = s.history.conversations.find(
       (c) => c.id === s.history.activeConversationId,
@@ -41,76 +43,82 @@ export function ToolCallCard({ callBlock, parentStreaming }: Props) {
   const doneLabel = (result: unknown): string =>
     tool?.doneLabel(result) ?? "已完成";
 
-  // ── No ToolMessage yet: queued or running ─────────────────────────────────
+  // ── No ToolMessage yet: queued or running (non-clickable rows) ────────────
   if (!toolMsg) {
     if (parentStreaming) {
       return (
-        <div className="my-1 px-3 py-1.5 bg-zinc-800/40 border border-zinc-700/60 rounded text-xs text-zinc-400 inline-flex items-center gap-2">
-          <span className="inline-block animate-spin">⟳</span> {runningLabel}
+        <div className="my-1.5 flex items-center gap-2 text-xs text-zinc-500 px-2 -ml-2">
+          <span className="inline-block animate-spin text-zinc-500">⟳</span>
+          <span className="truncate">{runningLabel}</span>
         </div>
       );
     }
     return (
-      <div className="my-1 px-3 py-1.5 bg-zinc-800/40 border border-zinc-700/60 rounded text-xs text-zinc-500">
-        ▸ 准备调用 {callBlock.name}
+      <div className="my-1.5 flex items-center gap-2 text-xs text-zinc-500 px-2 -ml-2">
+        <span className="text-zinc-600">▸</span>
+        <span className="truncate">准备调用 {callBlock.name}</span>
       </div>
     );
   }
 
-  // ── Cancelled ─────────────────────────────────────────────────────────────
+  // ── Cancelled (non-clickable) ─────────────────────────────────────────────
   if (toolMsg.status === "cancelled_by_user") {
     return (
-      <div className="my-1 px-3 py-1.5 bg-zinc-800/40 border border-zinc-700/60 rounded text-xs text-zinc-500">
-        ⊘ 已取消
+      <div className="my-1.5 flex items-center gap-2 text-xs text-zinc-600 px-2 -ml-2">
+        <span>⊘</span>
+        <span className="truncate">已取消</span>
       </div>
     );
   }
 
-  // ── Failed ────────────────────────────────────────────────────────────────
+  // ── Failed (clickable; text-only red, no box) ─────────────────────────────
   if (toolMsg.status === "error") {
     return (
-      <div className="my-1 px-3 py-2 bg-rose-500/10 border border-rose-500/30 rounded text-xs">
-        <div className="text-rose-300 mb-1">✗ {callBlock.name} 失败</div>
-        <div className="text-zinc-400 whitespace-pre-wrap break-words mb-1">
-          {toolMsg.errorMessage ?? "(unknown error)"}
-        </div>
+      <div className="my-1.5">
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className="text-zinc-500 hover:text-zinc-300 underline text-xs"
+          className="flex items-center gap-2 text-xs hover:bg-zinc-900/60 rounded px-2 py-1 -ml-2 w-full text-left"
         >
-          {expanded ? "收起" : "详情"}
+          <span className="text-rose-400">✗</span>
+          <span className="flex-1 truncate text-rose-400">
+            {callBlock.name} 失败 — {toolMsg.errorMessage ?? "(unknown error)"}
+          </span>
+          <span className="text-zinc-600">{expanded ? "▾" : "▸"}</span>
         </button>
         {expanded && (
-          <pre className="mt-2 p-2 bg-zinc-900 rounded text-[10px] text-zinc-400 overflow-x-auto">
-{JSON.stringify(callBlock.args, null, 2)}
-          </pre>
+          <div className="mt-1 ml-2 space-y-1.5 text-[11px]">
+            <pre className="px-2 py-1.5 bg-zinc-950 rounded text-zinc-400 overflow-x-auto">
+{`Args:\n${JSON.stringify(callBlock.args, null, 2)}`}
+            </pre>
+          </div>
         )}
       </div>
     );
   }
 
-  // ── Done OK ───────────────────────────────────────────────────────────────
+  // ── Done OK (clickable; faded zinc text, no green) ────────────────────────
   return (
-    <div className="my-1 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded text-xs">
+    <div className="my-1.5">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-1 text-emerald-300 hover:text-emerald-200 w-full text-left"
+        className="flex items-center gap-2 text-xs hover:bg-zinc-900/60 rounded px-2 py-1 -ml-2 w-full text-left text-zinc-400"
       >
-        <span>✓ {doneLabel(toolMsg.result)}</span>
-        <span className="ml-auto text-zinc-500">{expanded ? "▾" : "▸"}</span>
+        <span className="text-zinc-500">·</span>
+        <span className="flex-1 truncate">{doneLabel(toolMsg.result)}</span>
+        <span className="text-zinc-600">{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && (
-        <div className="mt-2 space-y-2">
-          <div className="text-zinc-500 text-[10px]">
+        <div className="mt-1 ml-2 space-y-1.5 text-[11px]">
+          <div className="text-zinc-600 text-[10px]">
             {callBlock.name} · {toolMsg.durationMs}ms
           </div>
-          <pre className="p-2 bg-zinc-900 rounded text-[10px] text-zinc-400 overflow-x-auto">
-{"Args:\n" + JSON.stringify(callBlock.args, null, 2)}
+          <pre className="px-2 py-1.5 bg-zinc-950 rounded text-zinc-400 overflow-x-auto">
+{`Args:\n${JSON.stringify(callBlock.args, null, 2)}`}
           </pre>
-          <pre className="p-2 bg-zinc-900 rounded text-[10px] text-zinc-400 overflow-x-auto">
-{"Result:\n" + JSON.stringify(toolMsg.result, null, 2)}
+          <pre className="px-2 py-1.5 bg-zinc-950 rounded text-zinc-400 overflow-x-auto">
+{`Result:\n${JSON.stringify(toolMsg.result, null, 2)}`}
           </pre>
         </div>
       )}

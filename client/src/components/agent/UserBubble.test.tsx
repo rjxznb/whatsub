@@ -21,4 +21,10 @@ describe("UserBubble", () => {
     const outer = container.firstElementChild as HTMLElement;
     expect(outer.className).toContain("justify-end");
   });
+
+  it("does not render any role label (no '用户' header etc.)", () => {
+    const { container } = render(<UserBubble msg={baseMsg} />);
+    // The bubble is a single content span; verify no extra labels leaked in.
+    expect(container.textContent).toBe(baseMsg.content);
+  });
 });

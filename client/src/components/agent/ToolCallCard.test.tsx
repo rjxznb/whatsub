@@ -74,7 +74,7 @@ describe("ToolCallCard", () => {
     expect(container.querySelector(".animate-spin")).toBeTruthy();
   });
 
-  it("done OK: shows doneLabel folded by default, click expands", () => {
+  it("done OK: shows doneLabel folded by default, click expands to show Args/Result/duration", () => {
     const okTool: ToolMessage = {
       role: "tool",
       id: "t1",
@@ -94,7 +94,7 @@ describe("ToolCallCard", () => {
     expect(screen.queryByText(/Args:/)).toBeNull();
     expect(screen.queryByText(/Result:/)).toBeNull();
 
-    // Click the toggle button (the closest button parent of the trigger).
+    // Click the toggle button (the row itself is the button).
     const btn = trigger.closest("button")!;
     fireEvent.click(btn);
 
@@ -104,7 +104,7 @@ describe("ToolCallCard", () => {
     expect(screen.getByText(/123ms/)).toBeTruthy();
   });
 
-  it("error state: shows ✗ failed + errorMessage + details toggle", () => {
+  it("error state: shows ✗ failed + errorMessage; expanded by default", () => {
     const errTool: ToolMessage = {
       role: "tool",
       id: "t1",
@@ -118,11 +118,11 @@ describe("ToolCallCard", () => {
     seedConversation([errTool]);
     render(<ToolCallCard callBlock={callBlock} />);
 
+    // Header text contains tool name + 失败 + the error message.
     expect(screen.getByText(/list_library 失败/)).toBeTruthy();
     expect(screen.getByText(/Disk full/)).toBeTruthy();
-    // Error state is expanded by default (initiallyExpanded=true). The toggle
-    // therefore reads "收起" rather than "详情".
-    expect(screen.getByRole("button", { name: /收起/ })).toBeTruthy();
+    // Args pre is visible (initiallyExpanded for error state).
+    expect(screen.getByText(/Args:/)).toBeTruthy();
   });
 
   it("error state with no errorMessage falls back to (unknown error)", () => {

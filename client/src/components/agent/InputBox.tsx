@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Send, Square } from "lucide-react";
+import { useAgent } from "../../store/agent";
 
 interface Props {
   /** True while a runtime turn is in flight; toggles send→stop button. */
@@ -12,14 +13,59 @@ interface Props {
   onStop: () => void;
 }
 
-export function InputBox({ streaming, noLlm, initialValue, onSend, onStop }: Props) {
+/**
+ * Chat input with terminal-style ↑/↓ history navigation through the active
+ * conversation's prior user messages.
+ *
+ * History semantics (mirrors bash / zsh):
+ *   - First ↑ saves any in-progress draft, then jumps to the newest user
+ *     message.
+ *   - Each subsequent ↑ moves one step further back; at the oldest message
+ *     ↑ is a no-op (no wraparound).
+ *   - ↓ moves forward through history; going past the newest restores the
+ *     saved draft and exits nav mode.
+ *   - Typing anything (other than the same string that was recalled) exits
+ *     nav mode immediately — the user is now editing, not browsing.
+ *   - Submit clears nav state.
+ */
+export function InputBox({
+  streaming,
+  noLlm,
+  initialValue,
+  onSend,
+  onStop,
+}: Props) {
   const [text, setText] = useState(initialValue ?? "");
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [savedDraft, setSavedDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Subscribe to the active conversation's messages directly (stable reference
+  // managed by the store) and derive `userMessages` via useMemo so the
+  // selector itself never returns a fresh array — that would cause
+  // useSyncExternalStore to fire an infinite re-render loop.
+  const messages = useAgent((s) => {
+    const conv = s.history.conversations.find(
+      (c) => c.id === s.history.activeConversationId,
+    );
+    return conv?.messages;
+  });
+  const userMessages = useMemo(
+    () =>
+      messages
+        ?.filter(
+          (m): m is Extract<typeof m, { role: "user" }> => m.role === "user",
+        )
+        .map((m) => m.content) ?? [],
+    [messages],
+  );
 
   // Sync external initialValue changes (suggestion click)
   useEffect(() => {
     if (initialValue) {
       setText(initialValue);
+      setHistoryIndex(null);
+      setSavedDraft("");
     }
   }, [initialValue]);
 
@@ -37,12 +83,59 @@ export function InputBox({ streaming, noLlm, initialValue, onSend, onStop }: Pro
     if (!canSend) return;
     onSend(text.trim());
     setText("");
+    setHistoryIndex(null);
+    setSavedDraft("");
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const next = e.target.value;
+    // If user is browsing history but starts editing the recalled text,
+    // exit nav mode so subsequent ↑ starts fresh from the newest.
+    if (historyIndex !== null && next !== userMessages[historyIndex]) {
+      setHistoryIndex(null);
+    }
+    setText(next);
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
+      return;
+    }
+
+    if (userMessages.length === 0) return;
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (historyIndex === null) {
+        setSavedDraft(text);
+        const idx = userMessages.length - 1;
+        setHistoryIndex(idx);
+        setText(userMessages[idx]);
+        return;
+      }
+      if (historyIndex > 0) {
+        const idx = historyIndex - 1;
+        setHistoryIndex(idx);
+        setText(userMessages[idx]);
+      }
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      if (historyIndex === null) return; // pass through (default cursor behavior)
+      e.preventDefault();
+      if (historyIndex < userMessages.length - 1) {
+        const idx = historyIndex + 1;
+        setHistoryIndex(idx);
+        setText(userMessages[idx]);
+      } else {
+        // Past the newest → restore saved draft, exit nav
+        setHistoryIndex(null);
+        setText(savedDraft);
+      }
+      return;
     }
   };
 
@@ -57,12 +150,12 @@ export function InputBox({ streaming, noLlm, initialValue, onSend, onStop }: Pro
       <textarea
         ref={textareaRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={handleChange}
         onKeyDown={handleKey}
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}
-        className="flex-1 resize-none rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-100 placeholder-zinc-500 px-2 py-1.5 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+        className="flex-1 resize-none rounded-md bg-zinc-800/40 text-[14px] text-zinc-100 placeholder-zinc-500 px-3 py-2 focus:outline-none focus:bg-zinc-800/60 disabled:opacity-50"
         aria-label="输入消息"
       />
       {streaming ? (
@@ -70,7 +163,7 @@ export function InputBox({ streaming, noLlm, initialValue, onSend, onStop }: Pro
           type="button"
           onClick={onStop}
           aria-label="停止"
-          className="h-8 w-8 grid place-items-center rounded bg-rose-500 hover:bg-rose-400 text-white"
+          className="h-9 w-9 grid place-items-center rounded-md bg-rose-500/80 hover:bg-rose-500 text-white"
         >
           <Square size={14} />
         </button>
@@ -80,7 +173,7 @@ export function InputBox({ streaming, noLlm, initialValue, onSend, onStop }: Pro
           onClick={submit}
           disabled={!canSend}
           aria-label="发送"
-          className="h-8 w-8 grid place-items-center rounded bg-blue-500 hover:bg-blue-400 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+          className="h-9 w-9 grid place-items-center rounded-md bg-zinc-100 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed text-zinc-900"
         >
           <Send size={14} />
         </button>

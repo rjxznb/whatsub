@@ -163,17 +163,25 @@ export function InputBox({
           type="button"
           onClick={onStop}
           aria-label="停止"
-          className="h-9 w-9 grid place-items-center rounded-md bg-rose-500/80 hover:bg-rose-500 text-white"
+          className="h-9 w-9 shrink-0 grid place-items-center rounded-md bg-rose-500/80 hover:bg-rose-500 text-white"
         >
           <Square size={14} />
         </button>
       ) : (
+        // Disabled style uses explicit colors (NOT opacity reduction) so the
+        // button + icon stay legible on the bar's dark backdrop. Active state
+        // is bright white-on-dark so it pops as the obvious primary action.
         <button
           type="button"
           onClick={submit}
           disabled={!canSend}
           aria-label="发送"
-          className="h-9 w-9 grid place-items-center rounded-md bg-zinc-100 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed text-zinc-900"
+          className={
+            "h-9 w-9 shrink-0 grid place-items-center rounded-md transition-colors " +
+            (canSend
+              ? "bg-zinc-100 hover:bg-white text-zinc-900"
+              : "bg-zinc-700 text-zinc-400 cursor-not-allowed")
+          }
         >
           <Send size={14} />
         </button>

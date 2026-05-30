@@ -295,6 +295,7 @@ export function ChatBar({
         role="button"
         aria-label="打开 AI 助手"
         aria-expanded={false}
+        title="AI 助手 · 找 YouTube 视频 / 解释字幕 / 加生词 / 同步管理库\n点击展开输入框 · 长按拖动移动位置"
         onMouseDown={onContainerMouseDown}
         className="fixed z-50 select-none cursor-grab active:cursor-grabbing"
         style={{

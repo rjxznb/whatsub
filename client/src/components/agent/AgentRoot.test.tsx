@@ -219,30 +219,21 @@ function renderWithNav(initialPath: string, navTo: string) {
 
 describe("AgentRoot — navigation nudges", () => {
   it("navigating from /library to /player/X with mode=bar switches to icon", () => {
-    vi.useFakeTimers();
-    try {
-      renderWithNav("/library", "/player/abc");
-      // Confirm we started in bar mode.
-      expect(
-        screen.getByRole("dialog", { name: "AI 助手" }).getAttribute("aria-expanded"),
-      ).toBe("false");
-      act(() => {
-        fireEvent.click(screen.getByTestId("nav-trigger"));
-      });
-      // Bar → icon transition takes STRETCH_MS for the collapse animation.
-      // Advance fake timers past it so the bar JSX unmounts.
-      act(() => {
-        vi.advanceTimersByTime(400);
-      });
-      // After navigation + collapse animation: page-default for /player/X is
-      // "icon"; mode follows and the icon JSX is mounted.
-      expect(
-        screen.getByRole("button", { name: "打开 AI 助手" }),
-      ).toBeTruthy();
-      expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+    renderWithNav("/library", "/player/abc");
+    // Confirm we started in bar mode.
+    expect(
+      screen.getByRole("dialog", { name: "AI 助手" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+    act(() => {
+      fireEvent.click(screen.getByTestId("nav-trigger"));
+    });
+    // After navigation: page-default for /player/X is "icon" and the mode
+    // change is an instant JSX swap (the reverse collapse animation was
+    // removed because a stale timer could leave the bar stuck mounted).
+    expect(
+      screen.getByRole("button", { name: "打开 AI 助手" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
   });
 
   it("panel mode is sticky across navigation (does NOT collapse on nav)", () => {

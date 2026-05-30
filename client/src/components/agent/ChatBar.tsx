@@ -77,11 +77,11 @@ function defaultIconPos(): Position {
 function defaultBarPos(): Position {
   return {
     x: Math.max(0, viewportW() / 2 - BAR_W / 2),
-    // 48px bottom margin (was 24): leaves clearance for taskbars and the bar's
-    // border/shadow without bleeding into the viewport edge. Tauri windows
-    // sometimes report a viewport height that doesn't subtract the OS chrome
-    // (taskbar etc.); 48px gives breathing room either way.
-    y: Math.max(0, viewportH() - BAR_H - 48),
+    // 80px bottom margin (was 48, originally 24): some users still saw the
+    // bar partially cut off because Tauri can over-report innerHeight in
+    // certain window configurations. 80px gives a generous clearance; users
+    // who want it lower can drag and the new position persists.
+    y: Math.max(0, viewportH() - BAR_H - 80),
   };
 }
 
@@ -194,14 +194,12 @@ export function ChatBar({
     w: number;
     h: number;
   } | null>(null);
-  // Reverse animation: when collapsing TO icon, we keep rendering the bar/panel
-  // for STRETCH_MS while the geometry transitions toward iconPos. The internal
-  // "rendering mode" lags behind the prop `mode` during this window so the
-  // bar/panel JSX stays mounted; once the timer fires we switch over to the
-  // icon JSX. Without this, mode→icon would unmount the bar instantly and
-  // there'd be no visual continuity (icon just pops at the corner).
-  const [renderingIconCollapse, setRenderingIconCollapse] = useState(false);
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The reverse collapse animation (bar/panel → icon) was removed: a stale
+  // timer could survive a mid-animation dep change (e.g., page navigation
+  // adjusting iconPos), leaving the bar's chrome stuck mounted at icon size
+  // — visually a gray square instead of the whatsub logo. Collapsing to icon
+  // is now a plain JSX swap (snap), which is bulletproof. The forward
+  // stretch (icon → bar/panel) animation below stays.
   const prevModeRef = useRef<ChatBarMode>(mode);
   useEffect(() => {
     const prev = prevModeRef.current;
@@ -209,12 +207,6 @@ export function ChatBar({
 
     // Expand: icon → bar/panel
     if (mode !== "icon" && prev === "icon") {
-      // If a previous collapse animation is mid-flight, cancel it.
-      if (collapseTimerRef.current) {
-        clearTimeout(collapseTimerRef.current);
-        collapseTimerRef.current = null;
-        setRenderingIconCollapse(false);
-      }
       setStretchFrom({ x: iconPos.x, y: iconPos.y, w: ICON_W, h: ICON_H });
       let r2: number | null = null;
       const r1 = requestAnimationFrame(() => {
@@ -223,24 +215,6 @@ export function ChatBar({
       return () => {
         cancelAnimationFrame(r1);
         if (r2 != null) cancelAnimationFrame(r2);
-      };
-    }
-
-    // Collapse: bar/panel → icon. Keep rendering the bar/panel JSX while the
-    // container animates to iconPos geometry; flip to the icon JSX once the
-    // CSS transition is done.
-    if (mode === "icon" && prev !== "icon") {
-      setRenderingIconCollapse(true);
-      if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = setTimeout(() => {
-        setRenderingIconCollapse(false);
-        collapseTimerRef.current = null;
-      }, STRETCH_MS);
-      return () => {
-        if (collapseTimerRef.current) {
-          clearTimeout(collapseTimerRef.current);
-          collapseTimerRef.current = null;
-        }
       };
     }
   }, [mode, iconPos.x, iconPos.y]);
@@ -361,11 +335,7 @@ export function ChatBar({
   // ── icon ───────────────────────────────────────────────────────────
   // Bare logo, no chrome — relies on drop-shadow to stay visible on bright
   // video backgrounds. Hover lift via scale-110.
-  //
-  // Skip rendering the icon during the reverse stretch animation: the bar
-  // JSX below stays mounted at iconPos geometry until renderingIconCollapse
-  // flips false (after STRETCH_MS), only THEN do we render the icon proper.
-  if (mode === "icon" && !renderingIconCollapse) {
+  if (mode === "icon") {
     return (
       <div
         ref={containerRef}
@@ -423,33 +393,17 @@ export function ChatBar({
   // Using min-height instead lets us animate a real numeric→numeric value
   // (40 → 50) without ever leaving the auto-height regime.
   // Geometry resolution priority:
-  //   1. renderingIconCollapse: we're collapsing TO icon — target iconPos +
-  //      ICON_W/H, animate over STRETCH_MS, then unmount this JSX
-  //   2. stretchFrom: we're expanding FROM icon — frame-1 at iconPos, then
+  //   1. stretchFrom: we're expanding FROM icon — frame-1 at iconPos, then
   //      transition to bar/panel geometry
-  //   3. expanded (panel): use barPos + explicit panel height
-  //   4. else (bar steady): use barPos + min-height
-  const renderTop = renderingIconCollapse
-    ? iconPos.y
-    : stretchFrom
-      ? stretchFrom.y
-      : realTop;
-  const renderLeft = renderingIconCollapse
-    ? iconPos.x
-    : stretchFrom
-      ? stretchFrom.x
-      : barPos.x;
-  const renderWidth = renderingIconCollapse
-    ? ICON_W
-    : stretchFrom
-      ? stretchFrom.w
-      : BAR_W;
-  const isPanel = expanded && !stretchFrom && !renderingIconCollapse;
-  const sizingStyle: React.CSSProperties = renderingIconCollapse
-    ? { height: ICON_H }                              // collapse: explicit shrink target
-    : isPanel
-      ? { height: h }                                 // panel: explicit
-      : { minHeight: stretchFrom?.h ?? BAR_H };       // bar / stretch: min-height
+  //   2. expanded (panel): use barPos + explicit panel height
+  //   3. else (bar steady): use barPos + min-height
+  const renderTop = stretchFrom ? stretchFrom.y : realTop;
+  const renderLeft = stretchFrom ? stretchFrom.x : barPos.x;
+  const renderWidth = stretchFrom ? stretchFrom.w : BAR_W;
+  const isPanel = expanded && !stretchFrom;
+  const sizingStyle: React.CSSProperties = isPanel
+    ? { height: h }                                 // panel: explicit
+    : { minHeight: stretchFrom?.h ?? BAR_H };       // bar / stretch: min-height
 
   const transitionCss = dragging
     ? "none"
@@ -471,18 +425,7 @@ export function ChatBar({
         transition: transitionCss,
       }}
     >
-      {/* Inner content wrapper — fades out during the icon-collapse animation
-          so the bar's chrome (bg/border/shadow) is the only thing visibly
-          shrinking toward iconPos. Without the fade, the text + button get
-          squeezed into the ~40x40 endpoint and produce a moment of "tiny
-          crushed bar with residual text" before the JSX swap to the icon. */}
-      <div
-        className="flex flex-col h-full w-full"
-        style={{
-          opacity: renderingIconCollapse ? 0 : 1,
-          transition: `opacity ${Math.max(STRETCH_MS - 80, 120)}ms ease-out`,
-        }}
-      >
+      <div className="flex flex-col h-full w-full">
         {expanded && (
           <>
             <div className="shrink-0 cursor-default">{header}</div>

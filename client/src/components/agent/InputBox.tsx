@@ -134,19 +134,27 @@ export function InputBox({
     }
   }, [initialValue]);
 
-  // Auto-resize for multi-line ONLY. Single-line is hard-locked to 36
-  // (= button h-9) regardless of scrollHeight measurement, so the InputBox
-  // height is identical across icon→bar→panel mode transitions and across
-  // remounts. Previous behavior used Math.max(36, scrollHeight) which let
-  // tiny scrollHeight variations (≤ 36) collapse to 36 anyway BUT made
-  // multi-line detection ambiguous; this version is explicit:
-  //   - text has no newlines AND scrollHeight ≤ 40 → height = 36
-  //   - else (multi-line / scrollHeight > 40)        → height = min(96, scrollHeight)
-  // useLayoutEffect (not useEffect): runs synchronously after DOM mutation,
-  // BEFORE the browser paints — no one-frame UA-default-size flash.
+  // Auto-resize for multi-line ONLY. Empty text takes a fast path that
+  // skips scrollHeight measurement entirely — during the icon→bar stretch
+  // animation the textarea is briefly in a ~40px-wide container; the
+  // typewriter placeholder visually wraps to multiple lines, and the
+  // browser's scrollHeight reports the wrapped height (~80-100px) instead
+  // of the unwrapped single-line target. Without this fast path, the
+  // inflated value persists in the inline height after the bar reaches
+  // its final 600px width and the bar appears way too tall until the
+  // user types (which re-triggers the useLayoutEffect with non-empty
+  // text and a sane scrollHeight).
+  //
+  // useLayoutEffect (not useEffect): runs synchronously after DOM
+  // mutation, BEFORE the browser paints — no one-frame UA-default-size
+  // flash on first mount either.
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    if (text.length === 0) {
+      el.style.height = "36px";
+      return;
+    }
     el.style.height = "auto";
     const natural = el.scrollHeight;
     const isMultiLine = text.includes("\n") || natural > 40;

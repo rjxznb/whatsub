@@ -50,10 +50,11 @@ interface Props {
   inputBox: ReactNode;
 }
 
-const ICON_W = 80;
-const ICON_H = 36;
+const ICON_W = 40;
+const ICON_H = 40;
 const BAR_W = 600;
 const BAR_H = 52;
+const STRETCH_MS = 280;
 const DRAG_THRESHOLD_PX = 5;
 const ICON_POS_KEY = "agentIconPos";
 const BAR_POS_KEY = "agentBarPos";
@@ -148,6 +149,43 @@ export function ChatBar({
     moved: boolean;
     mode: ChatBarMode;
   } | null>(null);
+  // Mirrored into state so the CSS-transition gate can re-render. We disable
+  // transitions while dragging — otherwise the bar lags behind the cursor.
+  const [dragging, setDragging] = useState(false);
+
+  // "Stretch left" animation when transitioning OUT of icon mode. We render
+  // the bar at the icon's geometry on the first frame, then snap to the bar's
+  // real geometry on the next frame so the CSS transition interpolates
+  // (width grows + left moves leftward in lockstep, anchored bottom-right).
+  const [stretchFrom, setStretchFrom] = useState<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  } | null>(null);
+  const prevModeRef = useRef<ChatBarMode>(mode);
+  useEffect(() => {
+    const prev = prevModeRef.current;
+    prevModeRef.current = mode;
+    if (mode !== "icon" && prev === "icon") {
+      // Anchor: bar/panel's bottom-right corner aligns with icon's bottom-right.
+      const targetW = BAR_W;
+      const targetH = mode === "panel" ? panelHeightPx() : BAR_H;
+      const anchorRight = iconPos.x + ICON_W;
+      const anchorBottom = iconPos.y + ICON_H;
+      const targetX = Math.max(0, Math.min(viewportW() - targetW, anchorRight - targetW));
+      const targetY = Math.max(0, Math.min(viewportH() - targetH, anchorBottom - targetH));
+      setBarPos({ x: targetX, y: targetY });
+      setStretchFrom({ x: iconPos.x, y: iconPos.y, w: ICON_W, h: ICON_H });
+      // Double rAF so the initial render lands before we update to the target.
+      const r1 = requestAnimationFrame(() => {
+        const r2 = requestAnimationFrame(() => setStretchFrom(null));
+        cleanups.push(() => cancelAnimationFrame(r2));
+      });
+      const cleanups: Array<() => void> = [() => cancelAnimationFrame(r1)];
+      return () => cleanups.forEach((c) => c());
+    }
+  }, [mode, iconPos.x, iconPos.y]);
 
   // Click-outside-to-collapse (panel only, suppressed while streaming).
   // mousedown beats click — collapse wins the race against any button on the
@@ -190,6 +228,7 @@ export function ChatBar({
         (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)
       ) {
         drag.moved = true;
+        setDragging(true);  // disable CSS transition so the bar tracks the cursor
       }
       if (!drag.moved) return;
       const next = {
@@ -213,6 +252,7 @@ export function ChatBar({
       document.removeEventListener("mouseup", onUp);
       const drag = dragRef.current;
       dragRef.current = null;
+      setDragging(false);  // re-enable CSS transitions
       if (!drag) return;
       if (drag.moved) {
         // Persist final position. Read the freshest state via setters'
@@ -241,6 +281,9 @@ export function ChatBar({
   };
 
   // ── icon ───────────────────────────────────────────────────────────
+  // Bare logo, no chrome (no bg/ring/shadow/rounded box). Just the whatsub
+  // icon floating with a hover lift effect. The unread dot sits floating
+  // top-right of the icon directly.
   if (mode === "icon") {
     return (
       <div
@@ -257,17 +300,21 @@ export function ChatBar({
           height: ICON_H,
         }}
       >
-        <div className="relative h-full w-full bg-zinc-900/90 ring-1 ring-zinc-700 hover:ring-zinc-600 rounded-lg shadow-lg flex items-center justify-center gap-1.5 backdrop-blur-sm transition-colors">
-          <img src={whatsubIcon} alt="" width={18} height={18} className="rounded" draggable={false} />
-          <span className="text-xs text-zinc-300 font-medium">AI</span>
-          {hasUnread && (
-            <span
-              data-testid="agent-unread-dot"
-              className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-rose-500"
-              aria-hidden="true"
-            />
-          )}
-        </div>
+        <img
+          src={whatsubIcon}
+          alt="打开 AI 助手"
+          width={ICON_W}
+          height={ICON_H}
+          draggable={false}
+          className="block h-full w-full rounded drop-shadow-lg hover:scale-110 transition-transform"
+        />
+        {hasUnread && (
+          <span
+            data-testid="agent-unread-dot"
+            className="absolute top-0 right-0 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-zinc-900"
+            aria-hidden="true"
+          />
+        )}
       </div>
     );
   }
@@ -276,7 +323,20 @@ export function ChatBar({
   const expanded = mode === "panel";
   const h = expanded ? panelHeightPx() : BAR_H;
   // Panel grows UPWARD from the bar's bottom edge: align bottom = barPos.y + BAR_H.
-  const top = expanded ? Math.max(0, barPos.y + BAR_H - h) : barPos.y;
+  const realTop = expanded ? Math.max(0, barPos.y + BAR_H - h) : barPos.y;
+
+  // During the icon → bar/panel "stretch left" animation, we render at the
+  // icon's geometry on the first frame, then transition (left + top + width +
+  // height) to the bar/panel's real geometry. Dragging suppresses the
+  // transition so the bar tracks the cursor 1:1 without lag.
+  const renderTop = stretchFrom ? stretchFrom.y : realTop;
+  const renderLeft = stretchFrom ? stretchFrom.x : barPos.x;
+  const renderWidth = stretchFrom ? stretchFrom.w : BAR_W;
+  const renderHeight = stretchFrom ? stretchFrom.h : h;
+
+  const transitionCss = dragging
+    ? "none"
+    : `top ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), left ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), width ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), height ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
 
   return (
     <div
@@ -287,11 +347,11 @@ export function ChatBar({
       onMouseDown={onContainerMouseDown}
       className="fixed z-50 select-none flex flex-col bg-zinc-900/95 backdrop-blur-xl border border-zinc-800 rounded-lg shadow-2xl overflow-hidden cursor-grab active:cursor-grabbing"
       style={{
-        top,
-        left: barPos.x,
-        width: BAR_W,
-        height: h,
-        transition: "height 220ms ease-out, top 220ms ease-out",
+        top: renderTop,
+        left: renderLeft,
+        width: renderWidth,
+        height: renderHeight,
+        transition: transitionCss,
       }}
     >
       {expanded && (

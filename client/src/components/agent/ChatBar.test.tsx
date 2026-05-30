@@ -33,14 +33,15 @@ beforeEach(() => {
 });
 
 describe("ChatBar — mode rendering", () => {
-  it("icon mode: renders Bot pill with NO textarea/header/body", () => {
+  it("icon mode: renders bare whatsub logo with NO textarea/header/body/chrome", () => {
     render(<ChatBar {...defaults({ mode: "icon" })} />);
     // Bar's input textarea is not in the DOM at all in icon state.
     expect(screen.queryByTestId("input-box")).toBeNull();
     expect(screen.queryByText("HEADER")).toBeNull();
     expect(screen.queryByText("BODY")).toBeNull();
-    // Pill text + aria-label.
-    expect(screen.getByText("AI")).toBeTruthy();
+    // "AI" text label was dropped — only the bare logo remains.
+    expect(screen.queryByText("AI")).toBeNull();
+    // aria-label + role still discoverable.
     expect(
       screen.getByRole("button", { name: "打开 AI 助手" }),
     ).toBeTruthy();

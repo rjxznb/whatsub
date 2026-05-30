@@ -102,6 +102,7 @@ export function InputBox({
   const [text, setText] = useState(initialValue ?? "");
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [savedDraft, setSavedDraft] = useState("");
+  const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Subscribe to the active conversation's messages directly (stable reference
@@ -212,15 +213,21 @@ export function InputBox({
     }
   };
 
-  // Animated typewriter placeholder — cycles through a list of example
-  // prompts when the textarea is empty and the agent is idle.
-  const typewriterIdle = text.length === 0 && !noLlm && !streaming;
+  // Animated typewriter placeholder — cycles through example prompts ONLY
+  // when the textarea is empty, agent is idle, AND the textarea is NOT
+  // focused. As soon as the user clicks in (cursor blink starts), the
+  // animation pauses (state preserved); it resumes when focus leaves
+  // (e.g., the user closes the panel back to bar).
+  const typewriterIdle =
+    text.length === 0 && !noLlm && !streaming && !isFocused;
   const typedPlaceholder = useTypewriter(typewriterIdle, PLACEHOLDER_PHRASES);
   const placeholder = noLlm
     ? "请先配置 LLM 后再使用"
     : streaming
       ? "agent 正在思考…"
-      : typedPlaceholder || "问点什么…";
+      : isFocused
+        ? "" // focused but empty: no placeholder, just the cursor
+        : typedPlaceholder || "问点什么…";
 
   return (
     // px-2 horizontal + py-1.5 vertical padding gives the button a small
@@ -233,6 +240,8 @@ export function InputBox({
         value={text}
         onChange={handleChange}
         onKeyDown={handleKey}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}

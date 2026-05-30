@@ -53,11 +53,11 @@ interface Props {
 const ICON_W = 40;
 const ICON_H = 40;
 const BAR_W = 600;
-// Bar's single-line minimum height. InputBox now has no vertical padding
-// (just px-2 horizontal), so single-line content = h-9 button = 36px, plus
-// the bar's 2px box-border = 38px. In bar mode we still use min-height +
-// height:auto so multi-line textarea (auto-resize up to 96px) grows the bar.
-const BAR_H = 38;
+// Bar's single-line minimum height. With InputBox's py-1.5 (12px total
+// vertical padding) wrapping the h-9 button (36px), inner content = 48px,
+// plus the bar's 2px box-border = 50px. Multi-line still grows: textarea
+// auto-resize caps at 96px, bar follows up to ~110px.
+const BAR_H = 50;
 const STRETCH_MS = 280;
 const DRAG_THRESHOLD_PX = 5;
 const ICON_POS_KEY = "agentIconPos";
@@ -285,8 +285,8 @@ export function ChatBar({
   };
 
   // ── icon ───────────────────────────────────────────────────────────
-  // Framed icon: bg + ring + shadow chrome holds the whatsub logo so it
-  // doesn't disappear against bright video backgrounds on the Player page.
+  // Bare logo, no chrome — relies on drop-shadow to stay visible on bright
+  // video backgrounds. Hover lift via scale-110.
   if (mode === "icon") {
     return (
       <div
@@ -304,23 +304,21 @@ export function ChatBar({
           height: ICON_H,
         }}
       >
-        <div className="relative h-full w-full bg-zinc-900/90 ring-1 ring-zinc-700 hover:ring-zinc-600 rounded-lg shadow-lg flex items-center justify-center backdrop-blur-sm transition-colors">
-          <img
-            src={whatsubIcon}
-            alt=""
-            width={24}
-            height={24}
-            draggable={false}
-            className="rounded"
+        <img
+          src={whatsubIcon}
+          alt="打开 AI 助手"
+          width={ICON_W}
+          height={ICON_H}
+          draggable={false}
+          className="block h-full w-full rounded drop-shadow-lg hover:scale-110 transition-transform"
+        />
+        {hasUnread && (
+          <span
+            data-testid="agent-unread-dot"
+            className="absolute top-0 right-0 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-zinc-900"
+            aria-hidden="true"
           />
-          {hasUnread && (
-            <span
-              data-testid="agent-unread-dot"
-              className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-zinc-900"
-              aria-hidden="true"
-            />
-          )}
-        </div>
+        )}
       </div>
     );
   }

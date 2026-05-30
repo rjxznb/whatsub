@@ -149,11 +149,11 @@ export function InputBox({
       : "问点什么…";
 
   return (
-    // px-2 horizontal padding only; no vertical padding so the bar's height
-    // equals the button's height (h-9 = 36) + the bar's own border. items-end
-    // keeps the send button anchored to the bottom row when the textarea
+    // px-2 horizontal + py-1.5 vertical padding gives the button a small
+    // breathing margin (6px above + below) inside the bar. items-end keeps
+    // the send button anchored to the bottom row when the textarea
     // auto-grows for multi-line input.
-    <div className="flex items-end gap-2 px-2">
+    <div className="flex items-end gap-2 px-2 py-1.5">
       <textarea
         ref={textareaRef}
         value={text}

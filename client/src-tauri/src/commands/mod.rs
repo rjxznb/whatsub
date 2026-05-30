@@ -11,3 +11,4 @@ pub mod auth;
 pub mod corpus;
 pub mod library_sync;
 pub mod agent;
+pub mod youtube_search;

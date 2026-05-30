@@ -348,23 +348,26 @@ export function ChatBar({
 
   // During the icon → bar/panel "stretch left" animation, we render at the
   // icon's geometry on the first frame, then transition (left + top + width +
-  // height) to the bar/panel's real geometry. Dragging suppresses the
+  // min-height) to the bar/panel's real geometry. Dragging suppresses the
   // transition so the bar tracks the cursor 1:1 without lag.
+  //
+  // CRITICAL: stretch animation uses MIN-HEIGHT, never an explicit `height`.
+  // Why: if we used `height: 40` during stretch and then removed it (set
+  // to undefined for bar mode), CSS can't animate height→auto cleanly —
+  // WebView2 lingers at the explicit value, then snaps to a content-driven
+  // value that uses the textarea's UA-default size (~45px), making the bar
+  // 60+ instead of 50. Typing later triggers the textarea's useLayoutEffect
+  // which finally collapses everything to the right size — the user
+  // experiences this as "bar suddenly shrinks on first keystroke".
+  // Using min-height instead lets us animate a real numeric→numeric value
+  // (40 → 50) without ever leaving the auto-height regime.
   const renderTop = stretchFrom ? stretchFrom.y : realTop;
   const renderLeft = stretchFrom ? stretchFrom.x : barPos.x;
   const renderWidth = stretchFrom ? stretchFrom.w : BAR_W;
-  // Height handling differs by state:
-  //   - stretch animation: explicit (frame-1 = icon's height = 40px)
-  //   - panel: explicit (panelHeightPx())
-  //   - bar steady state: no fixed height — uses min-height: BAR_H so the
-  //     textarea's auto-resize can grow the bar vertically for multi-line
-  //     input. Setting an explicit height here would clip the textarea
-  //     and the button, which is what was making the send icon disappear.
-  const renderHeight: number | undefined = stretchFrom
-    ? stretchFrom.h
-    : expanded
-      ? h
-      : undefined;
+  const isPanel = expanded && !stretchFrom;
+  const sizingStyle: React.CSSProperties = isPanel
+    ? { height: h }                                  // panel: explicit
+    : { minHeight: stretchFrom?.h ?? BAR_H };        // bar / stretch: min-height
 
   const transitionCss = dragging
     ? "none"
@@ -382,7 +385,7 @@ export function ChatBar({
         top: renderTop,
         left: renderLeft,
         width: renderWidth,
-        ...(renderHeight !== undefined ? { height: renderHeight } : { minHeight: BAR_H }),
+        ...sizingStyle,
         transition: transitionCss,
       }}
     >

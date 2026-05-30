@@ -53,11 +53,11 @@ interface Props {
 const ICON_W = 40;
 const ICON_H = 40;
 const BAR_W = 600;
-// Bar's single-line minimum height. InputBox content ≈ 52px (p-2 + h-9 button),
-// + 2px for the bar's border (box-border) → 54px exact fit.
-// In bar mode, the container uses min-height (not explicit height) so the
-// textarea's auto-resize can grow the bar vertically for multi-line input.
-const BAR_H = 54;
+// Bar's single-line minimum height. InputBox now has no vertical padding
+// (just px-2 horizontal), so single-line content = h-9 button = 36px, plus
+// the bar's 2px box-border = 38px. In bar mode we still use min-height +
+// height:auto so multi-line textarea (auto-resize up to 96px) grows the bar.
+const BAR_H = 38;
 const STRETCH_MS = 280;
 const DRAG_THRESHOLD_PX = 5;
 const ICON_POS_KEY = "agentIconPos";

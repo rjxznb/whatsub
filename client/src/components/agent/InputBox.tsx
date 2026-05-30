@@ -146,7 +146,11 @@ export function InputBox({
       : "问点什么…";
 
   return (
-    <div className="flex items-end gap-2 p-2">
+    // px-2 horizontal padding only; no vertical padding so the bar's height
+    // equals the button's height (h-9 = 36) + the bar's own border. items-end
+    // keeps the send button anchored to the bottom row when the textarea
+    // auto-grows for multi-line input.
+    <div className="flex items-end gap-2 px-2">
       <textarea
         ref={textareaRef}
         value={text}
@@ -155,7 +159,7 @@ export function InputBox({
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}
-        className="flex-1 resize-none rounded-md bg-zinc-800/40 text-[14px] text-zinc-100 placeholder-zinc-500 px-3 py-2 focus:outline-none focus:bg-zinc-800/60 disabled:opacity-50"
+        className="flex-1 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-2 focus:outline-none disabled:opacity-50"
         aria-label="输入消息"
       />
       {streaming ? (

@@ -69,12 +69,15 @@ export function InputBox({
     }
   }, [initialValue]);
 
-  // Auto-resize
+  // Auto-resize: floor at 36 (= button h-9) so single-line input visually
+  // matches the send button's height. Tailwind min-h-9 / max-h-24 on the
+  // textarea also CSS-clamps in case the useEffect mis-measures.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 96) + "px";
+    const natural = el.scrollHeight;
+    el.style.height = Math.max(36, Math.min(natural, 96)) + "px";
   }, [text]);
 
   const canSend = !streaming && !noLlm && text.trim().length > 0;
@@ -159,7 +162,7 @@ export function InputBox({
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}
-        className="flex-1 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-2 focus:outline-none disabled:opacity-50"
+        className="flex-1 min-h-9 max-h-24 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-1.5 leading-tight focus:outline-none disabled:opacity-50"
         aria-label="输入消息"
       />
       {streaming ? (

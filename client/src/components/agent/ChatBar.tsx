@@ -53,7 +53,10 @@ interface Props {
 const ICON_W = 40;
 const ICON_H = 40;
 const BAR_W = 600;
-const BAR_H = 52;
+// InputBox content height ≈ 53px (p-2 8+8 + button h-9 36), and the bar has
+// border-1 (box-border) so usable inner = BAR_H - 2. 60 leaves a few px of
+// breathing room so the send button isn't clipped by overflow-hidden.
+const BAR_H = 60;
 const STRETCH_MS = 280;
 const DRAG_THRESHOLD_PX = 5;
 const ICON_POS_KEY = "agentIconPos";
@@ -363,7 +366,17 @@ export function ChatBar({
           {inlineConfirms}
         </>
       )}
-      <div className="shrink-0 cursor-default">{inputBox}</div>
+      <div
+        className="shrink-0 cursor-default"
+        onFocusCapture={() => {
+          // Clicking into the textarea (or any focusable child of inputBox)
+          // is the most natural "I want to chat" gesture from the bar — flip
+          // to panel so the user sees history above their cursor.
+          if (mode === "bar") onModeChange("panel");
+        }}
+      >
+        {inputBox}
+      </div>
     </div>
   );
 }

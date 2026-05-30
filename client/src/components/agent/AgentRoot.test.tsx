@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { AgentRoot } from "./AgentRoot";
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { MemoryRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { AgentRoot, pageDefaultMode } from "./AgentRoot";
 import { useAgent } from "../../store/agent";
 import { useSettings } from "../../store/settings";
 import { DEFAULT_SETTINGS } from "../../types/settings";
@@ -40,50 +40,83 @@ beforeEach(() => {
     settings: DEFAULT_SETTINGS,
     loaded: true,
   });
-  // Wipe panelOpen flag so each test starts in the "collapsed" branch.
+  // Wipe persisted mode + position keys so each test starts fresh.
   try {
+    localStorage.removeItem("agentBarMode");
     localStorage.removeItem("agentPanelOpen");
+    localStorage.removeItem("agentIconPos");
+    localStorage.removeItem("agentBarPos");
   } catch {
     /* ignore */
   }
 });
 
-function renderWithRouter() {
+function renderWithRouter(initialPath: string = "/library") {
   return render(
-    <MemoryRouter initialEntries={["/library"]}>
+    <MemoryRouter initialEntries={[initialPath]}>
       <AgentRoot />
     </MemoryRouter>,
   );
 }
 
-describe("AgentRoot", () => {
-  it("always renders the ChatBar in collapsed state", () => {
-    renderWithRouter();
-    // ChatBar is always mounted as a dialog with aria-label "AI 助手".
-    // In the collapsed state aria-expanded should be "false".
+describe("pageDefaultMode", () => {
+  it("/player/* → icon", () => {
+    expect(pageDefaultMode("/player/abc")).toBe("icon");
+    expect(pageDefaultMode("/player/xyz?t=5")).toBe("icon");
+  });
+
+  it("everything else → bar", () => {
+    expect(pageDefaultMode("/")).toBe("bar");
+    expect(pageDefaultMode("/library")).toBe("bar");
+    expect(pageDefaultMode("/settings")).toBe("bar");
+    expect(pageDefaultMode("/corpus")).toBe("bar");
+  });
+});
+
+describe("AgentRoot — initial mount", () => {
+  it("mounts in bar mode on /library by default", () => {
+    renderWithRouter("/library");
+    // ChatBar in bar mode exposes the dialog role with aria-expanded=false.
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
     expect(dialog).toBeTruthy();
     expect(dialog.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("does not render the header content while collapsed", () => {
-    renderWithRouter();
+  it("mounts in icon mode on /player/X by default", () => {
+    renderWithRouter("/player/abc");
+    // In icon mode no dialog renders — instead the "打开 AI 助手" button is up.
+    expect(
+      screen.getByRole("button", { name: "打开 AI 助手" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
+  });
+
+  it("persisted mode survives reload", () => {
+    localStorage.setItem("agentBarMode", "panel");
+    renderWithRouter("/library");
+    const dialog = screen.getByRole("dialog", { name: "AI 助手" });
+    expect(dialog.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("does not render the header content while in bar mode", () => {
+    renderWithRouter("/library");
     // ConversationHeader's 选择会话 button only appears when expanded.
     expect(screen.queryByRole("button", { name: "选择会话" })).toBeNull();
   });
 
-  it("clicking the bar expands it and shows EmptyState (noLlm copy)", () => {
-    renderWithRouter();
+  it("clicking the bar expands it to panel and shows EmptyState (noLlm copy)", () => {
+    renderWithRouter("/library");
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
-    fireEvent.click(dialog);
-    // After expand: aria-expanded flips and the EmptyState noLlm copy renders.
+    // Click semantics now use mousedown + mouseup (no drag).
+    fireEvent.mouseDown(dialog, { clientX: 200, clientY: 600 });
+    fireEvent.mouseUp(document, { clientX: 200, clientY: 600 });
     expect(dialog.getAttribute("aria-expanded")).toBe("true");
     expect(dialog.textContent).toContain("需要先配置 LLM");
   });
 
   it("calls setNavigator on mount (so nav tools can route)", () => {
     const spy = vi.spyOn(nav, "setNavigator");
-    renderWithRouter();
+    renderWithRouter("/library");
     // Called at least once at mount; we don't assert exact arg because the
     // navigate fn identity is opaque, but it must NOT be null.
     expect(spy).toHaveBeenCalled();
@@ -97,13 +130,13 @@ describe("AgentRoot", () => {
     // Swap hydrate to a spy via setState. (zustand's create allows full slot
     // replacement; useAgent.getState() returns the live object after.)
     useAgent.setState({ hydrate: hydrateSpy });
-    renderWithRouter();
+    renderWithRouter("/library");
     expect(hydrateSpy).toHaveBeenCalledTimes(1);
   });
 
   it("clears setNavigator on unmount", () => {
     const spy = vi.spyOn(nav, "setNavigator");
-    const { unmount } = renderWithRouter();
+    const { unmount } = renderWithRouter("/library");
     spy.mockClear();
     unmount();
     // Cleanup pass should set the navigator to null.
@@ -143,12 +176,75 @@ describe("AgentRoot", () => {
       },
       hydrated: true,
     });
-    renderWithRouter();
+    renderWithRouter("/library");
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
-    fireEvent.click(dialog);
+    fireEvent.mouseDown(dialog, { clientX: 200, clientY: 600 });
+    fireEvent.mouseUp(document, { clientX: 200, clientY: 600 });
     // EmptyState noLlm copy must NOT be present once messages exist.
     expect(dialog.textContent).not.toContain("AI 助手需要先配置 LLM");
     // The user message content should appear.
     expect(dialog.textContent).toContain("hi");
+  });
+});
+
+// A tiny in-tree helper for the nav-aware tests: a button that swaps the
+// route. AgentRoot's useLocation() will see the new pathname on the next
+// render and the navigation-nudge effect fires.
+function NavTrigger({ to }: { to: string }) {
+  const navigate = useNavigate();
+  return (
+    <button data-testid="nav-trigger" onClick={() => navigate(to)}>
+      go
+    </button>
+  );
+}
+
+function renderWithNav(initialPath: string, navTo: string) {
+  return render(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Routes>
+        <Route
+          path="*"
+          element={
+            <>
+              <AgentRoot />
+              <NavTrigger to={navTo} />
+            </>
+          }
+        />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe("AgentRoot — navigation nudges", () => {
+  it("navigating from /library to /player/X with mode=bar switches to icon", () => {
+    renderWithNav("/library", "/player/abc");
+    // Confirm we started in bar mode.
+    expect(
+      screen.getByRole("dialog", { name: "AI 助手" }).getAttribute("aria-expanded"),
+    ).toBe("false");
+    act(() => {
+      fireEvent.click(screen.getByTestId("nav-trigger"));
+    });
+    // After navigation: page-default for /player/X is "icon"; mode follows.
+    expect(
+      screen.getByRole("button", { name: "打开 AI 助手" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
+  });
+
+  it("panel mode is sticky across navigation (does NOT collapse on nav)", () => {
+    // Seed: persisted panel + on /library.
+    localStorage.setItem("agentBarMode", "panel");
+    renderWithNav("/library", "/player/abc");
+    const dialog = screen.getByRole("dialog", { name: "AI 助手" });
+    expect(dialog.getAttribute("aria-expanded")).toBe("true");
+    act(() => {
+      fireEvent.click(screen.getByTestId("nav-trigger"));
+    });
+    // Panel remains open after navigating to /player/X.
+    const stillDialog = screen.getByRole("dialog", { name: "AI 助手" });
+    expect(stillDialog.getAttribute("aria-expanded")).toBe("true");
   });
 });

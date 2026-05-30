@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { importVideoTool } from "./import_video";
+import { useSettings } from "../../store/settings";
 
 vi.mock("@tauri-apps/api/core");
 
@@ -8,6 +9,14 @@ const ctx = { signal: new AbortController().signal };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default whisperModel so the required-field guard passes.
+  // Individual tests can override via useSettings.setState({...}).
+  useSettings.setState({
+    settings: {
+      ...useSettings.getState().settings,
+      whisperModel: "base",
+    },
+  });
 });
 
 describe("import_video tool", () => {
@@ -20,7 +29,7 @@ describe("import_video tool", () => {
     expect(importVideoTool.availableOn({ pathname: "/player/abc" })).toBe(true);
   });
 
-  it("execute invokes import_video with background:true", async () => {
+  it("execute invokes import_video with req:{...} wrapper + whisperModel", async () => {
     const mockInvoke = vi.mocked(invoke);
     mockInvoke.mockResolvedValue(undefined);
 
@@ -30,10 +39,13 @@ describe("import_video tool", () => {
     );
 
     expect(mockInvoke).toHaveBeenCalledWith("import_video", {
-      sourceKind: "url",
-      sourceValue: "https://www.youtube.com/watch?v=abc123",
-      quality: "best",
-      background: true,
+      req: {
+        sourceKind: "url",
+        sourceValue: "https://www.youtube.com/watch?v=abc123",
+        whisperModel: "base",
+        quality: "standard",
+        background: true,
+      },
     });
     expect(result.started).toBe(true);
     expect(result.watchAt).toBe("/library");
@@ -44,20 +56,20 @@ describe("import_video tool", () => {
     mockInvoke.mockResolvedValue(undefined);
 
     const result = await importVideoTool.execute(
-      { url: "https://www.youtube.com/watch?v=xyz789", quality: "720p" },
+      { url: "https://www.youtube.com/watch?v=xyz789", quality: "high" },
       ctx
     );
 
     expect(mockInvoke).toHaveBeenCalledWith("import_video", {
-      sourceKind: "url",
-      sourceValue: "https://www.youtube.com/watch?v=xyz789",
-      quality: "720p",
-      background: true,
+      req: expect.objectContaining({
+        sourceValue: "https://www.youtube.com/watch?v=xyz789",
+        quality: "high",
+      }),
     });
     expect(result.started).toBe(true);
   });
 
-  it("execute defaults to 'best' when quality is not provided", async () => {
+  it("execute defaults to 'standard' (720p) when quality is not provided", async () => {
     const mockInvoke = vi.mocked(invoke);
     mockInvoke.mockResolvedValue(undefined);
 
@@ -69,10 +81,11 @@ describe("import_video tool", () => {
     expect(mockInvoke).toHaveBeenCalledWith(
       "import_video",
       expect.objectContaining({
-        quality: "best",
+        req: expect.objectContaining({ quality: "standard" }),
       })
     );
   });
+
 
   it("result has started:true and watchAt:/library", async () => {
     const mockInvoke = vi.mocked(invoke);

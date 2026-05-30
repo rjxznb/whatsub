@@ -8,10 +8,12 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { ToolDef } from "../types";
+import { useSettings } from "../../store/settings";
 
 export interface ImportVideoArgs {
   url: string;
-  quality?: "best" | "720p" | "1080p";
+  /** "low" / "standard" (720p) / "high" / "best" — see Rust ImportRequest.quality. */
+  quality?: "low" | "standard" | "high" | "best";
 }
 
 export interface ImportVideoResult {
@@ -23,14 +25,14 @@ export interface ImportVideoResult {
 export const importVideoTool: ToolDef<ImportVideoArgs, ImportVideoResult> = {
   id: "import_video",
   description:
-    "Import a video from a URL (YouTube, Bilibili, etc.). The import runs in the background; check the Library to see progress. Quality can be 'best', '720p', or '1080p'; defaults to 'best'.",
+    "Import a video from a URL (YouTube, Bilibili, etc.). The import runs in the background — returns immediately; check the Library to see progress. Quality is one of low/standard/high/best (standard=720p is the default; best lets yt-dlp pick the highest quality available, can be very large).",
   parameters: {
     type: "object",
     properties: {
       url: { type: "string" },
       quality: {
         type: "string",
-        enum: ["best", "720p", "1080p"],
+        enum: ["low", "standard", "high", "best"],
         nullable: true,
       },
     },
@@ -42,14 +44,24 @@ export const importVideoTool: ToolDef<ImportVideoArgs, ImportVideoResult> = {
   runningLabel: "正在启动导入…",
   doneLabel: () => "已启动导入（进度看 Library）",
   async execute({ url, quality }, _ctx) {
+    const settings = useSettings.getState().settings;
+
+    // The Rust command signature is `import_video(app, state, req: ImportRequest)`
+    // so the JS-side invoke MUST wrap args in a `req` key (matching the Rust
+    // parameter name). Tauri converts JS camelCase to Rust snake_case via
+    // serde rename_all = "camelCase" on the request struct.
+    //
     // Fire-and-watch: background:true returns immediately after enqueue.
-    // The actual import happens out-of-band; LLM-generated messages tell
-    // the user to check the Library.
-    await invoke<void>("import_video", {
-      sourceKind: "url",
-      sourceValue: url,
-      quality: quality ?? "best",
-      background: true,
+    // The actual yt-dlp + Whisper + LLM work happens out-of-band; the LLM
+    // tells the user to check the Library for progress rather than awaiting.
+    await invoke<unknown>("import_video", {
+      req: {
+        sourceKind: "url",
+        sourceValue: url,
+        whisperModel: settings.whisperModel,
+        quality: quality ?? "standard",
+        background: true,
+      },
     });
 
     return {

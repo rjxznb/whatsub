@@ -154,9 +154,15 @@ export function ChatBar({
   const [dragging, setDragging] = useState(false);
 
   // "Stretch left" animation when transitioning OUT of icon mode. We render
-  // the bar at the icon's geometry on the first frame, then snap to the bar's
-  // real geometry on the next frame so the CSS transition interpolates
-  // (width grows + left moves leftward in lockstep, anchored bottom-right).
+  // the bar at the icon's geometry on the FIRST frame, then snap to the bar's
+  // real (persisted) geometry on the next frame so the CSS transition
+  // interpolates top + left + width + height — visually the bar slides + grows
+  // from where the icon was to its bar/panel location.
+  //
+  // Critically, barPos is NOT mutated — only the transient `stretchFrom`
+  // overrides geometry during the animation. After the animation clears, the
+  // bar renders at its persisted (or default) barPos as if no override
+  // happened.
   const [stretchFrom, setStretchFrom] = useState<{
     x: number;
     y: number;
@@ -168,22 +174,16 @@ export function ChatBar({
     const prev = prevModeRef.current;
     prevModeRef.current = mode;
     if (mode !== "icon" && prev === "icon") {
-      // Anchor: bar/panel's bottom-right corner aligns with icon's bottom-right.
-      const targetW = BAR_W;
-      const targetH = mode === "panel" ? panelHeightPx() : BAR_H;
-      const anchorRight = iconPos.x + ICON_W;
-      const anchorBottom = iconPos.y + ICON_H;
-      const targetX = Math.max(0, Math.min(viewportW() - targetW, anchorRight - targetW));
-      const targetY = Math.max(0, Math.min(viewportH() - targetH, anchorBottom - targetH));
-      setBarPos({ x: targetX, y: targetY });
       setStretchFrom({ x: iconPos.x, y: iconPos.y, w: ICON_W, h: ICON_H });
       // Double rAF so the initial render lands before we update to the target.
+      let r2: number | null = null;
       const r1 = requestAnimationFrame(() => {
-        const r2 = requestAnimationFrame(() => setStretchFrom(null));
-        cleanups.push(() => cancelAnimationFrame(r2));
+        r2 = requestAnimationFrame(() => setStretchFrom(null));
       });
-      const cleanups: Array<() => void> = [() => cancelAnimationFrame(r1)];
-      return () => cleanups.forEach((c) => c());
+      return () => {
+        cancelAnimationFrame(r1);
+        if (r2 != null) cancelAnimationFrame(r2);
+      };
     }
   }, [mode, iconPos.x, iconPos.y]);
 

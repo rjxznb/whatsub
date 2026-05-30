@@ -162,7 +162,8 @@ export function InputBox({
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}
-        className="flex-1 min-h-9 max-h-24 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-1.5 leading-tight focus:outline-none disabled:opacity-50"
+        style={{ minHeight: 36, maxHeight: 96 }}
+        className="flex-1 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-1.5 leading-tight focus:outline-none disabled:opacity-50"
         aria-label="输入消息"
       />
       {streaming ? (

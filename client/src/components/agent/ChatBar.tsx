@@ -285,9 +285,8 @@ export function ChatBar({
   };
 
   // ── icon ───────────────────────────────────────────────────────────
-  // Bare logo, no chrome (no bg/ring/shadow/rounded box). Just the whatsub
-  // icon floating with a hover lift effect. The unread dot sits floating
-  // top-right of the icon directly.
+  // Framed icon: bg + ring + shadow chrome holds the whatsub logo so it
+  // doesn't disappear against bright video backgrounds on the Player page.
   if (mode === "icon") {
     return (
       <div
@@ -295,7 +294,7 @@ export function ChatBar({
         role="button"
         aria-label="打开 AI 助手"
         aria-expanded={false}
-        title="AI 助手 · 找 YouTube 视频 / 解释字幕 / 加生词 / 同步管理库\n点击展开输入框 · 长按拖动移动位置"
+        title="AI 助手 · 找 YouTube 视频 / 解释字幕 / 加生词 / 同步管理库&#10;点击展开输入框 · 长按拖动移动位置"
         onMouseDown={onContainerMouseDown}
         className="fixed z-50 select-none cursor-grab active:cursor-grabbing"
         style={{
@@ -305,21 +304,23 @@ export function ChatBar({
           height: ICON_H,
         }}
       >
-        <img
-          src={whatsubIcon}
-          alt="打开 AI 助手"
-          width={ICON_W}
-          height={ICON_H}
-          draggable={false}
-          className="block h-full w-full rounded drop-shadow-lg hover:scale-110 transition-transform"
-        />
-        {hasUnread && (
-          <span
-            data-testid="agent-unread-dot"
-            className="absolute top-0 right-0 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-zinc-900"
-            aria-hidden="true"
+        <div className="relative h-full w-full bg-zinc-900/90 ring-1 ring-zinc-700 hover:ring-zinc-600 rounded-lg shadow-lg flex items-center justify-center backdrop-blur-sm transition-colors">
+          <img
+            src={whatsubIcon}
+            alt=""
+            width={24}
+            height={24}
+            draggable={false}
+            className="rounded"
           />
-        )}
+          {hasUnread && (
+            <span
+              data-testid="agent-unread-dot"
+              className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-zinc-900"
+              aria-hidden="true"
+            />
+          )}
+        </div>
       </div>
     );
   }

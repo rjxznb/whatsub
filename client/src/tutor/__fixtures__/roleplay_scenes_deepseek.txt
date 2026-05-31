@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"{\"scenarios\":[{\"id\":\"s1\",\"title\":\"你当旅客我当海关\",\"setup\":\"入境检查\",\"userRole\":\"旅客\",\"agentRole\":\"海关官员\",\"difficulty\":2,\"vocabHints\":[\"customs declaration\",\"purpose of visit\"]},{\"id\":\"s2\",\"title\":\"你当顾客我当店员\",\"setup\":\"超市结账\",\"userRole\":\"顾客\",\"agentRole\":\"收银员\",\"difficulty\":1,\"vocabHints\":[\"self-checkout\",\"receipt\"]}]}"}}]}
+
+data: [DONE]

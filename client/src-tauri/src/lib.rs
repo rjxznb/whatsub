@@ -106,6 +106,9 @@ pub fn run() {
             commands::learner_profile::learner_profile_rebuild_index,
             commands::learner_profile::learner_profile_export,
             commands::learner_profile::learner_profile_reset,
+            commands::lesson_state::lesson_state_load,
+            commands::lesson_state::lesson_state_save,
+            commands::lesson_state::lesson_state_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

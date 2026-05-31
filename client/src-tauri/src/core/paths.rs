@@ -40,6 +40,13 @@ pub fn learner_profile_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("learner_profile.json"))
 }
 
+/// Returns %APPDATA%/whatsub/lesson_state.json — resume state for the most
+/// recent in-progress guided lesson. Single-lesson at a time (no
+/// multi-video resume queue). Deleted on lesson completion.
+pub fn lesson_state_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("lesson_state.json"))
+}
+
 /// Multi-site cookie jar (JSON, source of truth). Holds per-site
 /// buckets keyed by site_key. Always re-derive cookies.txt from this.
 pub fn cookies_jar_path() -> Result<PathBuf, String> {

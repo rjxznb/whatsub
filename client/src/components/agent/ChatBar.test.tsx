@@ -1,24 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ChatBar, type ChatBarMode } from "./ChatBar";
-import { useVoiceMode } from "../../store/voiceMode";
-
-// Spy on the voiceMode store's openVoice action so click-on-icon tests can
-// verify voice is opened instead of mode advancing.
-vi.mock("../../store/voiceMode", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../store/voiceMode")>();
-  return {
-    ...actual,
-    useVoiceMode: {
-      ...actual.useVoiceMode,
-      getState: vi.fn(() => ({
-        open: false,
-        openVoice: vi.fn(),
-        closeVoice: vi.fn(),
-      })),
-    },
-  };
-});
 
 function defaults(overrides: Partial<Parameters<typeof ChatBar>[0]> = {}) {
   return {
@@ -107,15 +89,8 @@ describe("ChatBar — mode rendering", () => {
 });
 
 describe("ChatBar — click-to-advance (drag below threshold)", () => {
-  it("icon click opens voice (does NOT call onModeChange)", () => {
+  it("icon click expands to the text panel", () => {
     const onModeChange = vi.fn();
-    const openVoiceSpy = vi.fn();
-    vi.mocked(useVoiceMode.getState).mockReturnValue({
-      open: false,
-      openVoice: openVoiceSpy,
-      closeVoice: vi.fn(),
-    });
-
     const { container } = render(
       <ChatBar {...defaults({ mode: "icon", onModeChange })} />,
     );
@@ -123,9 +98,8 @@ describe("ChatBar — click-to-advance (drag below threshold)", () => {
     // Mousedown then immediately mouseup with no movement → treat as click.
     fireEvent.mouseDown(root, { clientX: 100, clientY: 100 });
     fireEvent.mouseUp(document, { clientX: 100, clientY: 100 });
-    // Icon click now opens voice, NOT advances to "bar".
-    expect(openVoiceSpy).toHaveBeenCalled();
-    expect(onModeChange).not.toHaveBeenCalled();
+    // Icon click now opens the text panel (voice is its own Shift+V overlay).
+    expect(onModeChange).toHaveBeenCalledWith("panel");
   });
 
   it("bar → panel on click (no drag)", () => {
@@ -139,15 +113,8 @@ describe("ChatBar — click-to-advance (drag below threshold)", () => {
     expect(onModeChange).toHaveBeenCalledWith("panel");
   });
 
-  it("tiny move (< 5px) on icon is still a click → opens voice", () => {
+  it("tiny move (< 5px) on icon is still a click → expands to panel", () => {
     const onModeChange = vi.fn();
-    const openVoiceSpy = vi.fn();
-    vi.mocked(useVoiceMode.getState).mockReturnValue({
-      open: false,
-      openVoice: openVoiceSpy,
-      closeVoice: vi.fn(),
-    });
-
     const { container } = render(
       <ChatBar {...defaults({ mode: "icon", onModeChange })} />,
     );
@@ -155,9 +122,8 @@ describe("ChatBar — click-to-advance (drag below threshold)", () => {
     fireEvent.mouseDown(root, { clientX: 100, clientY: 100 });
     fireEvent.mouseMove(document, { clientX: 103, clientY: 102 });
     fireEvent.mouseUp(document, { clientX: 103, clientY: 102 });
-    // Tiny move (sub-threshold) is a click → opens voice.
-    expect(openVoiceSpy).toHaveBeenCalled();
-    expect(onModeChange).not.toHaveBeenCalled();
+    // Tiny move (sub-threshold) is a click → panel.
+    expect(onModeChange).toHaveBeenCalledWith("panel");
   });
 
   it("panel: click on container does NOT call onModeChange", () => {

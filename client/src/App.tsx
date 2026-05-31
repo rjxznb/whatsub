@@ -13,6 +13,7 @@ import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { AgentRoot } from "./components/agent/AgentRoot";
 import { TutorPortalRoot } from "./components/tutor/TutorPortalRoot";
 import { VoiceMode } from "./components/voice/VoiceMode";
+import { useVoiceMode } from "./store/voiceMode";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
@@ -75,6 +76,29 @@ function App() {
   useEffect(() => {
     void mountDownloadQueueListener();
   }, []);
+
+  // Global Shift+V → open the Siri-style voice overlay. Ignored while typing
+  // in an input/textarea so it doesn't hijack a literal "V".
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.shiftKey || e.repeat) return;
+      if (e.key !== "v" && e.key !== "V") return;
+      const el = document.activeElement as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      useVoiceMode.getState().openVoice();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     // LicenseGate is the OUTERMOST gate for the *app* — routing, FirstRun
     // setup, BackendListener, etc. don't mount until the user has a valid

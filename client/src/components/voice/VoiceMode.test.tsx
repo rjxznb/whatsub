@@ -88,7 +88,7 @@ describe("VoiceMode", () => {
     expect(document.body.textContent).toContain("在听，请说…");
   });
 
-  it("clicking close button calls stop() and closeVoice()", async () => {
+  it("clicking the backdrop dismisses (stop() + closeVoice())", async () => {
     const closeVoiceSpy = vi.fn();
     useVoiceMode.setState({ open: true, closeVoice: closeVoiceSpy });
 
@@ -100,13 +100,9 @@ describe("VoiceMode", () => {
     const voiceEl = document.querySelector("[data-voice-mode]");
     expect(voiceEl).not.toBeNull();
 
-    const closeBtn = voiceEl!.querySelector(
-      "button[aria-label='关闭语音模式']",
-    ) as HTMLButtonElement | null;
-    expect(closeBtn).not.toBeNull();
-
+    // mousedown on the backdrop itself (target === currentTarget) dismisses.
     await act(async () => {
-      fireEvent.click(closeBtn!);
+      fireEvent.mouseDown(voiceEl!);
     });
 
     expect(__mockState.stop).toHaveBeenCalled();

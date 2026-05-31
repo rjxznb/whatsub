@@ -675,9 +675,23 @@ export function Player() {
       v.addEventListener("timeupdate", onTime);
       void v.play().catch(() => v.removeEventListener("timeupdate", onTime));
     });
+    // Pause / resume — voice mode pauses the video during the AI conversation
+    // and resumes it on close.
+    usePlayerState.getState().setPauseHandler(() => {
+      const v = videoRef.current;
+      if (!v) return false;
+      const wasPlaying = !v.paused;
+      v.pause();
+      return wasPlaying;
+    });
+    usePlayerState.getState().setPlayHandler(() => {
+      void videoRef.current?.play().catch(() => {});
+    });
     return () => {
       usePlayerState.getState().setSeekHandler(null);
       usePlayerState.getState().setPlayRangeHandler(null);
+      usePlayerState.getState().setPauseHandler(null);
+      usePlayerState.getState().setPlayHandler(null);
     };
   }, []);
 

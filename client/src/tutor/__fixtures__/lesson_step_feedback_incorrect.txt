@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"{\"verdict\":\"incorrect\",\"feedback\":\"时态用错了，应该用一般过去时。\",\"errors\":[{\"pattern\":\"past_tense_irregular\",\"userText\":\"I goed there\",\"correction\":\"I went there\",\"detail\":\"go 的过去式是 went\"}]}"}}]}
+
+data: [DONE]

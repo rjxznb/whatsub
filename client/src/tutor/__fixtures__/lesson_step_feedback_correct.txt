@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"{\"verdict\":\"correct\",\"feedback\":\"完全正确，地道又自然。\",\"errors\":[]}"}}]}
+
+data: [DONE]

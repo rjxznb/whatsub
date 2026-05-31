@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"{\"question\":\"如果你来读书3个月，这句话怎么说？\",\"expectedAnswer\":\"I'm here for 3 months of studies.\",\"targetPattern\":\"preposition_wrong\"}"}}]}
+
+data: [DONE]

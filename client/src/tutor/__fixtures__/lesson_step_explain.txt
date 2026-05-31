@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"这句话 \"I'm here for studies\" 是入境时最自然的说法。**studies**: 学业。比 I came to study 更地道，因为口语里常用 be here for + 名词来说明目的。"}}]}
+
+data: [DONE]

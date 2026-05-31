@@ -11,6 +11,7 @@ import { LicenseSessionGate } from "./components/LicenseSessionGate";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { AgentRoot } from "./components/agent/AgentRoot";
+import { TutorPortalRoot } from "./components/tutor/TutorPortalRoot";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
@@ -108,6 +109,7 @@ function App() {
             </Routes>
             <DownloadQueueWidget />
             <AgentRoot />
+            <TutorPortalRoot />
           </BrowserRouter>
         </LicenseSessionGate>
       </LicenseGate>

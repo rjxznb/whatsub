@@ -6,6 +6,7 @@ interface Props {
   onContinue: () => void;
   onRetry: () => void;
   onReplayCue: () => void;
+  onSubmitAnswer: (answer: string) => void;
 }
 
 /** Renders the current step of the lesson runtime. Step 1 starts with
@@ -13,7 +14,7 @@ interface Props {
  *  content; step 4 is the textarea; step 5 is feedback + continue.
  *  All step transitions are driven by the parent overlay calling runtime
  *  methods after this component dispatches an `on*` callback. */
-export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue }: Props) {
+export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue, onSubmitAnswer }: Props) {
   const [draft, setDraft] = useState("");
 
   const { currentStep, currentExplainText, currentQuestion, currentFeedback,
@@ -86,12 +87,12 @@ export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue }: Pr
             type="button"
             onClick={() => {
               if (draft.trim().length === 0) return;
-              onContinue(); // parent calls runtime.submitAnswer(draft)
+              const answer = draft;
               setDraft("");
+              onSubmitAnswer(answer);
             }}
             disabled={draft.trim().length === 0}
             className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-white"
-            data-answer-draft={draft}
           >
             提交答案
           </button>

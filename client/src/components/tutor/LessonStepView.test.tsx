@@ -31,13 +31,13 @@ function makeRuntime(overrides: Partial<LessonRuntime["state"]> = {}): LessonRun
 
 describe("LessonStepView", () => {
   it("step 1 shows 我准备好了 + 重听", () => {
-    render(<LessonStepView runtime={makeRuntime()} onContinue={vi.fn()} onRetry={vi.fn()} onReplayCue={vi.fn()} />);
+    render(<LessonStepView runtime={makeRuntime()} onContinue={vi.fn()} onRetry={vi.fn()} onReplayCue={vi.fn()} onSubmitAnswer={vi.fn()} />);
     expect(screen.getByText(/我准备好了/)).toBeTruthy();
     expect(screen.getByText(/重听/)).toBeTruthy();
   });
 
   it("step 2 with empty explain shows 生成中", () => {
-    render(<LessonStepView runtime={makeRuntime({ currentStep: 2 })} onContinue={vi.fn()} onRetry={vi.fn()} onReplayCue={vi.fn()} />);
+    render(<LessonStepView runtime={makeRuntime({ currentStep: 2 })} onContinue={vi.fn()} onRetry={vi.fn()} onReplayCue={vi.fn()} onSubmitAnswer={vi.fn()} />);
     expect(screen.getByText(/生成中/)).toBeTruthy();
   });
 
@@ -51,6 +51,7 @@ describe("LessonStepView", () => {
         onContinue={vi.fn()}
         onRetry={vi.fn()}
         onReplayCue={vi.fn()}
+        onSubmitAnswer={vi.fn()}
       />,
     );
     expect(screen.getByText(/答对了/)).toBeTruthy();

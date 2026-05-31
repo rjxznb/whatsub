@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, FileOutput, RefreshCw } from "lucide-react";
+import { ArrowLeft, BookOpen, FileOutput, RefreshCw } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
@@ -31,6 +31,11 @@ import {
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
 import type { AnalysisResult, Subtitle, SrtCue } from "../llm/types";
+import { useTutorRuntime } from "../store/tutorRuntime";
+import { planLesson } from "../tutor/lessonPlanLLM";
+import { loadLearnerProfile } from "../tutor/learnerProfile";
+import { LessonResumeBanner } from "../components/tutor/LessonResumeBanner";
+import { message as tauriMessage } from "@tauri-apps/plugin-dialog";
 
 type Tab = "subtitles" | "keyPhrases";
 
@@ -118,6 +123,7 @@ export function Player() {
   }, [showCaptions]);
 
   const [editingSubtitle, setEditingSubtitle] = useState(false);
+  const [tutorPreparing, setTutorPreparing] = useState(false);
 
   // Resizable split between video pane (left) and subtitle pane (right).
   // Persisted as a percentage in localStorage; clamped to 25%-80%.
@@ -788,6 +794,49 @@ export function Player() {
         </button>
         <button
           type="button"
+          disabled={tutorPreparing || analysis.subtitles.length === 0}
+          onClick={async () => {
+            if (!videoId) return;
+            setTutorPreparing(true);
+            try {
+              const currentSettings = useSettings.getState().settings;
+              const subs = useAnalysis.getState().subtitles;
+              const profile = await loadLearnerProfile();
+              const plan = await planLesson({
+                videoId,
+                analysis: subs,
+                profile,
+                settings: currentSettings,
+              });
+              if (plan) {
+                useTutorRuntime.getState().setMode({
+                  kind: "lesson-preclass",
+                  videoId,
+                  plan,
+                });
+              } else {
+                await tauriMessage("生成精讲计划失败，请检查 LLM 配置后重试。");
+              }
+            } catch (e) {
+              await tauriMessage(`精讲计划生成出错：${String(e)}`);
+            } finally {
+              setTutorPreparing(false);
+            }
+          }}
+          title={analysis.subtitles.length === 0 ? "字幕分析完成后可开始精讲" : "精讲这个视频"}
+          className="flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-sky-500/20 text-sky-200 hover:bg-sky-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {tutorPreparing ? (
+            <span className="animate-pulse">准备中…</span>
+          ) : (
+            <>
+              <BookOpen className="h-3.5 w-3.5" />
+              精讲
+            </>
+          )}
+        </button>
+        <button
+          type="button"
           ref={exportButtonRef}
           disabled={!canExport}
           onClick={(e) => {
@@ -811,6 +860,23 @@ export function Player() {
         onRetranscribe={onRetranscribe}
         onMoveToBackground={onMoveToBackground}
       />
+
+      {videoId && (
+        <div className="px-4 pt-2">
+          <LessonResumeBanner
+            videoId={videoId}
+            onResume={(state) => {
+              // TutorPortalRoot will build the LessonRuntime from resumeFrom
+              // when it handles the lesson-in-progress mode.
+              useTutorRuntime.getState().setMode({
+                kind: "lesson-in-progress",
+                videoId,
+                resumeFrom: state,
+              });
+            }}
+          />
+        </div>
+      )}
 
       <div ref={splitContainerRef} className="flex-1 flex min-h-0">
         <div

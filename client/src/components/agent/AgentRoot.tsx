@@ -41,6 +41,7 @@ import { MessageList } from "./MessageList";
 import { InlineConfirmList } from "./InlineConfirmList";
 import { InputBox } from "./InputBox";
 import { EmptyState } from "./EmptyState";
+import { useTutorRuntime } from "../../store/tutorRuntime";
 
 const BAR_MODE_KEY = "agentBarMode";
 const LEGACY_PANEL_OPEN_KEY = "agentPanelOpen";
@@ -78,6 +79,7 @@ export function AgentRoot() {
   const location = useLocation();
   const { settings } = useSettings();
   const pageDefault = pageDefaultMode(location.pathname);
+  const tutorActive = useTutorRuntime((s) => s.mode.kind !== "none");
 
   const [mode, setMode] = useState<ChatBarMode>(() =>
     loadInitialMode(location.pathname),
@@ -146,6 +148,15 @@ export function AgentRoot() {
       setUnreadFlag(false);
     }
   }, [mode]);
+
+  // Collapse agent to icon while any tutor overlay is active so it doesn't
+  // compete with the overlay UI. When the tutor closes, the navigation-nudge
+  // effect above will restore the page default.
+  useEffect(() => {
+    if (tutorActive) {
+      setMode("icon");
+    }
+  }, [tutorActive]);
 
   const noLlm = !isLlmConfigured(settings);
 

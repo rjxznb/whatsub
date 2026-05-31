@@ -4,7 +4,8 @@ import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, Che
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
+import { confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
+import { exportLearnerProfile, resetLearnerProfile } from "../tutor/learnerProfile";
 import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
 import { useAgent } from "../store/agent";
@@ -322,6 +323,8 @@ export function Settings() {
         <UpdateSection />
 
         <ClearAgentHistorySection />
+
+        <TutorSection />
 
       </div>
     </div>
@@ -1436,6 +1439,66 @@ function FileField({
         )}
       </div>
     </label>
+  );
+}
+
+function TutorSection() {
+  const [exporting, setExporting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const path = await exportLearnerProfile();
+      await tauriMessage(`学习档案已导出到\n${path}`);
+    } catch (e) {
+      await tauriMessage(`导出失败：${String(e)}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleReset() {
+    const ok = await tauriConfirm(
+      "确认清空学习档案？所有错误事件 + 薄弱 pattern 都会删除，无法撤销。",
+      { title: "重置学习档案", okLabel: "清空", cancelLabel: "取消", kind: "warning" },
+    );
+    if (!ok) return;
+    setResetting(true);
+    try {
+      await resetLearnerProfile();
+    } catch (e) {
+      await tauriMessage(`重置失败：${String(e)}`);
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  return (
+    <section className="border-t border-zinc-800 pt-6">
+      <h2 className="font-semibold mb-3">私教模式</h2>
+      <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">
+        （私教使用你在「翻译服务」配置的同一个 LLM）
+      </p>
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exporting}
+          className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm rounded disabled:opacity-50 transition-colors"
+        >
+          {exporting ? "导出中..." : "导出学习档案"}
+        </button>
+        <button
+          type="button"
+          onClick={handleReset}
+          disabled={resetting}
+          className="px-3 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 text-rose-200 text-sm rounded disabled:opacity-50 transition-colors"
+        >
+          {resetting ? "重置中..." : "重置学习档案"}
+        </button>
+      </div>
+    </section>
   );
 }
 

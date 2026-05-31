@@ -1,5 +1,6 @@
 import type { LessonPlan } from "../../tutor/types";
 import { TokenEstimateBadge } from "./TokenEstimateBadge";
+import { TUTOR_CARD, TUTOR_EYEBROW, BTN_PRIMARY, BTN_GHOST } from "./styles";
 
 interface Props {
   plan: LessonPlan;
@@ -27,11 +28,9 @@ export function LessonPreClass({
   onCancel,
 }: Props) {
   return (
-    // Frosted-glass card matching the agent's popover language.
-    // Centered, max-w-[520px], lots of vertical breathing room — this is
-    // the user's "about to learn something" moment.
-    <div className="bg-zinc-900/80 backdrop-blur-2xl ring-1 ring-white/10 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-[520px] p-7 text-zinc-100">
-      <div className="text-xs text-zinc-500 uppercase tracking-wider mb-2">准备开课</div>
+    // Flat-zinc card — matches Player/Settings surfaces.
+    <div className={`${TUTOR_CARD} w-full max-w-[520px] p-7`}>
+      <div className={`${TUTOR_EYEBROW} mb-2`}>准备开课</div>
       <div className="text-base text-zinc-100 mb-5">
         {videoTitle} <span className="text-zinc-500 text-sm">· {formatDuration(videoDuration)}</span>
       </div>
@@ -49,7 +48,7 @@ export function LessonPreClass({
       <div className="text-sm text-zinc-400 mb-1">总览</div>
       <div className="text-sm text-zinc-300 mb-5 leading-relaxed">{plan.overview}</div>
 
-      <div className="border-t border-white/5 pt-4 mb-5">
+      <div className="border-t border-zinc-800 pt-4 mb-5">
         <TokenEstimateBadge
           tokens={plan.estimateTokens}
           vendorId={vendorId}
@@ -64,14 +63,14 @@ export function LessonPreClass({
         <button
           type="button"
           onClick={onCancel}
-          className="px-4 py-2 rounded-md text-sm text-zinc-300 hover:bg-white/5 transition-colors"
+          className={BTN_GHOST}
         >
           取消
         </button>
         <button
           type="button"
           onClick={onStart}
-          className="px-5 py-2 rounded-md text-sm font-medium bg-sky-500 hover:bg-sky-400 text-white transition-colors"
+          className={BTN_PRIMARY}
         >
           开始上课
         </button>

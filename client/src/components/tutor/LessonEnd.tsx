@@ -1,5 +1,6 @@
 import type { LessonSummary, RemediationOffer } from "../../tutor/lessonSummary";
 import { ERROR_PATTERN_LABELS } from "../../tutor/errorPatterns";
+import { TUTOR_CARD, TUTOR_EYEBROW, BTN_PRIMARY, BTN_GHOST } from "./styles";
 
 interface Props {
   summary: LessonSummary;
@@ -17,8 +18,8 @@ export function LessonEnd({
   onClose,
 }: Props) {
   return (
-    <div className="bg-zinc-900/80 backdrop-blur-2xl ring-1 ring-white/10 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-[560px] p-7 text-zinc-100">
-      <div className="text-xs text-zinc-500 uppercase tracking-wider mb-2">完成</div>
+    <div className={`${TUTOR_CARD} w-full max-w-[560px] p-7`}>
+      <div className={`${TUTOR_EYEBROW} mb-2`}>完成</div>
       <div className="text-2xl text-zinc-100 mb-6">本节课结束</div>
 
       <div className="space-y-3 mb-6">
@@ -33,7 +34,7 @@ export function LessonEnd({
         </ul>
       </div>
 
-      <div className="border-t border-white/5 pt-4 mb-6">
+      <div className="border-t border-zinc-800 pt-4 mb-6">
         <div className="text-sm text-zinc-400">答题表现</div>
         <div className="text-lg text-zinc-100 mt-1">
           {summary.correctCount} / {summary.totalAnchors} 答对
@@ -65,14 +66,14 @@ export function LessonEnd({
         <button
           type="button"
           onClick={onClose}
-          className="px-4 py-2 rounded-md text-sm text-zinc-300 hover:bg-white/5"
+          className={BTN_GHOST}
         >
           回主页
         </button>
         <button
           type="button"
           onClick={onStartRoleplay}
-          className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
+          className={BTN_PRIMARY}
         >
           角色扮演巩固
         </button>

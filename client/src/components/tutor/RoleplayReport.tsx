@@ -1,5 +1,6 @@
 import type { ForensicReport } from "../../tutor/types";
 import { ERROR_PATTERN_LABELS } from "../../tutor/errorPatterns";
+import { TUTOR_CARD, TUTOR_EYEBROW, BTN_PRIMARY, BTN_GHOST } from "./styles";
 
 interface Props {
   report: ForensicReport;
@@ -10,8 +11,8 @@ interface Props {
 
 export function RoleplayReport({ report, onAnother, onRemediate, onClose }: Props) {
   return (
-    <div className="bg-zinc-900/80 backdrop-blur-2xl ring-1 ring-white/10 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-[600px] p-7 text-zinc-100">
-      <div className="text-xs text-zinc-500 uppercase tracking-wider mb-2">复盘</div>
+    <div className={`${TUTOR_CARD} w-full max-w-[600px] p-7`}>
+      <div className={`${TUTOR_EYEBROW} mb-2`}>复盘</div>
       <div className="text-base text-zinc-100 mb-5">
         共 {report.totalUserTurns} 轮 · {report.naturalCount} 句很自然 ✓
       </div>
@@ -71,21 +72,21 @@ export function RoleplayReport({ report, onAnother, onRemediate, onClose }: Prop
         <button
           type="button"
           onClick={onClose}
-          className="px-4 py-2 rounded-md text-sm text-zinc-300 hover:bg-white/5"
+          className={BTN_GHOST}
         >
           回主页
         </button>
         <button
           type="button"
           onClick={onRemediate}
-          className="px-4 py-2 rounded-md text-sm bg-amber-500/20 hover:bg-amber-500/30 text-amber-200"
+          className="px-4 py-2 rounded-md text-sm bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 transition-colors"
         >
           开专项
         </button>
         <button
           type="button"
           onClick={onAnother}
-          className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
+          className={BTN_PRIMARY}
         >
           再来一轮
         </button>

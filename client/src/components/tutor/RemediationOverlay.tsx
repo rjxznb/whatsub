@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RemediationRuntime } from "../../tutor/remediationRuntime";
 import { ERROR_PATTERN_LABELS } from "../../tutor/errorPatterns";
 import { LessonOverlay } from "./LessonOverlay";
+import { TUTOR_CARD, TUTOR_EYEBROW, TUTOR_TEXTAREA, BTN_PRIMARY } from "./styles";
 
 interface Props {
   runtime: RemediationRuntime | null;
@@ -22,9 +23,9 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
 
   return (
     <LessonOverlay open={open} onClose={onClose}>
-      <div className="bg-zinc-900/80 backdrop-blur-2xl ring-1 ring-white/10 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-[560px] p-7 text-zinc-100">
+      <div className={`${TUTOR_CARD} w-full max-w-[560px] p-7`}>
         <div className="flex items-center justify-between mb-4">
-          <div className="text-xs text-zinc-500 uppercase tracking-wider">3 分钟专项</div>
+          <div className={TUTOR_EYEBROW}>3 分钟专项</div>
           <div className="text-xs text-zinc-500">
             {ERROR_PATTERN_LABELS[runtime.state.pattern]}
           </div>
@@ -48,7 +49,7 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
                       setVersion((v) => v + 1);
                       setDraft("");
                     }}
-                    className="w-full text-left px-3 py-2 rounded-md text-sm bg-white/5 hover:bg-white/10 text-zinc-100"
+                    className="w-full text-left px-3 py-2 rounded-md text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-100 transition-colors"
                   >
                     {c}
                   </button>
@@ -60,7 +61,7 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   rows={2}
-                  className="w-full bg-zinc-900/60 ring-1 ring-white/10 rounded-md p-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-sky-500 mb-3"
+                  className={`${TUTOR_TEXTAREA} mb-3`}
                 />
                 <button
                   type="button"
@@ -70,7 +71,7 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
                     setVersion((v) => v + 1);
                     setDraft("");
                   }}
-                  className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-white"
+                  className={BTN_PRIMARY}
                 >
                   提交
                 </button>
@@ -104,7 +105,7 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
                 await runtime.finish();
                 onFinish();
               }}
-              className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
+              className={BTN_PRIMARY}
             >
               完成
             </button>

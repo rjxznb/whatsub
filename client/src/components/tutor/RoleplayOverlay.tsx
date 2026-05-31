@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RoleplayRuntime } from "../../tutor/roleplayRuntime";
 import { LessonOverlay } from "./LessonOverlay";
+import { TUTOR_CARD, TUTOR_EYEBROW, TUTOR_TEXTAREA, BTN_PRIMARY } from "./styles";
 
 interface Props {
   runtime: RoleplayRuntime;
@@ -14,11 +15,11 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
 
   return (
     <LessonOverlay open={true} onClose={onClose}>
-      <div className="bg-zinc-900/80 backdrop-blur-2xl ring-1 ring-white/10 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-[640px] h-[80vh] flex flex-col p-6 text-zinc-100">
+      <div className={`${TUTOR_CARD} w-full max-w-[640px] h-[80vh] flex flex-col p-6`}>
         {/* Header */}
-        <div className="flex items-center justify-between mb-3 pb-3 border-b border-white/5">
+        <div className="flex items-center justify-between mb-3 pb-3 border-b border-zinc-800">
           <div>
-            <div className="text-xs text-zinc-500 uppercase tracking-wider">角色扮演</div>
+            <div className={TUTOR_EYEBROW}>角色扮演</div>
             <div className="text-sm text-zinc-200 mt-1">
               你: {runtime.state.scenario.userRole} · 我: {runtime.state.scenario.agentRole}
             </div>
@@ -44,7 +45,7 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
                   "max-w-[80%] rounded-lg px-3 py-2 text-sm " +
                   (t.role === "user"
                     ? "bg-sky-500/20 text-sky-100"
-                    : "bg-white/5 text-zinc-100")
+                    : "bg-zinc-800 text-zinc-100")
                 }
               >
                 {t.text}
@@ -63,7 +64,7 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
             placeholder="用英文回复…"
-            className="flex-1 bg-zinc-900/60 ring-1 ring-white/10 rounded-md p-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-sky-500"
+            className={`flex-1 ${TUTOR_TEXTAREA}`}
           />
           <button
             type="button"
@@ -74,7 +75,7 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
               await runtime.submitUserMessage(text);
               setVersion((v) => v + 1);
             }}
-            className="px-4 rounded-md text-sm bg-sky-500 hover:bg-sky-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-white"
+            className={BTN_PRIMARY}
           >
             说完了
           </button>

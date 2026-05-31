@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { TUTOR_BACKDROP } from "./styles";
 
 interface Props {
   open: boolean;
@@ -27,7 +28,7 @@ export function LessonOverlay({ open, onClose, children }: Props) {
   return createPortal(
     <div
       data-tutor-overlay
-      className="fixed inset-0 z-[100] bg-zinc-950/85 backdrop-blur-md flex items-center justify-center p-6 animate-agent-popover-in"
+      className={`${TUTOR_BACKDROP} animate-agent-popover-in`}
       role="dialog"
       aria-modal="true"
       aria-label="私教课"

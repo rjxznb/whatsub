@@ -36,6 +36,10 @@ interface RuntimeState extends LessonState {
   canRetry: boolean;          // true after wrong attempt 1
   answerRevealed: boolean;    // true after wrong attempt 2
   completed: boolean;
+  /** Per-anchor error ids — reset each anchor; NOT persisted. */
+  currentAnchorErrorIds: string[];
+  /** Re-entrancy guard — prevents double-submit while a feedback call is in flight. */
+  submitting: boolean;
 }
 
 function newId(): string {
@@ -79,6 +83,8 @@ export class LessonRuntime {
       canRetry: false,
       answerRevealed: false,
       completed: false,
+      currentAnchorErrorIds: [],
+      submitting: false,
     };
   }
 
@@ -112,66 +118,73 @@ export class LessonRuntime {
 
   async submitAnswer(answer: string): Promise<void> {
     if (!this.state.currentQuestion) return;
-    this.state.attemptsThisAnchor += 1;
-    const f = await this.deps.llm.feedback({
-      plan: this.deps.plan,
-      anchorIdx: this.state.currentAnchorIdx,
-      question: this.state.currentQuestion,
-      userAnswer: answer,
-      attempt: this.state.attemptsThisAnchor,
-    });
-    this.state.currentFeedback = f;
-    this.state.currentStep = 5;
+    if (this.state.submitting) return;
+    this.state.submitting = true;
+    try {
+      this.state.attemptsThisAnchor += 1;
+      const f = await this.deps.llm.feedback({
+        plan: this.deps.plan,
+        anchorIdx: this.state.currentAnchorIdx,
+        question: this.state.currentQuestion,
+        userAnswer: answer,
+        attempt: this.state.attemptsThisAnchor,
+      });
+      this.state.currentFeedback = f;
+      this.state.currentStep = 5;
 
-    if (f && f.errors.length > 0) {
-      const anchor = this.deps.plan.anchors[this.state.currentAnchorIdx];
-      for (const err of f.errors) {
-        const event: ErrorEvent = {
-          id: newId(),
-          ts: Date.now(),
-          source: {
-            type: "lesson",
-            videoId: this.deps.plan.videoId,
-            cueIdx: anchor?.cueIdx ?? null,
-            questionId: null,
-          },
-          pattern: err.pattern,
-          detail: err.detail,
-          userInput: err.userText,
-          correction: err.correction,
-          resolved: false,
-          resolvedAt: null,
-        };
-        await this.deps.profile.logEvent(event);
-        this.state.errorsThisSession.push(event.id);
+      if (f && f.errors.length > 0) {
+        const anchor = this.deps.plan.anchors[this.state.currentAnchorIdx];
+        for (const err of f.errors) {
+          const event: ErrorEvent = {
+            id: newId(),
+            ts: Date.now(),
+            source: {
+              type: "lesson",
+              videoId: this.deps.plan.videoId,
+              cueIdx: anchor?.cueIdx ?? null,
+              questionId: null,
+            },
+            pattern: err.pattern,
+            detail: err.detail,
+            userInput: err.userText,
+            correction: err.correction,
+            resolved: false,
+            resolvedAt: null,
+          };
+          await this.deps.profile.logEvent(event);
+          this.state.errorsThisSession.push(event.id);
+          this.state.currentAnchorErrorIds.push(event.id);
+        }
       }
-    }
 
-    // Decide hint / reveal / proceed
-    if (f?.verdict === "correct" || f?.verdict === "partial") {
-      this.state.canRetry = false;
-      this.state.answerRevealed = false;
-    } else {
-      // incorrect
-      if (this.state.attemptsThisAnchor >= REVEAL_THRESHOLD) {
+      // Decide hint / reveal / proceed
+      if (f?.verdict === "correct" || f?.verdict === "partial") {
         this.state.canRetry = false;
-        this.state.answerRevealed = true;
-      } else if (this.state.attemptsThisAnchor >= HINT_THRESHOLD) {
-        this.state.canRetry = true;
         this.state.answerRevealed = false;
+      } else {
+        // incorrect
+        if (this.state.attemptsThisAnchor >= REVEAL_THRESHOLD) {
+          this.state.canRetry = false;
+          this.state.answerRevealed = true;
+        } else if (this.state.attemptsThisAnchor >= HINT_THRESHOLD) {
+          this.state.canRetry = true;
+          this.state.answerRevealed = false;
+        }
       }
+      await this.persist();
+    } finally {
+      this.state.submitting = false;
     }
-    await this.persist();
   }
 
   async continueToNextAnchor(): Promise<void> {
-    // Snapshot this anchor's record
+    // Snapshot this anchor's record (errorIds is per-anchor, not cumulative)
     const anchor = this.deps.plan.anchors[this.state.currentAnchorIdx];
     const record: AnchorRecord = {
       cueIdx: anchor?.cueIdx ?? 0,
       topic: anchor?.topic ?? "",
       attempts: this.state.attemptsThisAnchor,
-      errorIds: [...this.state.errorsThisSession],
+      errorIds: [...this.state.currentAnchorErrorIds],
       finalCorrect: this.state.currentFeedback?.verdict === "correct"
         || this.state.currentFeedback?.verdict === "partial",
     };
@@ -186,14 +199,15 @@ export class LessonRuntime {
     this.state.attemptsThisAnchor = 0;
     this.state.canRetry = false;
     this.state.answerRevealed = false;
+    this.state.currentAnchorErrorIds = [];
 
     const next = this.deps.plan.anchors[this.state.currentAnchorIdx];
     if (next) this.deps.player.seek(next.cueIdx);
     await this.persist();
   }
 
-  hasMoreAnchors(): boolean {
-    return this.state.currentAnchorIdx < this.deps.plan.anchors.length;
+  hasNextAnchor(): boolean {
+    return this.state.currentAnchorIdx + 1 < this.deps.plan.anchors.length;
   }
 
   async finish(): Promise<void> {

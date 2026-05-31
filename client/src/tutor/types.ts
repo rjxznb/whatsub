@@ -78,7 +78,7 @@ export interface LessonState {
   startedAt: number;
   plan: LessonPlan;
   currentAnchorIdx: number;
-  currentStep: 1 | 2 | 3 | 4 | 5;
+  currentStep: 1 | 2 | 3 | 4 | 5; // step 4 (answer entry) is rendered inside the step-3 view; runtime transitions 3→5; `4` kept for resume-state compatibility
   history: AnchorRecord[];
   errorsThisSession: string[]; // errorEvent ids written so far
 }

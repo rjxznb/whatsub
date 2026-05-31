@@ -3,8 +3,8 @@ import { coerceErrorPattern } from "./errorPatterns";
 import { extractJsonObject } from "./lessonPlanLLM";
 
 // Reuse the SSE concatenation logic. Re-implementing per file would drift.
-// We export concatenateSseText from lessonPlanLLM in case the runtime
-// adds more LLM call types — for now, duplicate the minimal shape here.
+// The SSE-concat helper is duplicated here intentionally to avoid depending
+// on another module's internal — lessonPlanLLM does not export it.
 
 function concatSse(raw: string): string {
   let out = "";

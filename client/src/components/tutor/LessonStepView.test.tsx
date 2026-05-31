@@ -26,7 +26,7 @@ function makeRuntime(overrides: Partial<LessonRuntime["state"]> = {}): LessonRun
     startedAt: 0,
     ...overrides,
   };
-  return { state, hasMoreAnchors: () => false } as unknown as LessonRuntime;
+  return { state, hasNextAnchor: () => false } as unknown as LessonRuntime;
 }
 
 describe("LessonStepView", () => {

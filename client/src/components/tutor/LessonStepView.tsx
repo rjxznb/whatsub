@@ -135,7 +135,7 @@ export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue }: Pr
               onClick={onContinue}
               className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
             >
-              {runtime.hasMoreAnchors() ? "下一个教学点 →" : "结课"}
+              {runtime.hasNextAnchor() ? "下一个教学点 →" : "结课"}
             </button>
           </div>
         </div>

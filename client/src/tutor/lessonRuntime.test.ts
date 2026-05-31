@@ -87,7 +87,7 @@ describe("LessonRuntime", () => {
     expect(mockPlayer.seek).toHaveBeenLastCalledWith(12);
   });
 
-  it("incorrect answer: 1st attempt → hint mode, no event yet", async () => {
+  it("incorrect answer: 1st attempt → logs event + enters hint mode (canRetry)", async () => {
     mockLlm.explain.mockResolvedValue("x");
     mockLlm.question.mockResolvedValue({ question: "Q?", expectedAnswer: "A.", targetPattern: "preposition_wrong" });
     mockLlm.feedback.mockResolvedValue({

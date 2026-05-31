@@ -9,11 +9,7 @@
 // is unreachable (offline / blocked). Text is split by language so Chinese
 // runs use a Chinese voice and English runs an English voice.
 
-import {
-  edgeSynthesize,
-  EDGE_VOICE_ZH,
-  EDGE_VOICE_EN,
-} from "./edgeTts";
+import { edgeSynthesize, EDGE_VOICE_MULTI } from "./edgeTts";
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
@@ -144,28 +140,20 @@ async function edgeTtsSpeak(
   clean: string,
   opts: SpeakOptions,
 ): Promise<boolean> {
-  const segments = splitByLang(clean);
-  if (segments.length === 0) {
-    opts.onEnd?.();
-    return true;
-  }
   const ac = new AbortController();
   _currentAbort = ac;
-  const rate = opts.rate ?? 1.12;
+  const rate = opts.rate ?? getTtsRate();
 
-  // Synthesize all runs up front (parallel) — all-or-nothing, so a failure
-  // cleanly falls back to Web Speech rather than half-speaking.
-  let mp3s: ArrayBuffer[];
+  // ONE request, ONE continuous MP3 via a multilingual voice — it reads mixed
+  // zh+en in a single utterance, so there's no pause at language switches
+  // (separate per-segment clips each had padding silence → long gaps).
+  let mp3: ArrayBuffer;
   try {
-    mp3s = await Promise.all(
-      segments.map((seg) =>
-        edgeSynthesize(seg.text, {
-          voice: seg.lang === "zh" ? EDGE_VOICE_ZH : EDGE_VOICE_EN,
-          rate,
-          signal: ac.signal,
-        }),
-      ),
-    );
+    mp3 = await edgeSynthesize(clean, {
+      voice: EDGE_VOICE_MULTI,
+      rate,
+      signal: ac.signal,
+    });
   } catch {
     if (_currentAbort === ac) _currentAbort = null;
     return false; // → fall back to Web Speech
@@ -175,38 +163,25 @@ async function edgeTtsSpeak(
     return true;
   }
 
-  // Play each clip in order.
-  let started = false;
-  for (let i = 0; i < mp3s.length; i++) {
-    if (_cancelled || ac.signal.aborted) break;
-    const url = URL.createObjectURL(
-      new Blob([mp3s[i]], { type: "audio/mpeg" }),
-    );
-    const audio = new Audio(url);
-    _currentAudio = audio;
-    try {
-      await audio.play(); // resolves once playback begins; throws if blocked
-    } catch {
-      URL.revokeObjectURL(url);
-      if (!started) {
-        // Autoplay blocked before any sound — fall back to Web Speech, which
-        // isn't subject to the autoplay policy.
-        _currentAudio = null;
-        if (_currentAbort === ac) _currentAbort = null;
-        return false;
-      }
-      continue; // a later clip failed; skip it
-    }
-    if (!started) {
-      started = true;
-      opts.onStart?.();
-    }
-    await new Promise<void>((res) => {
-      audio.onended = () => res();
-      audio.onerror = () => res();
-    });
+  const url = URL.createObjectURL(new Blob([mp3], { type: "audio/mpeg" }));
+  const audio = new Audio(url);
+  _currentAudio = audio;
+  try {
+    await audio.play(); // resolves once playback begins; throws if blocked
+  } catch {
+    // Autoplay blocked before any sound — fall back to Web Speech (not
+    // subject to the autoplay policy).
     URL.revokeObjectURL(url);
+    _currentAudio = null;
+    if (_currentAbort === ac) _currentAbort = null;
+    return false;
   }
+  opts.onStart?.();
+  await new Promise<void>((res) => {
+    audio.onended = () => res();
+    audio.onerror = () => res();
+  });
+  URL.revokeObjectURL(url);
   _currentAudio = null;
   if (_currentAbort === ac) _currentAbort = null;
   opts.onEnd?.();
@@ -285,8 +260,7 @@ async function webSpeechSpeak(
       u.voice = voice;
       u.lang = voice.lang;
     }
-    // A touch faster than the 1.0 default — the previous pace felt sluggish.
-    u.rate = opts.rate ?? 1.12;
+    u.rate = opts.rate ?? getTtsRate();
     if (opts.pitch != null) u.pitch = opts.pitch;
     u.onstart = () => {
       if (!startedFired) {
@@ -339,6 +313,34 @@ export function ttsCancel(): void {
     } catch {
       /* ignore */
     }
+  }
+}
+
+// ── Rate preference (persisted) ──────────────────────────────────────────
+// Speaking rate multiplier (1 = normal). Tunable via the lesson overlay
+// slider; used as the default for every utterance.
+
+const TTS_RATE_KEY = "tutor.ttsRate";
+export const TTS_RATE_DEFAULT = 1.12;
+export const TTS_RATE_MIN = 0.7;
+export const TTS_RATE_MAX = 1.8;
+
+export function getTtsRate(): number {
+  try {
+    const v = parseFloat(localStorage.getItem(TTS_RATE_KEY) ?? "");
+    if (!isNaN(v) && v >= TTS_RATE_MIN && v <= TTS_RATE_MAX) return v;
+  } catch {
+    /* ignore */
+  }
+  return TTS_RATE_DEFAULT;
+}
+
+export function setTtsRate(rate: number): void {
+  const clamped = Math.min(TTS_RATE_MAX, Math.max(TTS_RATE_MIN, rate));
+  try {
+    localStorage.setItem(TTS_RATE_KEY, String(clamped));
+  } catch {
+    /* ignore */
   }
 }
 

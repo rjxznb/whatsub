@@ -6,6 +6,10 @@ import {
   ttsCancel,
   isTtsEnabled,
   setTtsEnabled,
+  getTtsRate,
+  setTtsRate,
+  TTS_RATE_MIN,
+  TTS_RATE_MAX,
 } from "../../tutor/tts";
 import {
   TUTOR_CARD,
@@ -40,6 +44,7 @@ export function LessonStepView({
   const [draft, setDraft] = useState("");
   const [muted, setMuted] = useState(() => !isTtsEnabled());
   const [speaking, setSpeaking] = useState(false);
+  const [rate, setRate] = useState(() => getTtsRate());
 
   const {
     currentStep,
@@ -113,8 +118,30 @@ export function LessonStepView({
           </span>
           <span className="text-sm text-zinc-400 truncate">{anchor?.topic}</span>
         </div>
-        {/* Voice controls: mute toggle (persisted) + a subtle speaking pulse. */}
-        <div className="flex items-center gap-1 shrink-0">
+        {/* Voice controls: rate slider (dev tuning) + replay + mute toggle. */}
+        <div className="flex items-center gap-2 shrink-0">
+          {!muted && (
+            <div className="flex items-center gap-1.5" title="语速">
+              <input
+                type="range"
+                min={TTS_RATE_MIN}
+                max={TTS_RATE_MAX}
+                step={0.02}
+                value={rate}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setRate(v);
+                  setTtsRate(v);
+                }}
+                onPointerUp={() => replaySpoken()}
+                className="w-20 accent-blue-500 cursor-pointer"
+                aria-label="语速"
+              />
+              <span className="text-[10px] text-zinc-500 tabular-nums w-8">
+                {rate.toFixed(2)}x
+              </span>
+            </div>
+          )}
           {!muted && spokenLine ? (
             <button
               type="button"

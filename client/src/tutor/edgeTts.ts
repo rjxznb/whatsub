@@ -17,9 +17,13 @@ const GEC_VERSION = "1-130.0.2849.68";
 // Seconds between the Windows epoch (1601-01-01) and the Unix epoch.
 const WIN_EPOCH = 11644473600;
 
-/** Natural neural voices, one per language. */
+/** Natural neural voices. */
 export const EDGE_VOICE_ZH = "zh-CN-XiaoxiaoNeural"; // 晓晓 — warm female
 export const EDGE_VOICE_EN = "en-US-AriaNeural"; // Aria — natural female
+/** Multilingual voice that reads mixed Chinese + English naturally in ONE
+ *  utterance — used so a single request produces one continuous, gap-free
+ *  MP3 (no pause at every zh↔en switch). */
+export const EDGE_VOICE_MULTI = "zh-CN-XiaoxiaoMultilingualNeural";
 
 async function sha256Upper(s: string): Promise<string> {
   const digest = await crypto.subtle.digest(

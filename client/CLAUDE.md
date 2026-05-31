@@ -4,9 +4,13 @@ Tauri 2 desktop app for English subtitle learning. Pipeline: import (yt-dlp / lo
 
 **Companion repo:** [`rjxznb/whatsub-license`](https://github.com/rjxznb/whatsub-license) (private) — Hono + node-postgres on the existing Eversay Aliyun ECS at `https://whatsub.eversay.cc`. Desktop POSTs once to `/api/license/activate`, then runs fully offline. Migrated 2026-05-09 from Cloudflare Workers + D1 (mainland latency 5–10s → <200ms).
 
+**See also:**
+- [`CLAUDE-PITFALLS.md`](./CLAUDE-PITFALLS.md) — bugs we've already paid for; consult before changing UI/drag/sidecar/release code.
+- [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md) — implementation detail on Library folders, caption styling, scrubber preview, Materialize, Delete cascade, Corpus field shapes, and the Release workflow.
+
 ## Stack
 
-Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · framer-motion (Library reorder FLIP) · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`, `node`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs). License + trial + corpus HTTP runs in Rust via `reqwest` (NOT WebView fetch — see 踩过的坑). Tag-chip browse cache uses `tauri-plugin-store` (LazyStore). Bridge module (`bridge/`) was deleted 2026-05-18 — plugin + desktop now both talk to `whatsub-license` directly; no localhost peer-to-peer sync.
+Tauri 2 · React 19 + TS + Vite · Tailwind v3 · zustand · React Router v6 · lucide-react · framer-motion (Library reorder FLIP) · @fontsource/charis-sil · Vitest. Sidecars: `yt-dlp`, `ffmpeg`, `whisper-cli`, `node`. LLM HTTP is hand-rolled SSE per provider (no vendor SDKs). License + trial + corpus HTTP runs in Rust via `reqwest` (NOT WebView fetch — see [`CLAUDE-PITFALLS.md`](./CLAUDE-PITFALLS.md#network)). Tag-chip browse cache uses `tauri-plugin-store` (LazyStore). Bridge module (`bridge/`) was deleted 2026-05-18 — plugin + desktop now both talk to `whatsub-license` directly; no localhost peer-to-peer sync.
 
 ## Layout
 
@@ -29,6 +33,8 @@ Sidecar resolution is by **basename only** (`sidecar("yt-dlp")`, NOT `"binaries/
 
 ```
 settings.json · library.json · vocabulary.json · license.json · trial.json
+auth.json                          # 30-day session bearer from auth_from_license
+agent_history.json                 # AI Agent conversations (5 MB cap, see "AI Agent")
 yt-cookies-jar.json                # per-site cookies jar populated via CDP (Edge/Chrome login)
 sites-browser/                     # isolated Edge/Chrome profile dir for cookie login flow
 sites-browser-port                 # last-known CDP debug port (so repeat logins skip respawn)
@@ -42,9 +48,9 @@ library/<video_id>/
 
 `videoDir` per library entry is **frozen at import time** — changing `settings.libraryDir` doesn't orphan old entries. `library_freeze_paths` patches legacy entries before any libraryDir change. `assetProtocol.scope` covers `$DATA/whatsub/**` + `$LOCALDATA/whatsub/**` + `**/*.{mp4,jpg,...}` so custom paths still load.
 
-`library.json` schema (since 2026-05-20): `{ videos: LibraryEntry[], folders: LibraryFolder[], topLevelOrder: LibraryItemRef[] }`. The legacy `{ videos: [...] }` shape auto-upgrades on first read (Rust `read_index` synthesises `topLevelOrder` from `videos` when missing). Folders are virtual — no filesystem analog; `folder.videoIds` references entries by id and a video at the top level appears as `{type: "video", id}` in `topLevelOrder`. See "Library folders + drag-to-merge" below.
+`library.json` schema (since 2026-05-20): `{ videos: LibraryEntry[], folders: LibraryFolder[], topLevelOrder: LibraryItemRef[] }`. Legacy `{ videos: [...] }` auto-upgrades on first read (Rust `read_index` synthesises `topLevelOrder` from `videos` when missing). Folders are virtual — no filesystem analog; `folder.videoIds` references entries by id. See Library folders detail in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#library-folders--drag-to-merge).
 
-`settings.json` new caption-style fields (2026-05-20): `captionFontColor` / `captionFontScale` / `captionFontOpacity` / `captionBackgroundColor` / `captionBackgroundOpacity` / `captionHighlightsEnabled`. All optional, defaults applied via `mergeWithDefaults` so old settings.json files keep working. Caption box X/Y offset (drag-to-move) is **deliberately NOT persisted** — every Player remount starts at (0,0), see "Caption style menu + draggable overlay" below.
+`settings.json` caption-style fields (2026-05-20): `captionFontColor` / `captionFontScale` / `captionFontOpacity` / `captionBackgroundColor` / `captionBackgroundOpacity` / `captionHighlightsEnabled`. All optional, defaults applied via `mergeWithDefaults`. Caption box X/Y offset (drag-to-move) is deliberately NOT persisted — every Player remount starts at (0,0).
 
 ## Pipeline event stream
 
@@ -56,32 +62,65 @@ Started → Preparing{step}* → Downloading{percent}* → ExtractingAudio
         (Failed at any step)
 ```
 
-`Preparing{step}` fires once per detected yt-dlp stderr phase transition, mapping a stable `step` ID to a Chinese UI label (`fetching-webpage` → 获取视频信息, `fetching-player` → 获取播放器, `solving-signature` → 解算签名 (常是最慢的一步), `fetching-manifest` → 获取清晰度列表, `format-selected` → 格式已选). Each step also gets a redundant `Log` entry "准备中 → <label>" so users with the log panel open see the same trace even if the UI sub-label rendering breaks. Detection in `pipeline/ytdlp.rs::detect_prepare_step` — pattern-matches on `[youtube]` / `[info]` lines.
+`Preparing{step}` fires once per detected yt-dlp stderr phase transition, mapping a stable `step` ID to a Chinese UI label (`fetching-webpage` → 获取视频信息, `fetching-player` → 获取播放器, `solving-signature` → 解算签名 (常是最慢的一步), `fetching-manifest` → 获取清晰度列表, `format-selected` → 格式已选). Each step also gets a redundant `Log` entry "准备中 → <label>". Detection in `pipeline/ytdlp.rs::detect_prepare_step` — pattern-matches on `[youtube]` / `[info]` lines.
 
-Side streams: `ModelDownload` (model fetch), `Exporting → Exported` (burn-in), `Log` (raw stderr passthrough to UI's log scroller; also used by Rust to inject `[whatsub] ...` lifecycle markers like "启动 yt-dlp" before spawn).
+Side streams: `ModelDownload` (model fetch), `Uploading{video_id,percent}` (OSS transcode + upload), `Exporting → Exported` (burn-in), `Log` (raw stderr passthrough plus `[whatsub] ...` lifecycle markers).
 
 ## Key architecture decisions
 
 - **Rust does subprocess + filesystem; TS does HTTP/LLM.** TS gets browser fetch + Web Streams; Tauri's externalBin handles binary distribution.
-- **JSON Lines streaming for LLM output.** Each cue arrives as one line → UI streams cue-by-cue. Two-phase analysis: phase 1 = per-batch cues; phase 2 = single global summary across ALL cues (sees the whole transcript, not just last batch).
+- **JSON Lines streaming for LLM output.** Each cue arrives as one line → UI streams cue-by-cue. Two-phase analysis: phase 1 = per-batch cues; phase 2 = single global summary across ALL cues.
 - **Cancellation = AbortController.** Stop button aborts → phase=paused → partial save persists. Continue resumes from `subtitles.length` with `previouslyAnalyzed` so the summary phase still sees the full transcript.
 - **Vendor preset layer over protocol.** 3 internal protocols (`openai-compatible` / `claude` / `gemini`) cover wire format; 10 user-facing vendors combine protocol + preset baseUrl + suggested models. `inferVendorId()` reverse-maps legacy settings.
 - **Offline IPA dict (3 MB, 125k entries).** Render-time only — never stored in `analysis.json`, so old analyses gain IPA without re-running the LLM.
-- **License gate is one-time, online only at activation; pure offline forever after.** No periodic verification, no JWT — just a presence check on `license.json`. Trade-offs: refunds not supported (sold as 数字商品), cracking the local file is trivial. The protection is the one-time `/activate` call enforcing the 3-device limit per key. Fingerprint = `sha256(machine_uid || ":whatsub:v1")`. `ACTIVATE_ENDPOINT` is hard-coded into the binary so settings can't redirect it.
-- **24h trial mode (TRIAL_ACTIVE).** First launch with no license: POST `/api/license/trial/start` returns `expiresAt` (server-authoritative — same fingerprint always gets the SAME expiresAt, so wiping `trial.json` doesn't farm new trials). App fully usable but `TrialBanner` countdown at top; banner's 「激活完整版」 button flips `mode: TRIAL_ACTIVE → NEEDS_KEY`. `LicenseGate.resumeTrial()` action can flip back if user hits the activation page by accident and trial is still valid.
-- **License + trial HTTP runs in Rust, NOT WebView fetch.** Both endpoints (`license_activate_http` / `license_trial_start_http` in `commands/license.rs`) wrap `reqwest::Client::builder().timeout(30s)` and POST from native side, bypassing WebView2's network stack quirks (CSP/CORS/cert chain/antivirus SSL inspection that all surface as a useless `TypeError: Failed to fetch`). On error, Rust returns prefixed strings (`timeout:` / `connect:` / `tls:` / `http <N>:`) which `store/license.ts::friendlyNetworkMessage()` maps to actionable Chinese copy.
+- **License gate is one-time, online only at activation; pure offline forever after.** No periodic verification, no JWT — just a presence check on `license.json`. Trade-offs: refunds not supported (sold as 数字商品), cracking the local file is trivial. Protection is the one-time `/activate` call enforcing the 3-device limit per key. Fingerprint = `sha256(machine_uid || ":whatsub:v1")`. `ACTIVATE_ENDPOINT` is hard-coded into the binary.
+- **24h trial mode (TRIAL_ACTIVE).** First launch with no license: POST `/api/license/trial/start` returns `expiresAt` (server-authoritative — same fingerprint always gets the SAME expiresAt, so wiping `trial.json` doesn't farm new trials). App fully usable but `TrialBanner` countdown at top.
+- **License + trial HTTP runs in Rust, NOT WebView fetch.** Both endpoints (`license_activate_http` / `license_trial_start_http` in `commands/license.rs`) wrap `reqwest::Client::builder().timeout(30s)`, bypassing WebView2's network stack quirks. On error, Rust returns prefixed strings (`timeout:` / `connect:` / `tls:` / `http <N>:`) which `store/license.ts::friendlyNetworkMessage()` maps to actionable Chinese copy.
 
 ## License-key → session auto-login
 
-Desktop never asks the user for an email/OTP. `LicenseSessionGate` (mounted once at app root) fires-and-forgets `useAuth.authFromLicense(licenseKey)` on mount — Rust command `auth_from_license` (commands/auth.rs) POSTs `/api/auth/from-license` with the user's already-activated license key, gets back a 30-day sessionToken, persists to `app_data_dir/auth.json`. Subsequent corpus calls (`corpus_browse` / `corpus_mine` / `corpus_tags` / `corpus_phrase_detail` / `corpus_versions`) attach the bearer.
+Desktop never asks for an email/OTP. `LicenseSessionGate` (mounted once at app root) fires-and-forgets `useAuth.authFromLicense(licenseKey)` on mount — Rust command `auth_from_license` POSTs `/api/auth/from-license` with the activated license key, gets back a 30-day sessionToken, persists to `app_data_dir/auth.json`. Subsequent corpus calls (`corpus_browse` / `corpus_mine` / `corpus_tags` / `corpus_phrase_detail` / `corpus_versions`) attach the bearer.
 
-`LicenseSessionGate` is **non-blocking by design** — if the server call fails or the user is offline, the app still renders normally (library, vocab, player, settings all work). Only the `/corpus` page reads `useAuth.status` and shows a 「云端未连接 + 重试」 inline UI when the session isn't ready. The gate is purely an initializer; it never gates the rest of the app behind a full-screen blocker.
+`LicenseSessionGate` is **non-blocking by design** — if the server call fails or the user is offline, the app still renders normally. Only the `/corpus` page reads `useAuth.status` and shows a 「云端未连接 + 重试」 inline UI when the session isn't ready.
+
+## AI Agent
+
+Conversational agent mounted globally over every route. ReAct loop with a 22-tool registry, multi-vendor streaming, persisted history, page-aware context injection.
+
+**Three-state ChatBar:** `icon` (40×40 logo button) ↔ `bar` (600×50 input strip) ↔ `panel` (full chat surface). Mode is module-level zustand state + localStorage (`agentBarMode`); position likewise (`agentIconPos` / `agentBarPos`, viewport-clamped on load and on resize). `pageDefaultMode(pathname)` returns `icon` on `/player/*`, `bar` elsewhere. Navigation auto-nudges to page default UNLESS the user explicitly opened the panel (panel is sticky across nav). Closing the panel steps **down** to `bar`, not back to the page default — bidirectional step-down. **The reverse collapse animation (bar → icon) was deliberately removed**: a stale `setTimeout` could survive a mid-animation dep change (e.g. nav adjusting iconPos), leaving the bar stuck mounted at icon size — visually a gray square instead of the whatsub logo. Collapsing to icon is now a plain JSX swap.
+
+**Files:**
+- `src/components/agent/` — `AgentRoot` (router/auth-aware shell, mounts once in `App.tsx` inside `Router`), `ChatBar` (icon/bar/panel state machine, draggable, persists position), `InputBox` (textarea + typewriter placeholder + ↑/↓ history nav), `ConversationHeader`, `MessageList` / `UserBubble` / `AssistantBubble`, `ToolCallCard`, `InlineConfirmCard` / `InlineConfirmList`, `markdown.tsx` (hand-rolled — supports GFM-style pipe tables + `[text](url)` links opened via tauri-opener), `EmptyState` (noLlm copy + suggestion chips).
+- `src/agent/` — `runtime.ts` (ReAct loop, 5-tool cap per turn), `types.ts` (`AgentEvent` AsyncGenerator, ToolDef, PageContext, message shapes), `context.ts` (per-turn page state injection — see below), `registry.ts` (22-tool static list), `tools/<id>.ts` (one file per tool + its `.test.ts`), `nav.ts` (router-bridge — global `setNavigator(fn)` so tools can route without prop-drilling), `gate.ts` (per-page tool availability filter), `cost.ts`, `_promptBuilders.ts` (system-prompt assembler).
+- `src/store/agent.ts` — zustand store: `history` (versioned, persisted), `streaming` state, `runInBackground` (single-flight background job per importQueue/Library tool), conversation CRUD (`createConversation` / `switchActive` / `deleteConversation` / `clearAll` / `exportHistory`).
+- `src/store/agentConfirms.ts` — pending HIGH-risk tool confirmation requests rendered inline as cards.
+- `src/store/playerState.ts` — global player time + cue refs so `seek_to_time` / `jump_to_cue` / `explain_passage` tools can read/write without prop-drilling.
+- `src/llm/llmIdentity.ts` — vendor adapters (OpenAI / Claude / Gemini); each emits a unified `AgentEvent` stream so the runtime is vendor-agnostic.
+- `src-tauri/src/commands/agent.rs` — `agent_history_load` / `agent_history_save` (5 MB cap, version field, corrupt-file → default-empty). Tests use injectable paths under `std::env::temp_dir()` per the `paths::*` rule.
+- `src-tauri/src/commands/auth.rs::get_session_token` — exposes the bearer to TS so `lib/api/quota.ts` and `store/importQueue.ts` can `fetch` with auth (same pattern as `librarySync.ts`).
+
+**22-tool registry** (`src/agent/registry.ts`) — grouped by risk + capability:
+- discovery (read-only): `corpus_browse`, `corpus_phrase_detail`, `list_library`, `list_vocab`, `youtube_search`
+- navigation: `open_video`, `open_page`, `seek_to_time`, `jump_to_cue`
+- in-video AI: `explain_passage`, `generate_quiz`, `mark_liaisons`, `translate_phrase`
+- vocab write: `vocab_add`, `vocab_remove`, `vocab_update_note`
+- library write: `sync_to_cloud`, `materialize_from_cloud`, `import_video`
+- library HIGH (require user confirm): `delete_video`, `unsync_from_cloud`, `retranscribe_video`
+
+`ToolDef.availableOn(page: PageContext)` lets each tool gate itself — e.g. `seek_to_time` only surfaces on `/player/*`. The runtime's tool list per turn is `listTools(currentPage)`, so the LLM only ever sees the tools it can actually invoke from the current page.
+
+**Page-context injection (`agent/context.ts`):** every turn's system prompt receives a fresh `PageContext` snapshot — pathname, active video id + currentTime + currentCueIdx (from `playerState`), library count, vocab count, corpus session status. So "解释一下这一段" knows which cue the user is staring at without the user spelling out the video id.
+
+**Typewriter placeholder** (`InputBox.tsx`): 6 example Chinese prompts cycled char-by-char in the textarea placeholder when idle. Pauses (state preserved) on focus, resumes on blur. The auto-resize useLayoutEffect has an empty-text fast path returning 36px without measuring scrollHeight — during the icon→bar stretch animation, the textarea is briefly ~40px wide and `scrollHeight` reports the wrapped placeholder height (~80–100px), which would persist as inline `height` after the bar widens. Without the fast path, the bar paints too tall until the user types.
+
+**Persistence model:** `agent_history.json` stores all conversations (active + past). `useAgent.hydrate()` reads it once at AgentRoot mount; writes go through `useAgent.persist()` debounced. Conversations carry `pageContextAtStart` (pathname only, used to title untitled conversations like "在 /library 的对话") + `summaryUpToMsgId` / `summary` so long conversations can be checkpoint-summarized without losing context.
+
+**Tests:** every tool + adapter + the runtime + the store has a `.test.ts`. Vendor adapter fixtures are raw `.txt` files of recorded SSE streams under `src/agent/__fixtures__/`. `AgentRoot.test.tsx` covers mode persistence, page-default switching, panel stickiness across nav, and the nav-tool wiring.
 
 ## Corpus page — multi-tag chip browse
 
 `/corpus` (`pages/Corpus.tsx`) replaces the older fixed-18-scene tree with a flat multi-tag chip model that mirrors the server's `tags.list[]` storage.
 
-Layout:
 ```
 [← Library | 语料库 | ↻]
 [公共 / 我的]                              (tab strip)
@@ -89,126 +128,41 @@ Layout:
 [phrase list]      | [phrase detail + YouTube embed + 例句出处]
 ```
 
-- `CorpusTagChips` pulls tags from `useCorpusTags(scope)` which invokes `corpus_tags` Rust command (which calls `/api/corpus/tags?scope=public|mine`). 18 official scenes are pinned in canonical order, custom tags after a divider. Multi-select AND.
-- `useCorpusList(scope)` SWR-style cache: reads server version via `corpus_versions`, compares to `tauri-plugin-store`-cached version, refetches only when stale. Scope = `{mode: 'mine'|'browse', tags: string[]}` — tags array participates in cache key so each filter combo caches separately.
-- `CorpusPhraseList` shows row title + meaning + inline tag chips per row. The `mine`(个人) variant also renders a `个人语料 used/limit` header above the list (all states — loading/empty included) via `lib/api/quota.ts::corpusQuota()` → `GET /api/corpus/quota` (`limit = hasActiveSubscription ? 1000 : 50`, server-authoritative so it covers Alipay/web subs); refetched whenever the mine list data changes.
+- `CorpusTagChips` pulls tags from `useCorpusTags(scope)` which invokes `corpus_tags` Rust command (`/api/corpus/tags?scope=public|mine`). 18 official scenes pinned in canonical order, custom tags after a divider. Multi-select AND.
+- `useCorpusList(scope)` SWR-style cache: reads server version via `corpus_versions`, compares to `tauri-plugin-store`-cached version, refetches only when stale. Scope tags participate in cache key.
+- `CorpusPhraseList` shows row title + meaning + inline tag chips. The `mine` variant renders a `个人语料 used/limit` header via `lib/api/quota.ts::corpusQuota()` → `GET /api/corpus/quota` (`limit = hasActiveSubscription ? 1000 : 50`, server-authoritative).
 - `CorpusPhraseDetail` shows `📚 公共例句出处` + `⭐ 我的例句出处` lists. Each instance has a clickable `▶ MM:SS` button (resolved via `instance.source.timestampSec ?? parseYouTubeUrl(url).startSec`) that re-seeks the embedded YouTube iframe.
-- `YouTubeEmbed` uses `youtube-nocookie.com/embed/...` (Tracking Prevention bypass) + `allow="encrypted-media; picture-in-picture; clipboard-write"`. No autoplay — WebView2 blocks unmuted autoplay by default and the failed-load leaves the iframe blank.
+- `YouTubeEmbed` uses `youtube-nocookie.com/embed/...` + `allow="encrypted-media; picture-in-picture; clipboard-write"`. No autoplay — WebView2 blocks unmuted autoplay.
 
-Cache storage: `corpus_cache.json` via `tauri-plugin-store` LazyStore (see `lib/corpusCache.ts`). Two version keys (`mineVersion`, `publicVersion`) + per-scope data keys (`mineData:tag,sig` / `publicData:tag,sig`). Refresh button invalidates everything + bumps a render key so all children remount.
-
-### `/api/corpus/lookup?withScope=true` field shape
-
-Server (since 2026-05-20) returns `{ phrase: { meaning_zh, usage_note, tags: {list} }, publicContributions, personalContributions }`. Three things to know:
-
-1. **`meaning_zh` / `usage_note` fall back to caller's own contribution** when no `whatsub-curator` row exists. Aggregation in `aggregatePhraseViewWithPersonal()` in `whatsub-license/src/routes/corpus.ts`. Curator wins; caller's newest-non-null is the fallback. This is what lets users see their own saved meaning + usage note in the detail panel before a curator publishes anything.
-2. **`tags` wraps as `{list}`** to match the corpus_contributions JSONB shape (was a bare array under legacy `aggregateCuratorView`). The desktop client's `phraseTagList()` accepts both shapes.
-3. **`personalContributions` is now caller-scoped** (filtered by `contributor_id === deriveContributorId(session.email)`). Earlier "non-curator" filter included everyone else's rows under the user's `⭐ 我的例句出处` header — that was a privacy leak; the user could read other users' saved notes.
-
-Client-side Rust struct `BrowseItem` uses `usage_note ↔ usageNote` serde mapping (was `key_notes ↔ keyNotes`; column was renamed in the 2026-05-20 schema migration). The TS side reads `phrase.usageNote`. UI label stays 「📝 重点笔记」 — same intent.
-
-### `/api/corpus/versions` `public` field
-
-The route now returns `{ mine, public }` — `mine = MAX(contributed_at) WHERE contributor_id = <caller>`, `public = MAX(contributed_at) WHERE contributor_id = 'whatsub-curator'`. Both bump on hide-no-longer or hide-resurrect because `MAX` recomputes from the current visible set. The desktop's `useCorpusList` cache compares for equality and refetches on any mismatch, so a downward bump is still a consistent signal.
-
-Pre-Plan-D server builds returned only `{ mine }`. Both Rust (`#[serde(default)] public: i64`) and TS (`public?: number`) tolerate missing field — fall to 0, public cache check never short-circuits, browse always refetches. No UX regression, just no caching benefit for browse until server is upgraded.
-
-## Library folders + drag-to-merge
-
-`pages/Library.tsx` renders single-level folders via `library.topLevelOrder` instead of a flat `library.videos.filter()`. Drag-to-merge UX:
-
-- Drag video A onto another video B with **overlap ≥ 0.85** → merge into a new folder. Threshold lives in `utils/overlap.ts::MERGE_THRESHOLD` (was 0.9 originally, briefly 0.7, settled at 0.85 — 0.7 made every reasonable drop into a merge, 0.9 required bullseye precision).
-- Drop with overlap < 0.85 → reorder. The grid renders an `effectiveOrder` computed by `useMemo` — source is inserted at the hover target's index in `library.topLevelOrder` — so the user sees a live preview of where the dragged card will land.
-- Drop on a folder card with overlap ≥ 0.85 → add the video to that folder.
-- Folder source can never merge — `resolveDropMode(folder→*)` always returns reorder. Folders can be rearranged at the top level but not nested.
-
-**FLIP-style smooth reorder preview** uses `framer-motion`'s `<motion.div layout>`. Each card in the topLevelOrder branch is wrapped — when `effectiveOrder` changes, `layout` measures rect-before / rect-after and animates the transform difference with a spring (stiffness 350, damping 30). Search-mode rendering is unwrapped (filter-driven, doesn't reorder).
-
-**Folder open uses an iPad-style modal** (`components/FolderOpenView.tsx`). Click captures the card's `getBoundingClientRect()`; the modal mounts at that rect and transitions `transform: scale + translate` to a centered (80vw × 75vh) target over 300ms ease-out. Esc / backdrop-click reverses the animation.
-
-**Merge animation** (`components/MergeAnimationLayer.tsx`): on a merge drop, two thumbnail clones fly toward the midpoint (300ms), a blue Apple-Finder-style folder pops with bounce (250ms), clones fade (200ms). After 750ms the layer calls `mergeIntoFolder([target, source])` server-side then opens the rename dialog seeded with "新建文件夹".
-
-Rust side (`src-tauri/src/commands/library.rs`) — pure in-memory helpers `create_folder_in_memory` / `delete_folder_in_memory` / `rename_folder_in_memory` / `move_video_to_folder_in_memory` / `merge_into_folder_in_memory` / `set_top_level_order_in_memory`, all callable from tests with a `&mut Library`. The `library_*` Tauri commands are thin `read_index → helper(...)? → write_index` wrappers. Error propagation uses `From<String> for AppError` (no `AppError::Internal` variant exists). ID generation is `sha256(now_secs || now_nanos)[..10]` — no `rand` crate dependency (intentional; existing deps only).
-
-## Caption style menu + draggable overlay
-
-Player gear button opens a 3-view menu (`pages/VideoPlayer.tsx` `menuView` state: `null | "root" | "speed" | "captions" | "captions.*"`):
-
-- **root**: 「播放速度」 + 「字幕设置」 rows.
-- **speed**: existing playback-speed list (Check icon ✓ marks selection — unified with captions).
-- **captions**: row-list YouTube-style. Each row drills into a deep submenu (`captions.fontColor` / `captions.fontScale` / `captions.fontOpacity` / `captions.highlights` / `captions.bgColor` / `captions.bgOpacity`). 8-color palette uses Chinese labels (白色 / 黄色 / 青色 / 绿色 / 蓝色 / 品红色 / 红色 / 黑色). Picking an option does NOT auto-back — user stays in the deep view to compare. Back arrow at the top returns to captions level. Bottom has a 「重置字幕设置」 button that patches all 6 fields to defaults in one call.
-
-Menu container: `w-[280px] bg-zinc-900/30 backdrop-blur-2xl`. Gear icon rotates 30° via `transition-transform` while menu is open.
-
-**`CaptionOverlay` is draggable** — `mousedown` on the box starts a transient drag (local `dragDelta` useState), `mousemove` updates the visible `transform: translate(dx, dy)`, `mouseup` calls `onPositionChange(x, y)` → Player.tsx sets local `captionOffset` state. **Position is session-only, NOT persisted to settings** — every fresh Player mount resets to (0, 0). This was a deliberate UX choice; the user originally asked for persistence then asked for per-video reset.
-
-**`backdrop-blur-sm` is conditional on `bgOpacity > 0`** — the blur filter is independent of bg-color alpha. At 0% background opacity the user expects the video to show through crisply; if blur stayed on, the picture behind the caption looked "as if through a lens". Toggle the class off when opacity is 0.
-
-## Library progress-bar hover thumbnail
-
-YouTube-style scrubber preview in `components/VideoPlayer.tsx`. A hidden `<video>` element (separate ref, same `src` as the main player) lives above the progress bar with `display: none` until hover. On mouse-move over the progress bar, a `requestAnimationFrame`-throttled `useEffect` syncs the preview video's `currentTime` to the hovered timestamp. Render size 160×90 px (`w-40 aspect-video`) framed above the cursor with a time-label below.
-
-The preview element **stays mounted** (toggled via inline `display`) so we pay the metadata-load cost once per video open, not per hover-tick. Lag for local mp4 via the asset protocol is ~50–200ms — comparable to YouTube's storyboard previews but live-decoded.
+Cache storage: `corpus_cache.json` via `tauri-plugin-store` LazyStore (see `lib/corpusCache.ts`). Field-shape notes for `/api/corpus/lookup?withScope=true` and `/api/corpus/versions` are in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#corpus-page-detail--apicorpuslookupwithscopetrue-field-shape).
 
 ## Library cloud sync (☁️ → whatsub-license backend → iOS app)
 
-Each Library card (incl. cards inside opened folders) has a `SyncButton` overlay that pushes the analyzed video to the cloud so the iOS companion app can read it. Three Rust commands in `src-tauri/src/commands/library_sync.rs` (registered in lib.rs), authed via `crate::auth::get_auth(&app)` (the same session token as license auto-login):
+Each Library card (incl. inside opened folders) has a `SyncButton` overlay that pushes the analyzed video to the cloud so the iOS companion app can read it. Three Rust commands in `src-tauri/src/commands/library_sync.rs`, authed via `crate::auth::get_auth(&app)`:
 
-- `library_sync_to_cloud(app, id)` — reads `{video_dir}/transcript.srt` + `analysis.json`, **downscales `thumb.jpg` → 320px JPEG via the ffmpeg sidecar (`ffmpeg::downscale_jpeg`) → base64**, and `POST`s `{id, youtubeId, sourceUrl, title, durationSec, thumbUrl, transcriptSrt, analysisJson, thumbData}` to `POST /api/library/sync`. Thumb is best-effort (missing/failed → omitted, backend falls back to the `i.ytimg.com` URL). On success calls `set_synced_at(id, now, null)` in the local index; on failure stores `set_synced_at(id, prev, errorMsg)`. **OSS upload progress (2026-05-25, `ff6fb56`):** `PipelineEvent::Uploading{video_id,percent}` emits real transcode %; `library_sync_to_cloud` returns `SyncOk.videoUploaded` and sets `sync_error="video_upload_failed"` on upload failure (entry still synced to cloud metadata). `DownloadQueueWidget` shows an 上传中 row (转码 % → 正在上传 spinner) + an `upload_failed` row with 「重试上传」. OSS PUT timeout raised 120s → 30 min + `eprintln` logging (file size + failure reason) — large videos (e.g. 15-min, hundreds of MB) silently timed out at 120s before.
-- `library_unsync_from_cloud(app, id)` — `DELETE /api/library/sync/:id` + clears local `syncedAt`.
-- `library_list_synced(app)` — `GET /api/library/list`. **Reconciles** the local index: clears `synced_at`/`sync_error` for local videos that are no longer in the cloud list (i.e. deleted from the iOS app), so a stale ✓ badge goes away. Local source files are KEPT (desktop is the master copy). Called on Library page mount (`Library.tsx`) so badges refresh after a mobile-side delete. The DELETE endpoint also removes the OSS video object, so an iOS swipe-delete cleans up backend row + OSS video + (on next desktop reconcile) the local badge.
+- `library_sync_to_cloud(app, id)` — reads `{video_dir}/transcript.srt` + `analysis.json`, **downscales `thumb.jpg` → 320px JPEG via the ffmpeg sidecar → base64**, and `POST`s `{id, youtubeId, sourceUrl, title, durationSec, thumbUrl, transcriptSrt, analysisJson, thumbData}` to `POST /api/library/sync`. Also transcodes + uploads a 720p mp4 to OSS, emitting `Uploading{video_id,percent}` events. Returns `SyncOk.videoUploaded`; sets `sync_error="video_upload_failed"` on upload failure (entry still synced to cloud metadata). OSS PUT timeout = 30 min.
+- `library_unsync_from_cloud(app, id)` — `DELETE /api/library/sync/:id` + clears local `syncedAt`. Backend DELETE also removes the OSS video object.
+- `library_list_synced(app)` — `GET /api/library/list`. **Reconciles** the local index: clears `synced_at`/`sync_error` for local videos no longer in the cloud list (i.e. deleted from the iOS app). Local source files KEPT (desktop is master). Called on Library page mount.
 
-`LibraryEntry` (TS `types/library.ts` + Rust) carries `syncedAt?: number` + `syncError?: string`; `SyncButton` renders idle/syncing/synced(✓)/error(✗) from these. Only YouTube-sourced entries sync in v1 (others stay `syncedAt: undefined`). `library_sync_to_cloud` takes a concrete `AppHandle` (NOT generic `AppHandle<R>`) because it calls the pipeline ffmpeg helper which is concrete-typed.
+`LibraryEntry` carries `syncedAt?: number` + `syncError?: string`; `SyncButton` renders idle/syncing/synced(✓)/error(✗). Both YouTube AND non-YouTube URL sources sync (Bilibili etc.); only local-file sources are excluded. The downscaled thumb is why the iOS list shows covers without a VPN — `i.ytimg.com` is GFW-blocked, so the backend serves the synced thumb from `whatsub.eversay.cc/api/library/thumb/:id` instead.
 
-**The downscaled thumb is why the iOS list shows covers without a VPN** — `i.ytimg.com` is GFW-blocked, so the backend serves the synced thumb from `whatsub.eversay.cc/api/library/thumb/:id` instead. Existing entries synced before this feature need a re-sync (click ☁️ again) to populate `thumbData`.
+**Quota badge:** the 云同步详情 dialog shows `配额 used/limit` (amber when at/over cap), `GET /api/library/quota`. `limit` is server-authoritative (`hasActiveSubscription ? 50 : 3` — counts iOS subs AND Alipay/web 时段会员).
 
-**Cloud-video quota badge (2026-05-26):** the 云同步详情 dialog header (`CloudSyncManager`) shows a `配额 used/limit` pill (amber when at/over cap), fetched via `lib/api/quota.ts::libraryQuota()` → `GET /api/library/quota`. The `limit` is **server-authoritative** (`hasActiveSubscription ? 50 : 3` — counts iOS subs AND Alipay/web 时段会员, not just a local guess); refetched after an unsync frees a slot. `quota.ts` mirrors `importQueue.ts`'s auth (`invoke("get_session_token")` + `fetch` with Bearer) — pure TS, no Rust command.
+**Per-video size + duration cap (2026-05-28):** mirrors backend caps (free 100MB/20min, sub 500MB/60min). `library_sync_to_cloud` fetches `/quota` (now includes a `limits` object) and threads it into `upload_video`:
+1. Duration pre-check BEFORE transcode — `entry.duration_sec > limits.maxVideoSeconds` → bail with `video_too_long`. Saves ~30s–2min of FFmpeg CPU.
+2. Size check AFTER transcode — `bytes.len() > limits.maxVideoBytes` → cleanup mobile.mp4 + bail with `video_too_large`.
+3. `contentLength` + `durationSec` sent in `/upload-url` body — backend can early-fail 413.
 
-**Per-video size + duration cap (2026-05-28):** mirroring the backend caps (free 100MB/20min, sub 500MB/60min). `library_sync_to_cloud` fetches `/quota` (now includes a `limits` object alongside `{used, limit}`) and threads it into `upload_video`:
-  1. **Duration pre-check BEFORE transcode** — `entry.duration_sec > limits.maxVideoSeconds` → bail with `video_too_long {duration, limit}`. Saves ~30s–2min of FFmpeg CPU on over-duration videos.
-  2. **Size check AFTER transcode** — `bytes.len() > limits.maxVideoBytes` after `transcode_720p` → cleanup mobile.mp4 + bail with `video_too_large {bytes, limit}`. Catches videos that compress smaller than expected but still exceed cap.
-  3. **`contentLength` + `durationSec` sent in `/upload-url` body** — backend can early-fail 413 even when the client missed a check (older limits cache, network glitch). 413 propagates as a hard error (not best-effort fallback).
-`upload_video` return type changed from `Option<String>` → `Result<Option<String>, String>` — `Ok(Some(key))` = uploaded, `Ok(None)` = best-effort failure (transcode fail / network → captions-only sync), `Err(msg)` = user-facing hard error to display.
-`SyncButton.tsx` adds two new dialog branches (`video_too_large` / `video_too_long`) with subscription upsell, and all three rejection dialogs (count cap + size + duration) deep-link the "前往订阅" CTA to `https://whatsub.eversay.cc/mobile#pro` (the Pro 订阅 card on the marketing site). Same Pro upsell from the count-cap dialog too — `quota_exceeded` copy updated from the stale "购买授权解锁 50 个" to "升级 Pro 会员 (¥12/月)". The 同步到云 confirmation dialog also surfaces the cap up-front so users learn the limit before discovering it via rejection.
+`upload_video` returns `Result<Option<String>, String>` — `Ok(Some(key))` = uploaded, `Ok(None)` = best-effort failure (transcode fail / network → captions-only sync), `Err(msg)` = hard error. `SyncButton.tsx` has dialog branches for `video_too_large` / `video_too_long` / `quota_exceeded`, all deep-linking the "前往订阅" CTA to `https://whatsub.eversay.cc/mobile#pro`.
 
 ## Import queue — desktop auto-poll worker
 
-When the iOS app encounters a caption-less YouTube video — OR **any non-YouTube URL** (Bilibili etc., which have no client-side caption path) — it pushes the URL to the backend queue (`POST /api/library/import-queue`). The desktop picks it up and runs the full local pipeline (yt-dlp + whisper + LLM + OSS self-host) headlessly. yt-dlp handles Bilibili natively; `core/ids.rs::id_from_bilibili_url` extracts the BV id (else sha256 fallback), and `library_sync_to_cloud` is **source-agnostic** (no longer YouTube-only — accepts any URL source, sends a null `thumbUrl` for non-YouTube and relies on the local ffmpeg `thumbData`). `SyncButton` likewise enables for any URL source (only local-file sources are excluded).
+When the iOS app encounters a caption-less YouTube video — OR **any non-YouTube URL** (Bilibili etc.) — it pushes the URL to the backend queue (`POST /api/library/import-queue`). The desktop picks it up and runs the full local pipeline headlessly. yt-dlp handles Bilibili natively; `core/ids.rs::id_from_bilibili_url` extracts the BV id (else sha256 fallback). `library_sync_to_cloud` is source-agnostic.
 
-**New files:**
-- `src/lib/api/importQueue.ts` — `enqueueImport`, `listPending`, `setStatus` — `fetch` wrappers to `GET/POST /api/library/import-queue*` using the session bearer (same auth as `librarySync.ts`).
-- `src/store/importQueue.ts` — module-level `setInterval` poll loop (~30 s, single-flight, only while authed). Per pending item: **atomically `claimItem(id)`** (backend `POST /import-queue/:id/claim`, conditional `pending→processing`; if another desktop already won, skip this tick — fixes multi-desktop double-pick) → `invoke("import_video", {source_kind:"url", source_value, quality, background:true})` → `invoke("load_transcript", {videoId})` + `parseSrt` → `runInBackground({videoId, label, cues, previouslyAnalyzed:[], previousSummary:null, style})` → await bg job reaching ready → `library_sync_to_cloud(videoId)` → `setStatus(id, 'done')`. Failures → `setStatus(id, 'failed', errorMessage)`. Concurrency = 1.
-
-**New Rust command:** `get_session_token` in `src-tauri/src/commands/auth.rs` — returns the current session bearer from `auth.json` so the TS poll loop can authenticate its `fetch` calls natively (bypasses WebView2 fetch quirks, consistent with `reqwest`-based corpus calls).
-
-**Wiring:** Loop started from `App.tsx` `useEffect` on auth ready. This is how caption-less videos pushed from the iOS "推送到桌面" button get processed automatically while the desktop is running.
-
-## Materialize (下载到本地)
-
-Downloads a cloud-only library entry (e.g. phone-imported, captions-only video) to local disk, reusing the cloud's transcript + analysis — no re-whisper/re-LLM.
-
-**New Rust command:** `library_materialize_from_cloud` in `src-tauri/src/commands/library_sync.rs`. Steps: `GET /api/library/entry/:id` → `ytdlp::download(source_url, background:true)` → write `transcript.srt` + `save_analysis(id, analysisJson)` from cloud data → `library_upsert(entry{status:Ready, synced_at:now})`. Registered in `lib.rs` invoke_handler.
-
-**New TS wrapper:** `materializeFromCloud(id)` in `src/lib/api/librarySync.ts`.
-
-**UI:** `src/components/CloudSyncManager.tsx` — "下载到本地" button per cloud entry. On click → `materializeFromCloud` → spinner → on success: `useLibrary.reload()` + toast "已下载到本地，可在库中播放". Only shown when entry is not already local.
-
-**Persistent progress state:** materializing state lives in `src/store/materializing.ts` (module-level store, NOT component-local useState) so "正在下载…" persists across dialog re-mounts while the Rust command runs.
-
-**Placeholder card in Library:** `library_upsert_placeholder` (a Rust helper) writes a stub entry with `status: Analyzing` + a "downloading" overlay while the materialize command runs, then flips to `ready` on success.
-
-**Orphan reconcile + dangling-ref filter:** `read_index` (in `src-tauri/src/commands/library.rs`) does two passes: (a) appends any video that's in `library.videos[]` but absent from both `top_level_order` and all `folders[].videoIds` (so background/queue/materialize imports always show in the grid); (b) filters refs in `top_level_order` whose backing video/folder no longer exists (self-heals stale state left by older delete paths — see "top_level_order dangling refs" entry in 踩过的坑).
-
-## Delete cascade dialog
-
-When deleting a SYNCED video locally, the desktop now asks what to do with the cloud copy.
-
-**UI:** In the Library delete flow (`src/pages/Library.tsx`), when the target `LibraryEntry` has `syncedAt` set, a dialog with three choices is shown:
-- **仅删本地** — `library_delete(id)` only (previous behavior for unsynced).
-- **本地 + 云端都删** — `unsyncFromCloud(id)` (calls `DELETE /api/library/sync/:id`, which also deletes the OSS video object) then `library_delete(id)`.
-- **取消** — dismiss.
-
-Unsynced videos still delete directly without the dialog. Reuses `unsyncFromCloud` from `src/lib/api/librarySync.ts`.
+- `src/lib/api/importQueue.ts` — `enqueueImport`, `listPending`, `setStatus` — `fetch` wrappers to `GET/POST /api/library/import-queue*` using the session bearer.
+- `src/store/importQueue.ts` — module-level `setInterval` poll loop (~30 s, single-flight, only while authed). Per pending item: **atomically `claimItem(id)`** (backend `POST /import-queue/:id/claim`, conditional `pending→processing`; multi-desktop double-pick is prevented) → `invoke("import_video", ...)` → `load_transcript` + parseSrt → `runInBackground(...)` → await ready → `library_sync_to_cloud(videoId)` → `setStatus(id, 'done')`. Concurrency = 1.
+- Rust command `get_session_token` returns the bearer from `auth.json` so the TS poll loop can authenticate its `fetch` calls natively.
+- Wiring: loop started from `App.tsx` `useEffect` on auth ready.
 
 ## yt-dlp resolution order
 
@@ -217,9 +171,9 @@ Unsynced videos still delete directly without the dialog. Reuses `unsyncFromClou
 1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy from Settings → 更新 yt-dlp (`commands::yt_dlp::yt_dlp_update`). Downloaded via reqwest from `https://github.com/yt-dlp/yt-dlp/releases/latest/download/`, written to `.downloading`, atomic-renamed. `chmod +x` on unix.
 2. **Bundled sidecar** (`binaries/yt-dlp-<target_triple>{.exe}`) — what `pnpm tauri build` ships. CI workflow input `yt_dlp_tag` (default `latest`) controls which yt-dlp release gets bundled.
 
-The AppData path uses `pipeline/spawn.rs::run_external_with_callback` (a `tokio::process::Command`-based parallel of `run_sidecar` — same chunked-stderr callback + cancellation token + stderr-tail-on-error semantics) because Tauri shell plugin's `sidecar()` only accepts whitelisted basenames, not arbitrary paths. The bundled fallback still uses `run_sidecar`.
+The AppData path uses `pipeline/spawn.rs::run_external_with_callback` because Tauri shell plugin's `sidecar()` only accepts whitelisted basenames, not arbitrary paths. The bundled fallback uses `run_sidecar`.
 
-Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's player JS changes. Bundling a single yt-dlp at app-build time means weeks-long lag when extractors break. Users hit Settings → 更新 yt-dlp to get the current latest within seconds, no whatsub re-release needed.
+Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's player JS changes. Bundling means weeks-long lag when extractors break. Users hit Settings → 更新 yt-dlp to get the current latest within seconds.
 
 ## Foreground vs background yt-dlp retry budgets
 
@@ -233,13 +187,13 @@ Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's play
 | `--retry-sleep` | 2s | 5s |
 | Process-level retry attempts | 1 | 3 (only on `is_transient_yt_dlp_error()`) |
 
-Foreground goal: **fail fast (~25-50s)** so user sees actionable error dialog instead of staring at a frozen-looking modal. Background goal: **patient (~3 min)** so transient blips recover without user supervision. ⚠️ These knobs only control TCP-connect + HTTP retries; **they do NOT bound yt-dlp's player-JS sigsolver time** — long YouTube videos with large DASH manifests can still take minutes in "准备中" while yt-dlp parses formats. There's no flag to shorten that.
+Foreground goal: **fail fast (~25-50s)** so user sees actionable error dialog. Background goal: **patient (~3 min)** so transient blips recover without user supervision. ⚠️ These knobs only control TCP-connect + HTTP retries; they do NOT bound yt-dlp's player-JS sigsolver time — long YouTube videos with large DASH manifests can still take minutes in "准备中".
 
 ## whisper.cpp build
 
 Built from whisper.cpp v1.8.4 in `.github/workflows/release.yml`. Win = Vulkan + CPU fallback (VS 2022 + Vulkan SDK + cmake). macOS arm64 = Metal + CPU fallback (Metal shaders embedded into `libggml-metal` since v1.7+; no separate `.metallib`).
 
-Critical: Win cmake passes `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_AVX512=OFF -DGGML_FMA=OFF -DGGML_F16C=ON` — without this conservative SIMD baseline, CI's AVX-512 Xeon bakes incompatible SIMD into `ggml-cpu.dll` → end-user CPUs hit `STATUS_ILLEGAL_INSTRUCTION` (-1073741795) **even when Vulkan is the active backend** (mel-spectrogram preprocessing still runs on CPU SIMD).
+Critical: Win cmake passes `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGGML_AVX512=OFF -DGGML_FMA=OFF -DGGML_F16C=ON` — without this conservative SIMD baseline, CI's AVX-512 Xeon bakes incompatible SIMD into `ggml-cpu.dll` → end-user CPUs hit `STATUS_ILLEGAL_INSTRUCTION` even when Vulkan is the active backend (mel-spectrogram preprocessing runs on CPU SIMD).
 
 `pipeline/whisper.rs` parses the first `ggml_<backend>: 0 = <gpu>` stderr line, persists as `settings.whisperBackend` so Settings shows "GPU 加速" status.
 
@@ -252,122 +206,28 @@ pnpm test               # Vitest
 pnpm typecheck          # tsc --noEmit
 pnpm tauri build        # → src-tauri/target/release/bundle/
 
-cd src-tauri && cargo test    # safe: tests use temp paths only (see "tests must use temp paths" rule below)
+cd src-tauri && cargo test    # safe: tests use temp paths only
 ```
 
 > Dev mode: Tauri puts sidecars at `target/debug/<basename>.exe` (no triple). If you delete those during cleanup, dev spawn fails with `os error 2`.
 
 ## Release workflow
 
-**Three repos, dual-publish:**
-- Source: `rjxznb/whatsub` (private)
-- Release mirror A: `rjxznb/whatsub-releases` on GitHub (public, international)
-- Release mirror B: `rjxznb-group/whatsub-release` on JiHu GitLab (public, mainland-direct, no VPN; project id 335658)
+Three-repo dual-publish (private source / GitHub mirror / JiHu mirror) with minisign-signed updater. Step-by-step instructions, signing key handling, JiHu setup, and Updater UX live in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#release-workflow). The non-negotiables:
 
-**Updater endpoints** in `tauri.conf.json`, tried in order:
-1. `https://jihulab.com/.../latest.json` — preferred (China-reachable)
-2. `https://github.com/rjxznb/whatsub-releases/.../latest.json` — fallback
-
-Why dual: tauri-plugin-updater's reqwest client ignores OS proxy settings (only `HTTPS_PROXY` env var works), so GitHub release assets (Azure Blob) are intermittently unreachable from mainland China. JiHu sidesteps the GFW. Same minisign key for both — signature bytes identical, only `url` field in `latest.json` differs.
-
-Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. JiHu auth = secret `GITLAB_TOKEN`.
-
-### Per-release
-
-1. Bump version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (must match).
-2. Commit + push to `main`.
-3. GH Actions → **Release** → Run workflow. Inputs: `targets` (both/windows/macos, single-platform iterates with the other carried over), `release_notes`, `whisper_tag`, `vulkan_sdk_version` (bump if LunarG 404s an old version), `node_version`, `yt_dlp_tag` (default `latest`; pin to e.g. `2026.03.17` when chasing an upstream regression), `dry_run`.
-4. ~5–25 min depending on cache hit. Both `.msi` + `.dmg` get signed; `.dmg` is notarized + stapled in CI. `.app.tar.gz` repackaged from the stapled `.app` so auto-updater serves notarized version.
-
-CI caches whisper sidecar+DLLs, Vulkan SDK, node sidecar, and cargo target (`Swatinem/rust-cache@v2`). Warm rebuild ~5–8 min Win + 2–3 min Mac (cold = 25 + 5).
-
-Mac dmg build is wrapped in a 3× retry loop — Tauri's create-dmg wrapper relies on AppleScript + hdiutil + diskimages-helper which intermittently fail on macos-14 runners with a generic 4-second `failed to bundle project`. Retry helpers: `hdiutil detach -force /Volumes/whatsub*` + `pkill -9 diskimages-helper` + 8s sleep between attempts.
-
-### Updater UX
-
-Auto-check 3s after launch; bottom-right toast with 「立即更新」/「稍后」/「✓ 不再提醒此版本」 (persisted in `localStorage["skippedUpdateVersions"]`). Settings → 检查更新 ignores skip list. Win uses `installMode: "basicUi"` (default `passive` silently swallowed UAC). `useUpdater.ts` does NOT call `relaunch()` after `downloadAndInstall` on Windows (would file-lock msiexec out of the install dir); msiexec handles its own restart. macOS: `open -b com.whatsub.app` via Launch Services + `exit(0)` (more reliable than `plugin-process::relaunch`'s direct exec).
-
-Updater state lives in a module-level zustand store in `useUpdater.ts` (not component-local useState) so navigation away mid-download keeps the percent indicator alive + shared between the auto-check toast and the Settings panel. `runningDownload: Promise<void>` is a module-level singleton so a second click while one is in flight short-circuits — without this, plugin-updater (which has no disk cache) would re-stream from byte 0.
-
-### Safety
-
-- **Never lose the private key** (public key shipped in app; rotation breaks all installed clients).
+- **Never lose the private signing key** (public key shipped in app; rotation breaks all installed clients).
 - **Never make source repo public** without rotating the local backup key.
 - **Never delete a release users installed from** — breaks signature chain for subsequent updates.
 - **Never commit `.msi` / `.sig`** — release assets only.
-
-## 踩过的坑 (avoid repeating)
-
-- **`window.confirm`/`alert`/`prompt` are unreliable in the Tauri v2 webview.** They route to the dialog plugin, which needs `dialog:allow-confirm`/`dialog:allow-message`/`dialog:allow-ask` capabilities. Without the capability they throw `dialog.confirm not allowed` and the calling code never runs — so the SyncButton's manual ☁️ confirm threw silently and sync never ran (`057d66f`). Fix: swap all calls to `@tauri-apps/plugin-dialog`'s async `confirm`/`message`/`ask` + grant capabilities. Do NOT use native `window.confirm` anywhere in the app.
-
-- **OSS PUT in `library_sync.rs::upload_video` is single-PUT, reads whole file into memory** — no resumable/multipart upload. Very large files need a generous timeout (now 30 min). If you add large-file uploads in the future, consider streaming multipart.
-
-- **yt-dlp has no `--ffprobe-location` flag**. Only `--ffmpeg-location` exists; yt-dlp auto-discovers ffprobe by literal name (`ffprobe`/`ffprobe.exe`) next to the resolved ffmpeg. Our sidecars are renamed to `ffprobe-<triple>{.exe}` so yt-dlp can't find ours. Most YouTube downloads work without ffprobe; fragmented DASH/HLS fail with "ffprobe not found". Fix would be: copy `ffprobe-<triple>` → bare `ffprobe` into user-writable dir at first run, then pass `--ffmpeg-location <that dir>`.
-
-- **`&list=...&index=N` URLs trigger playlist download**. YouTube's share-from-playlist links carry these params; without `--no-playlist`, yt-dlp walks the WHOLE playlist into the same `source.mp4`/`thumb.jpg` (each overwriting the last) and bails if any single video is unavailable. Always pass `--no-playlist`.
-
-- **Opus-in-MP4 / VP9-in-MP4 won't play in WKWebView on Mac** (silent black frame, no error). Tauri WebView on Mac → AVFoundation hard-rejects these. Win Media Foundation tolerates them so this is invisible on Win dev. yt-dlp format selector in `pipeline/ytdlp.rs::yt_dlp_format` constrains BOTH `vcodec^=avc1` AND `ext=m4a` with progressive fallback chain. `best` is **capped at 1080p** because YouTube only ships VP9/AV1 above that.
-
-- **AAC re-encode in yt-dlp merger corrupts multichannel audio**. We used to pass `Merger:-c:v copy -c:a aac -b:a 192k` as belt-and-suspenders for Mac playback. On YouTube uploads shipping 5.1/7.1 m4a, the ffmpeg AAC encoder writes a header for one channel layout but emits packets for another → `channel element 1.0 is not allocated` on every packet during downstream WAV extraction, ffmpeg exits 69. Current args: `Merger:-c:v copy -c:a copy` (pure remux). Defense in depth: `extract_audio_wav` passes `-fflags +discardcorrupt -err_detect ignore_err -max_error_rate 0.95` so a few corrupt packets don't kill transcription.
-
-- **yt-dlp retries vs GFW** — three lessons that bite together:
-  - **`--retries N` is PER HTTP REQUEST, not a global budget.** yt-dlp makes ~4 distinct requests per download (webpage → player JS → manifest → stream), each retried independently; foreground used to wait ~2 min before failing. Now `--socket-timeout 5 --retries 1` for foreground (see math at top of `args.extend([...])` in `pipeline/ytdlp.rs`); background is patient (table in "Foreground vs background yt-dlp retry budgets" above).
-  - **SSL EOF on googlevideo = GFW.** `EOF occurred in violation of protocol (_ssl.c:...)` mid-fetch is GFW interfering with TLS. yt-dlp's default 10 retries blow through in seconds. We pass `--retries 20 --fragment-retries 20 --retry-sleep linear=1:20:2`, AND wrap `run_sidecar` in a 3-attempt process-level retry (fresh DNS/TLS) gated on `is_transient_yt_dlp_error()`. Deterministic errors (cookies / banned / private) bubble immediately so the actionable dialog appears fast.
-  - **`--write-thumbnail` fails the whole import on flaky networks.** It's a separate HTTPS GET to `i.ytimg.com`; GFW resets → `EOF occurred in violation of protocol` after 10 retries → yt-dlp exits 1 even though the video downloaded fine. Don't ask yt-dlp for the thumbnail; `ffmpeg::extract_thumbnail` pulls a frame from the local `source.mp4` after download (best-effort — missing thumbnail doesn't fail the import).
-
-- **Cloudflare Workers from China without VPN: first TCP handshake 5–10s** (subsequent on same socket = 500ms). GFW TCP-level throttling on CF edge. Already migrated to Aliyun ECS (<200ms), but the 30s `fetch` timeout + "首次可能需要 10-15 秒" copy in LicenseGate stays as a safety margin.
-
-- **Windows whisper-cli companion DLLs not on PATH**. `bundle.resources` puts `whisper.dll`/`ggml*.dll` at `<install>/resources/binaries/` which isn't in Windows' default DLL search order → whisper-cli exits with `STATUS_DLL_NOT_FOUND` (-1073741515). `pipeline/spawn.rs` (Windows-only) prepends that dir to the child process's PATH before spawning.
-
-- **Release commits MUST verify current branch first**. The session-start `gitStatus` snapshot Claude Code provides shows the branch at session start — it does NOT update if the user switches branches mid-session. Before any release `git commit`, **always run `git branch --show-current` and confirm it's `main`**. Hit this 2026-05-18 (would-be v0.1.45): mid-session worktree had been switched to `feat/corpus-seed` (user's WIP for the browser-plugin / bridge work); I committed the release there. Compounded by `git push origin main` — that refspec means "push local main, regardless of current branch", which silently picked up the user's unpushed docs commits on local main and published them to remote main unbidden (the exact pattern [[feedback_subagent_branch_isolation]] warns about, except this time it was the top-level agent, not a subagent).
-
-- **`git add A B C` is atomic-fail-all**. If ANY pathspec doesn't match (typo, file moved, wrong cwd) git aborts the whole command with `fatal: pathspec ... did not match` AND stages nothing — even the valid paths in the list. Easy to miss inside a wall of `warning: LF will be replaced by CRLF` output. After every `git add`, run `git status --short` and verify the leading column is `M `/`A ` (staged) not ` M`/`??` (unstaged) for every file you intended. Hit this same 2026-05-18 incident: a typo `LibraryGate.tsx` → `LibraryTour.tsx` in the file list caused the whole add to fail, the subsequent commit included only the one new file (added separately) and missed all 11 version-bump + bug-fix modifications.
-
-- **WebView fetch swallows TLS/CSP/AV errors as bare `TypeError: Failed to fetch`**. JS-side `fetch()` in Tauri 2 WebView2 (Win) and WKWebView (Mac) routes through the OS browser engine's network stack — which means user-side firewalls, antivirus SSL inspection, system-cert-store quirks, CSP `connect-src`, and CORS preflight all participate. When ANY of them blocks the request, JS gets a single error with no detail beyond "Failed to fetch". Hit this 2026-05-18 with license activation: server was healthy (curl ~200ms), but multiple users couldn't activate. Fixed by moving the POST to Rust via `reqwest` (`commands/license.rs::license_activate_http`), where errors come back tagged `timeout: ...` / `connect: ...` / `tls: ...` so the dialog can show actionable causes ("校准系统时间" / "关杀软 SSL 注入" / etc.).
-
-- **Opacity-animated wrappers create a stacking context that traps children's z-index.** A `<div className="animate-fade-in">` whose animation includes `opacity` becomes a *local* stacking context with `z-auto` — a child `<svg className="fixed inset-0 z-[200]">` CANNOT escape it, so the whole overlay can sit BELOW any sibling with explicit z-index (e.g. ImportModal at `z-50`). LibraryTour + VocabTour both hit this 2026-05-18 (dim+cutout SVG invisible behind the modal). Mechanical fix pattern for ANY portal-mounted overlay with a `forwards` opacity animation: `fixed inset-0 z-[N] pointer-events-none` on the wrapper (z-index hoisted up), `absolute` (NOT `fixed`) on each child, `pointer-events-auto` only on the interactive piece (tooltip etc).
-
-- **yt-dlp `--retries N` is PER HTTP REQUEST, not a global budget.** yt-dlp typically makes 4 distinct requests per download (webpage → player JS → format manifest → stream), each retried independently. Combined with the default ~20s TCP connect timeout, foreground used to wait ~2 min on "no VPN" cases. We now set `--socket-timeout 5 --retries 1` for foreground; comment block at top of `args.extend([...])` in `pipeline/ytdlp.rs` lays out the math.
-
-- **stderr chunks from `run_sidecar` callback are NOT line-aligned.** `tauri-plugin-shell`'s `CommandEvent::Stderr(bytes)` delivers raw byte chunks, possibly containing multiple `\n`s. `parse_progress` and `parse_whisper_progress` use single-line patterns (`strip_prefix("[progress] ")` / `find("progress =")`), so multi-line chunks fail to parse OR only the first match registers — losing intermediate progress events. Both `ytdlp.rs` and `whisper.rs` callbacks must iterate `chunk.lines()` before invoking parse helpers. Hit 2026-05-18 (0.1.44): "准备中" turned green simultaneously with "下载视频" because every Downloading event was being dropped.
-
-- **Rust `#[cfg(test)]` blocks must NEVER call `paths::*_path()` directly.** Earlier `commands/library.rs` and `commands/settings.rs` test modules ran `fs::remove_file(paths::library_index_path())` / `save_settings(...)` against the REAL `%APPDATA%/whatsub/` paths — so `cargo test` wiped the user's library.json + settings.json (DeepSeek key, etc. all gone). Fixed 2026-05-20 by extracting pure-memory helpers (`upsert_in_memory`, `set_status_in_memory`) and `path`-injectable variants (`save_settings_to(path, value)`, `get_settings_from(path)`); tests now operate on `Library::default()` or `std::env::temp_dir()` paths. **When adding a new Rust command that touches a user-data path, never let its tests call the production path resolver.** Mirror the pattern: extract the logic to take an injectable path, test that.
-
-- **Validation errors in ImportModal must NOT share state with real download errors.** The error-dialog auto-open effect (`useEffect` watching `error`) triggers the troubleshooting checklist whenever `error` is non-empty. A simple `setError("请输入 URL")` for empty-URL validation accidentally pops the VPN/cookies dialog — actively misleading. Use a separate `validationError` state for input validation; reserve `error` for actual yt-dlp / ffmpeg / whisper failures.
-
-- **JiHu GitLab API curl without `--connect-timeout` can hang the release job indefinitely.** Default curl waits forever on stalled TLS handshake. 0.1.49 publish step hung 13+ min on "Mirror to JiHu GitLab" before manual cancel. All curl calls in that workflow step now have `--connect-timeout 15-30 --max-time 30-600` matched to operation type. POST that creates the release record stays non-retried (`--retry` would risk duplicate records); idempotent ops (PUT package upload, DELETE, GETs) all have `--retry 3 --retry-all-errors`.
-
-- **osxexperts.net HTTP/2 stream PROTOCOL_ERROR mid-download.** macOS CI ffmpeg/ffprobe download from osxexperts.net intermittently dies at 30-60% with `HTTP/2 stream X was not closed cleanly: PROTOCOL_ERROR (err 1)`. `--retry` alone doesn't help (re-tries die at the same point). Fix: pass `--http1.1 -C - --retry 5` to curl. HTTP/1.1 has no stream layer so the bug can't trigger; `-C -` resumes from any partial bytes so reconnects don't restart from byte 0.
-
-- **Tauri 2 `dragDropEnabled: true` (the default) intercepts ALL HTML5 drag inside the webview.** Symptom: the webview-internal drag-and-drop (Library card reorder, drag-to-merge) shows the 「禁止」 cursor on every drop target — `dragover` events never fire because the OS-level OLE/COM drag handler is consuming them. Fix: set `windows[0].dragDropEnabled: false` in `tauri.conf.json`. Trade-off: `getCurrentWindow().onDragDropEvent` stops firing, so OS-level file drops (dragging a video file from Explorer into the window for import) break. Acceptable — Import button + URL input still cover the same flow.
-
-- **HTML5 dragover handlers must read `drag` state from a ref, not useState.** The native `dragover` event fires immediately after `dragstart` — too fast for React to re-render with the new state. The dragover handler's closure still sees `drag === null`, returns early without calling `preventDefault`, and the browser permanently marks the drop as 「禁止」 (no drop target). Fix: `dragRef = useRef<DragState | null>(null)` written synchronously in `onDragStart`, read synchronously in `onDragOver`. A separate `dragSt` useState mirror still drives child visual state (opacity-40, ring colors) via re-render.
-
-- **`onDragOver` early-return when cursor is over the source MUST still call `preventDefault`.** During reorder live-preview the source card animates under the cursor; if its dragover handler skips `preventDefault` (because target === source), the browser flashes 「禁止」 every frame. Always `preventDefault + dropEffect = "move"` first, only THEN check source-id and skip state update.
-
-- **`onDragLeave` must NOT clear `dragOver` state.** Cursor crossing a 1px gap between cards fires dragleave → if you clear, `effectiveOrder` flips to base, framer-motion animates back, the next dragover (half a frame later) re-sets the state, animation kicks in again. Cards visibly bounce. Solution: make `onDragLeave` a no-op; `dragOver` only changes when a new target receives dragover, or when the drag ends (`onDragEnd` / `onDrop`).
-
-- **Drop event fires on whichever element the cursor sits on at release.** With live reorder preview, the source card animates under the cursor on back→front drags; `onDrop` then runs with `target === source` and the obvious `if (target.id === drag.ref.id) return` cancels the operation. Fix: cache the last legitimately hovered target (`id + type + mode + rect`) in `dragOverRef` during `onDragOver`. `onDrop` ignores `e.currentTarget` and uses the cached target, so dropping anywhere — even on the source post-animation — still applies the reorder.
-
-- **`top_level_order` dangling refs make every drag-reorder snap back.** Older delete paths (notably `library_delete` and the failed 下架/materialize-placeholder cleanup) removed entries from `videos` without cleaning the matching ref in `top_level_order`. `set_top_level_order_in_memory` then validated each ref against `videos`/`folders` and returned `Err("unknown video id …")` on any dangling — which `Library.tsx`'s onDrop catch reloaded from disk, visibly snapping the cards back on release. Three-layer fix (2026-05-28): (1) `library_delete` now also retains `top_level_order` + folder `video_ids` so the bug source is sealed; (2) `read_index` filters out refs with no backing entry on every load (self-heals existing bad library.json); (3) `set_top_level_order_in_memory` silently drops dangling refs instead of rejecting (defense-in-depth). When adding a new delete-ish path, mirror (1) — cleaning every state that references the id.
-
-- **`backdrop-blur` is independent of `background-color` alpha.** Setting `bg-black/0` (fully transparent) still leaves the blur filter active — the video behind the caption looks "through a lens" even though the box is invisible. Tie the `backdrop-blur-*` class to `bgOpacity > 0` and the user actually sees the video crisply when they pick 0%.
-
-- **`?start=` in YouTube embed URL only accepts integers.** Saved `timestampSec: 5.646522` (decimal from `player.getCurrentTime()`) becomes `?start=5.646522` → YouTube silently treats it as invalid → starts from 0. Floor before building the URL: `Math.max(0, Math.floor(startSec))`.
-
-- **React `setState(sameValue)` won't trigger child key change.** The CorpusPhraseDetail timestamp button used `setSelectedInstance(c)` only. When clicked on the already-current instance the state didn't change, the iframe's `key={instance.id}:${seekNonce}` didn't change, the iframe didn't remount, the player stayed where it was. Always bump `seekNonce` alongside `setSelectedInstance` so the key changes unconditionally.
-
-- **CSP `img-src 'self'` / `media-src 'self'` does NOT cover Tauri's asset protocol.** `convertFileSrc()` produces `http://asset.localhost/...` on Windows and `asset://localhost/...` on Mac — neither matches `'self'`. Thumbnails + videos render blank with no obvious error. Explicit CSP must include `asset: http://asset.localhost https://asset.localhost` in both `img-src` and `media-src`.
-
-- **Overflow-scroll inside a layout-driven height requires `h-full`, not `flex-1`.** `flex-1` only applies when the parent is a flex container; inside a plain block parent it's a no-op. The element ends up content-sized and `overflow-y-auto` never kicks in. Use `h-full` (or wrap the parent in `flex`) so the element has a constrained height that overflows.
+- **Before any release `git commit`, run `git branch --show-current` and confirm it's `main`** (see [`CLAUDE-PITFALLS.md`](./CLAUDE-PITFALLS.md#build--release--git)).
 
 ## Known limitations / TODO
 
 - All OpenAI-compatible vendors share one API-key slot — switching DeepSeek ↔ Kimi may lose the prior key (vendorKeys stash exists but switch logic isn't fully wired).
 - `settings.modelsDir` change does NOT migrate existing `.bin` files.
 - ARM64 Windows / Intel Mac not built.
-- ffprobe bundled but yt-dlp can't reach it (see 踩过的坑).
+- ffprobe bundled but yt-dlp can't reach it (see [`CLAUDE-PITFALLS.md`](./CLAUDE-PITFALLS.md#sidecars--subprocess)).
 - Burn-in export = libx264 only, no NVENC. 1–2× realtime CPU.
-- Tauri updater plugin doesn't disk-cache across app restarts — close mid-download + reopen + click = re-download from byte 0. ~80 lines to fix; deferred.
-- No way to shorten yt-dlp's player-JS sigsolver time. `--socket-timeout` only bounds TCP connect. Long YouTube videos with large DASH manifests can sit in "准备中" for minutes regardless of our retry budget.
-- Personal-corpus 我的 tab loads via cached SWR but doesn't show a global "正在同步" state; user has to click 刷新 if they just added a tag and want to see counts update.
+- Tauri updater plugin doesn't disk-cache across app restarts — close mid-download + reopen + click = re-download from byte 0.
+- No way to shorten yt-dlp's player-JS sigsolver time.
+- Personal-corpus 我的 tab loads via cached SWR but doesn't show a global "正在同步" state.

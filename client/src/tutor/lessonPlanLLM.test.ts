@@ -51,14 +51,39 @@ describe("parseLessonPlanFromStream", () => {
     expect(plan!.anchors[0].targetPatterns).toEqual(["other"]);
   });
 
-  it("enforces min-spacing constraint (anchors ≥15 cues apart)", async () => {
+  it("enforces min-spacing constraint (drops exact-duplicate cueIdx)", async () => {
     const plan = await parseLessonPlanFromStream(fixture("lesson_plan_deepseek.txt"));
     if (!plan) throw new Error("fixture missing");
     for (let i = 1; i < plan.anchors.length; i++) {
       const gap = plan.anchors[i].cueIdx - plan.anchors[i - 1].cueIdx;
-      // We don't have video-second metadata here, so we approximate: 15s ≈
-      // 3 cues at average pace. Lower bound check.
+      // The parser only drops exact duplicates (gap < 1). The 15-second
+      // spacing rule is enforced by the LLM prompt, not the parser.
       expect(gap).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it("deduplicates exact-duplicate cueIdx entries", async () => {
+    const plan = {
+      videoId: "dup-test",
+      overview: "测试重复锚点去重",
+      anchors: [
+        { cueIdx: 3,  topic: "A", whyThisOne: "first",  targetPatterns: ["preposition_wrong"] },
+        { cueIdx: 3,  topic: "B", whyThisOne: "dupe",   targetPatterns: ["other"] },
+        { cueIdx: 12, topic: "C", whyThisOne: "unique", targetPatterns: ["modal_verb_wrong"] },
+      ],
+    };
+    const content = JSON.stringify(plan);
+    const stream =
+      `data: {"choices":[{"delta":{"content":${JSON.stringify(content)}}}]}\n\n` +
+      `data: [DONE]\n`;
+    const result = await parseLessonPlanFromStream(stream);
+    expect(result).not.toBeNull();
+    expect(result!.anchors).toHaveLength(2);
+    expect(result!.anchors[0].cueIdx).toBe(3);
+    expect(result!.anchors[1].cueIdx).toBe(12);
+  });
+
+  it("returns null for an empty stream", async () => {
+    expect(await parseLessonPlanFromStream("")).toBeNull();
   });
 });

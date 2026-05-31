@@ -34,10 +34,11 @@ export function extractJsonObject(raw: string): unknown {
   return null;
 }
 
-/** Concatenate SSE `data:` chunks into the final assistant text. Works
- *  for OpenAI-compatible AND Claude AND Gemini formats — the schemas
- *  differ but they all carry the text under .delta.content / .text /
- *  .candidates[0].content.parts[0].text respectively. */
+/** Concatenate SSE `data:` chunks into the final assistant text.
+ *  The claude/gemini branches exist only to let the synthetic test fixtures
+ *  exercise multi-shape tolerance. The live `planLesson` path re-wraps
+ *  already-decoded provider text into the openai-compatible shape, so in
+ *  production only the `choices[].delta.content` branch is ever hit. */
 function concatenateSseText(raw: string): string {
   let out = "";
   for (const line of raw.split(/\r?\n/)) {
@@ -74,9 +75,9 @@ function concatenateSseText(raw: string): string {
 /** Parse a complete (already buffered) SSE stream into a LessonPlan.
  *  Returns null if not recoverable. Coerces unknown patterns to 'other'
  *  rather than rejecting — keeps the user moving on LLM hallucinations. */
-export async function parseLessonPlanFromStream(
+export function parseLessonPlanFromStream(
   rawStream: string,
-): Promise<LessonPlan | null> {
+): LessonPlan | null {
   const text = concatenateSseText(rawStream);
   const obj = extractJsonObject(text);
   if (!obj || typeof obj !== "object") return null;
@@ -110,7 +111,10 @@ export async function parseLessonPlanFromStream(
 
   if (anchors.length === 0) return null;
 
-  // Enforce monotonic cueIdx — sort, then drop neighbors closer than 1 cue.
+  // Sort by cueIdx, then drop exact-duplicate cueIdx entries (gap < 1 means
+  // same index). The 15-second spacing rule is the LLM's responsibility
+  // (instructed in the system prompt); the parser can't enforce it without
+  // cue timestamps.
   anchors.sort((a, b) => a.cueIdx - b.cueIdx);
   const spaced: TeachingAnchor[] = [];
   for (const a of anchors) {

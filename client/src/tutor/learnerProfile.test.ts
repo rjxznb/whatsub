@@ -92,4 +92,33 @@ describe("useLearnerProfile store", () => {
     await useLearnerProfile.getState().logEvent(sampleEvent);
     expect(useLearnerProfile.getState().profile?.errorEvents).toHaveLength(1);
   });
+
+  // Fix 6: test resolveEvents and reset store actions.
+  it("resolveEvents calls Rust then re-loads updated profile", async () => {
+    const resolvedProfile = {
+      ...emptyProfile,
+      errorEvents: [{ ...sampleEvent, resolved: true, resolvedAt: 999 }],
+    };
+    mockInvoke
+      .mockResolvedValueOnce(undefined) // resolve_events
+      .mockResolvedValueOnce(resolvedProfile); // load
+    await useLearnerProfile.getState().resolveEvents(["e1"]);
+    expect(mockInvoke).toHaveBeenCalledWith("learner_profile_resolve_events", {
+      ids: ["e1"],
+    });
+    expect(useLearnerProfile.getState().profile?.errorEvents[0].resolved).toBe(true);
+  });
+
+  it("reset calls Rust then re-loads empty profile", async () => {
+    // Seed a non-null profile first so we can confirm it gets replaced.
+    useLearnerProfile.setState({
+      profile: { ...emptyProfile, errorEvents: [sampleEvent] },
+    });
+    mockInvoke
+      .mockResolvedValueOnce(undefined) // reset
+      .mockResolvedValueOnce(emptyProfile); // load
+    await useLearnerProfile.getState().reset();
+    expect(mockInvoke).toHaveBeenCalledWith("learner_profile_reset");
+    expect(useLearnerProfile.getState().profile?.errorEvents).toHaveLength(0);
+  });
 });

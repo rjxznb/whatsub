@@ -93,22 +93,26 @@ impl LearnerProfile {
     }
 }
 
-fn now_secs() -> u64 {
+// Fix 4: renamed from now_secs() → now_millis(), uses .as_millis() as u64.
+// All learner-profile timestamps are milliseconds to match the TS Date.now()
+// convention used by ErrorEvent.ts and the Task 7 remediation cooldown
+// (which compares Date.now() − lastRemediatedAt against COOLDOWN_MS).
+fn now_millis() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
 /// Path-injectable load. Tests use this with std::env::temp_dir().
 pub fn learner_profile_load_from(path: &Path) -> AppResult<LearnerProfile> {
     if !path.exists() {
-        return Ok(LearnerProfile::new_empty(now_secs()));
+        return Ok(LearnerProfile::new_empty(now_millis()));
     }
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(_) => return Ok(LearnerProfile::new_empty(now_secs())),
+        Err(_) => return Ok(LearnerProfile::new_empty(now_millis())),
     };
     match serde_json::from_str::<LearnerProfile>(&raw) {
         Ok(p) => Ok(p),
@@ -118,17 +122,21 @@ pub fn learner_profile_load_from(path: &Path) -> AppResult<LearnerProfile> {
                 path.display(),
                 e
             );
-            Ok(LearnerProfile::new_empty(now_secs()))
+            Ok(LearnerProfile::new_empty(now_millis()))
         }
     }
 }
 
+// Fix 1: atomic save via tmp + rename, mirroring agent_history_save_to.
+// Prevents a mid-write crash from corrupting errorEvents (永不删除 核心数据).
 pub fn learner_profile_save_to(path: &Path, profile: &LearnerProfile) -> AppResult<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let json = serde_json::to_string_pretty(profile).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -140,8 +148,10 @@ pub fn learner_profile_log_event_in(
     if profile.error_events.iter().any(|e| e.id == event.id) {
         return; // dedupe
     }
-    let now = now_secs();
-    profile.updated_at = now;
+    // Fix 4 (part 2): use event.ts for last_seen_at (consistent with
+    // rebuild_index_in, which also derives last_seen_at from event.ts).
+    // updated_at stays wall-clock (it's not compared cross-unit).
+    profile.updated_at = now_millis();
 
     // Update weakPatterns
     if let Some(wp) = profile
@@ -151,14 +161,14 @@ pub fn learner_profile_log_event_in(
         .find(|w| w.pattern == event.pattern)
     {
         wp.occurrences += 1;
-        wp.last_seen_at = now;
+        wp.last_seen_at = event.ts;
         wp.sample_error_ids.insert(0, event.id.clone());
         wp.sample_error_ids.truncate(5);
     } else {
         profile.mastery_index.weak_patterns.push(WeakPattern {
             pattern: event.pattern.clone(),
             occurrences: 1,
-            last_seen_at: now,
+            last_seen_at: event.ts,
             sample_error_ids: vec![event.id.clone()],
             last_remediated_at: None,
         });
@@ -172,7 +182,7 @@ pub fn learner_profile_resolve_events_in(
     profile: &mut LearnerProfile,
     ids: &[String],
 ) {
-    let now = now_secs();
+    let now = now_millis();
     let mut resolved_patterns: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for ev in profile.error_events.iter_mut() {
@@ -187,7 +197,11 @@ pub fn learner_profile_resolve_events_in(
             wp.last_remediated_at = Some(now);
         }
     }
-    profile.updated_at = now;
+    // Fix 5: only bump updated_at when at least one event actually changed.
+    let changed = !resolved_patterns.is_empty();
+    if changed {
+        profile.updated_at = now;
+    }
 }
 
 /// Rebuild masteryIndex from errorEvents. Used after migrations or
@@ -260,7 +274,7 @@ pub fn learner_profile_export() -> AppResult<String> {
     let profile = learner_profile_load_from(&src)?;
     let downloads = dirs::download_dir()
         .ok_or_else(|| "could not determine downloads dir".to_string())?;
-    let ts = now_secs();
+    let ts = now_millis();
     let dst = downloads.join(format!("whatsub_learner_profile_{}.json", ts));
     let json = serde_json::to_string_pretty(&profile).map_err(|e| e.to_string())?;
     std::fs::write(&dst, json).map_err(|e| e.to_string())?;
@@ -280,9 +294,15 @@ pub fn learner_profile_reset() -> AppResult<()> {
 mod tests {
     use super::*;
 
+    // Fix 2: collision-resistant temp path using nanoseconds + process id,
+    // so parallel cargo test runs don't stomp each other's files.
     fn temp_path(name: &str) -> std::path::PathBuf {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let mut p = std::env::temp_dir();
-        p.push(format!("whatsub_test_{}_{}.json", name, now_secs()));
+        p.push(format!("whatsub_test_{}_{}_{}.json", name, std::process::id(), ts));
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -317,7 +337,7 @@ mod tests {
     #[test]
     fn save_then_load_roundtrips() {
         let p = temp_path("roundtrip");
-        let mut profile = LearnerProfile::new_empty(now_secs());
+        let mut profile = LearnerProfile::new_empty(now_millis());
         learner_profile_log_event_in(&mut profile, ev("e1", "past_tense_irregular"));
         learner_profile_save_to(&p, &profile).unwrap();
         let back = learner_profile_load_from(&p).unwrap();
@@ -375,5 +395,18 @@ mod tests {
         assert_eq!(profile.mastery_index.weak_patterns[0].pattern, "past_tense_irregular");
         assert_eq!(profile.mastery_index.weak_patterns[0].occurrences, 2);
         assert_eq!(profile.mastery_index.weak_patterns[0].last_seen_at, 200);
+    }
+
+    // Fix 3: test that a corrupt JSON file loads as empty without panicking.
+    // The corrupt-JSON branch is load-bearing (the whole profile silently
+    // resets), so this exercises the eprintln + fallback path.
+    #[test]
+    fn load_corrupt_returns_empty_and_does_not_panic() {
+        let p = temp_path("corrupt");
+        std::fs::write(&p, b"{ not valid json").unwrap();
+        let loaded = learner_profile_load_from(&p).unwrap();
+        assert_eq!(loaded.version, LEARNER_PROFILE_VERSION);
+        assert!(loaded.error_events.is_empty());
+        let _ = std::fs::remove_file(&p);
     }
 }

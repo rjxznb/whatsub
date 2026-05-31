@@ -14,6 +14,9 @@ export interface LearnerProfile {
   goals: string[];
 }
 
+// NOTE: Rust stores `cefr` and `listeningLevel` as plain Option<String> and
+// does NOT enforce the TS union values at runtime. Write-sites (Tasks 5+)
+// must validate the incoming string before narrowing to these union types.
 export interface Estimate {
   cefr: "A1" | "A2" | "B1" | "B2" | "C1" | "C2" | null;
   vocabSize: number | null;

@@ -246,6 +246,19 @@ body::-webkit-scrollbar-corner,
   animation: vocab-tour-fade-in 420ms ease-out forwards;
 }
 
+/* AI Agent ConversationHeader popovers (conversation list, ☰ menu) — soft
+   fade + scale-up from the trigger. Matches the visual feel of native
+   macOS menus without pulling in the tailwindcss-animate plugin. The
+   `transform-origin: top` is set per-popover via a Tailwind utility
+   class so the right-anchored ☰ menu can override to `top right`. */
+@keyframes agent-popover-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.animate-agent-popover-in {
+  animation: agent-popover-in 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 /* Pulsing ring around the highlighted card — draws the eye to the
    cutout without being so loud the user feels nagged. */
 @keyframes vocab-tour-pulse {

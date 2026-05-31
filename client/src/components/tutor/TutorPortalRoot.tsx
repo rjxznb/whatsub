@@ -19,6 +19,7 @@ import { generateTurn } from "../../tutor/roleplayTurnLLM";
 import { generateReport } from "../../tutor/roleplayReportLLM";
 import { RemediationRuntime } from "../../tutor/remediationRuntime";
 import { saveLessonState, clearLessonState } from "../../tutor/lessonState";
+import { deriveScenarios } from "../../tutor/roleplaySceneLLM";
 import {
   computeLessonSummary,
   shouldOfferRemediation,
@@ -221,9 +222,11 @@ export function TutorPortalRoot() {
   if (mode.kind === "roleplay-picker") {
     return (
       <LessonOverlay open onClose={close}>
-        <RoleplayScenarioPicker
-          scenarios={mode.scenarios}
+        <RoleplayPickerHost
           loading={mode.loading}
+          scenarios={mode.scenarios}
+          sourceVideoId={mode.sourceVideoId}
+          settings={settings}
           onCancel={close}
           onPick={(s) => {
             rpRuntimeRef.current = new RoleplayRuntime({
@@ -333,6 +336,60 @@ export function TutorPortalRoot() {
   }
 
   return null;
+}
+
+/** Subcomponent — drives the two-phase scenario derivation so that ALL
+ *  roleplay-picker entry points share it (lesson-end button, report
+ *  "再来一个" button, and agent tool). The agent-tool path already derives
+ *  inline and sets loading:false before the portal renders — so this host
+ *  mounts with loading:false and the effect returns early (no double-
+ *  derivation). The in-app buttons set loading:true, so the effect fires
+ *  once, derives, then repopulates the mode. */
+function RoleplayPickerHost(props: {
+  loading: boolean;
+  scenarios: import("../../tutor/types").RoleplayScenario[];
+  sourceVideoId: string | null;
+  settings: import("../../types/settings").Settings;
+  onPick: (s: import("../../tutor/types").RoleplayScenario) => void;
+  onCancel: () => void;
+}) {
+  const { loading, scenarios, sourceVideoId, settings, onPick, onCancel } = props;
+
+  useEffect(() => {
+    if (!loading) return;
+    let cancelled = false;
+    (async () => {
+      const profile = await loadLearnerProfile();
+      const derived = await deriveScenarios({
+        settings,
+        analysis: useAnalysis.getState().subtitles,
+        profile,
+        sourceVideoId,
+      });
+      if (cancelled) return;
+      // bail if the user closed/navigated away from the picker mid-derivation
+      if (useTutorRuntime.getState().mode.kind !== "roleplay-picker") return;
+      useTutorRuntime.getState().setMode({
+        kind: "roleplay-picker",
+        scenarios: derived,
+        sourceVideoId,
+        loading: false,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <RoleplayScenarioPicker
+      scenarios={scenarios}
+      loading={loading}
+      onPick={onPick}
+      onCancel={onCancel}
+    />
+  );
 }
 
 /** Subcomponent — runs the cooldown / throttle checks before rendering

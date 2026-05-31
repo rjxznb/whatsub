@@ -6,6 +6,22 @@ import { useSettings } from "../../store/settings";
 import { usePlayerState } from "../../store/playerState";
 import { useAnalysis } from "../../store/analysis";
 
+// Mock roleplaySceneLLM so deriveScenarios resolves with one scenario
+const mockDeriveScenarios = vi.fn().mockResolvedValue([
+  {
+    id: "s1",
+    title: "Test Scenario",
+    description: "A test scenario",
+    userRole: "customer",
+    aiRole: "agent",
+    sourceVideoId: "v1",
+    turns: [],
+  },
+]);
+vi.mock("../../tutor/roleplaySceneLLM", () => ({
+  deriveScenarios: (...args: unknown[]) => mockDeriveScenarios(...args),
+}));
+
 // Mock learnerProfile module
 vi.mock("../../tutor/learnerProfile", () => ({
   useLearnerProfile: {
@@ -145,5 +161,19 @@ describe("TutorPortalRoot", () => {
     });
     render(<TutorPortalRoot />);
     await waitFor(() => expect(screen.getByText(/3 分钟专项/)).toBeTruthy());
+  });
+
+  it("calls deriveScenarios when roleplay-picker mounts with loading:true", async () => {
+    mockDeriveScenarios.mockClear();
+    useTutorRuntime.setState({
+      mode: {
+        kind: "roleplay-picker",
+        scenarios: [],
+        loading: true,
+        sourceVideoId: "v1",
+      },
+    });
+    render(<TutorPortalRoot />);
+    await waitFor(() => expect(mockDeriveScenarios).toHaveBeenCalledTimes(1));
   });
 });

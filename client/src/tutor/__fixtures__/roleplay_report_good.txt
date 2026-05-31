@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"{\"totalUserTurns\":14,\"naturalCount\":5,\"chinglishExamples\":[{\"original\":\"I very like\",\"better\":\"I really like\"}],\"patternHits\":[{\"pattern\":\"past_tense_irregular\",\"count\":3,\"example\":\"I goed\",\"monthCount\":9}],\"registerNotes\":[\"Furthermore in casual speech is too formal\"]}"}}]}
+
+data: [DONE]

@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"Sorry, I cannot generate a report right now."}}]}
+
+data: [DONE]

@@ -76,6 +76,21 @@ export function TutorPortalRoot() {
   const tick = () => forceRender((v) => v + 1);
   const [rpReport, setRpReport] = useState<ForensicReport | null>(null);
 
+  // Reset all imperative runtime refs when the overlay closes (mode → "none").
+  // Without this, a stale lessonRuntimeRef survives and the resume guard
+  // (`if (!lessonRuntimeRef.current)`) in lesson-in-progress reuses it for a
+  // different video — showing the wrong lesson.
+  const prevModeKindRef = useRef(mode.kind);
+  useEffect(() => {
+    if (prevModeKindRef.current !== "none" && mode.kind === "none") {
+      lessonRuntimeRef.current = null;
+      rpRuntimeRef.current = null;
+      remRuntimeRef.current = null;
+      setRpReport(null);
+    }
+    prevModeKindRef.current = mode.kind;
+  }, [mode.kind]);
+
   // ──────────── Lesson — pre-class ────────────
   if (mode.kind === "lesson-preclass") {
     const videoTitle =
@@ -135,6 +150,10 @@ export function TutorPortalRoot() {
             if (anchor) makePlayerAdapter().seek(anchor.cueIdx);
           }}
           onRetry={() => {
+            // Transient retry: jump the UI back to the question step. We
+            // intentionally don't persist this — retry is an in-anchor
+            // transient; on a mid-retry app kill, resuming at the feedback
+            // step is fine (user can re-continue).
             r.state.currentStep = 3;
             tick();
           }}
@@ -238,6 +257,10 @@ export function TutorPortalRoot() {
             turns: r.state.turns,
             observations: r.state.observedErrors,
           });
+          // If the user closed the overlay (mode → "none") while generateReport
+          // was in flight, bail out — don't spuriously reopen the overlay by
+          // calling setMode on the global zustand store.
+          if (useTutorRuntime.getState().mode.kind !== "roleplay-in-progress") return;
           setRpReport(report);
           setMode({
             kind: "roleplay-report",

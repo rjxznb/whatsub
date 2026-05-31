@@ -149,9 +149,10 @@ export function AgentRoot() {
     }
   }, [mode]);
 
-  // Collapse agent to icon while any tutor overlay is active so it doesn't
-  // compete with the overlay UI. When the tutor closes, the navigation-nudge
-  // effect above will restore the page default.
+  // While a tutor overlay is up, force the agent to icon mode so it doesn't
+  // cover the lesson. We deliberately do NOT auto-restore on close — the tutor
+  // is only launchable from /player/* (page default = icon), and a later route
+  // change re-runs the nav-nudge effect above which self-corrects the mode.
   useEffect(() => {
     if (tutorActive) {
       setMode("icon");

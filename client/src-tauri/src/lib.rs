@@ -109,6 +109,7 @@ pub fn run() {
             commands::lesson_state::lesson_state_load,
             commands::lesson_state::lesson_state_save,
             commands::lesson_state::lesson_state_clear,
+            commands::voice::voice_transcribe,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,0 +1,7 @@
+data: {"choices":[{"delta":{"content":"Sure! Here's the plan:\n```json\n"}}]}
+
+data: {"choices":[{"delta":{"content":"{\"videoId\":\"abc\",\"estimateTokens\":3500,\"overview\":\"3 个教学点\",\"anchors\":[{\"cueIdx\":3,\"topic\":\"X\",\"whyThisOne\":\"Y\",\"targetPatterns\":[\"madeup_pattern\"]}]}"}}]}
+
+data: {"choices":[{"delta":{"content":"\n```\nHope this helps!"}}]}
+
+data: [DONE]

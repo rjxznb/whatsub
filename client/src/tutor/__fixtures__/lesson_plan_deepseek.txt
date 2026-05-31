@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"{\"videoId\":\"abc123\",\"estimateTokens\":3500,\"overview\":\"入境对话最常见表达和一个时态点\",\"anchors\":[{\"cueIdx\":3,\"topic\":\"I'm here for X\",\"whyThisOne\":\"上次也错过 be here for\",\"targetPatterns\":[\"preposition_wrong\"]},{\"cueIdx\":12,\"topic\":\"present perfect vs past\",\"whyThisOne\":\"weak pattern 2\",\"targetPatterns\":[\"present_perfect_vs_past\"]},{\"cueIdx\":24,\"topic\":\"customs declaration\",\"whyThisOne\":\"3 unfamiliar words\",\"targetPatterns\":[\"word_choice_unnatural\"]}]}"}}]}
+
+data: [DONE]

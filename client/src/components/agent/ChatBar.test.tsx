@@ -184,8 +184,8 @@ describe("ChatBar — drag exclusion (interactive elements)", () => {
   });
 });
 
-describe("ChatBar — click outside collapse (step-down)", () => {
-  it("click outside while panel + not streaming → step down to bar", () => {
+describe("ChatBar — click outside collapse", () => {
+  it("click outside while panel + not streaming → collapse to icon", () => {
     const onModeChange = vi.fn();
     render(
       <>
@@ -199,7 +199,7 @@ describe("ChatBar — click outside collapse (step-down)", () => {
       </>,
     );
     fireEvent.mouseDown(screen.getByTestId("outside-target"));
-    expect(onModeChange).toHaveBeenCalledWith("bar");
+    expect(onModeChange).toHaveBeenCalledWith("icon");
   });
 
   it("click outside while panel + STREAMING is suppressed (no collapse)", () => {

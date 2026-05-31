@@ -57,16 +57,20 @@ function isLlmConfigured(settings: Settings | null | undefined): boolean {
   return false;
 }
 
-/** Page-default collapsed mode. /player/* keeps the video real-estate clean
- *  by defaulting to the small icon; everywhere else uses the regular bar. */
-export function pageDefaultMode(pathname: string): "icon" | "bar" {
-  return pathname.startsWith("/player/") ? "icon" : "bar";
+/** Page-default resting mode. With the unified voice-first AI, the resting
+ *  state is always the collapsed icon (click → voice); text chat is reached
+ *  via the panel. The old always-visible `bar` input strip is no longer a
+ *  default on any page. */
+export function pageDefaultMode(_pathname: string): "icon" | "bar" {
+  return "icon";
 }
 
 function loadInitialMode(pathname: string): ChatBarMode {
+  // On launch, start collapsed (icon) — only restore the panel if the user
+  // was mid-conversation. A persisted "bar" migrates to "icon" (bar is no
+  // longer a resting default).
   try {
-    const saved = localStorage.getItem(BAR_MODE_KEY);
-    if (saved === "icon" || saved === "bar" || saved === "panel") return saved;
+    if (localStorage.getItem(BAR_MODE_KEY) === "panel") return "panel";
   } catch {
     /* ignore */
   }
@@ -249,7 +253,7 @@ export function AgentRoot() {
   // ✕ in the header steps down from panel to bar (matches the click-outside
   // step-down). User can then close the bar via another click-outside or
   // keep typing.
-  const header = <ConversationHeader onClose={() => setMode("bar")} />;
+  const header = <ConversationHeader onClose={() => setMode("icon")} />;
 
   return (
     <ChatBar

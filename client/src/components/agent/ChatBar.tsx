@@ -236,7 +236,9 @@ export function ChatBar({
       const node = containerRef.current;
       if (!node) return;
       if (e.target instanceof Node && node.contains(e.target)) return;
-      onModeChange(mode === "panel" ? "bar" : "icon");
+      // Click-outside collapses straight to the icon (the resting state);
+      // "bar" is no longer an intermediate stop.
+      onModeChange("icon");
     };
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);

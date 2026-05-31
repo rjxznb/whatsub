@@ -65,21 +65,23 @@ describe("pageDefaultMode", () => {
     expect(pageDefaultMode("/player/xyz?t=5")).toBe("icon");
   });
 
-  it("everything else → bar", () => {
-    expect(pageDefaultMode("/")).toBe("bar");
-    expect(pageDefaultMode("/library")).toBe("bar");
-    expect(pageDefaultMode("/settings")).toBe("bar");
-    expect(pageDefaultMode("/corpus")).toBe("bar");
+  it("everything → icon (resting state is the collapsed voice-first icon)", () => {
+    expect(pageDefaultMode("/")).toBe("icon");
+    expect(pageDefaultMode("/library")).toBe("icon");
+    expect(pageDefaultMode("/settings")).toBe("icon");
+    expect(pageDefaultMode("/corpus")).toBe("icon");
   });
 });
 
 describe("AgentRoot — initial mount", () => {
-  it("mounts in bar mode on /library by default", () => {
+  it("mounts in icon mode on /library by default", () => {
     renderWithRouter("/library");
-    // ChatBar in bar mode exposes the dialog role with aria-expanded=false.
-    const dialog = screen.getByRole("dialog", { name: "AI 助手" });
-    expect(dialog).toBeTruthy();
-    expect(dialog.getAttribute("aria-expanded")).toBe("false");
+    // Default resting state is the collapsed icon — the "打开 AI 助手" button,
+    // not the expanded dialog.
+    expect(
+      screen.getByRole("button", { name: "打开 AI 助手" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
   });
 
   it("mounts in icon mode on /player/X by default", () => {
@@ -98,18 +100,18 @@ describe("AgentRoot — initial mount", () => {
     expect(dialog.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("does not render the header content while in bar mode", () => {
+  it("does not render the header content while collapsed (icon)", () => {
     renderWithRouter("/library");
-    // ConversationHeader's 选择会话 button only appears when expanded.
+    // ConversationHeader's 选择会话 button only appears in the expanded panel.
     expect(screen.queryByRole("button", { name: "选择会话" })).toBeNull();
   });
 
-  it("clicking the bar expands it to panel and shows EmptyState (noLlm copy)", () => {
+  it("panel mode shows EmptyState (noLlm copy) when there are no messages", () => {
+    // Panel is now reached via persistence / the voice↔text toggle rather
+    // than clicking a bar; seed it directly.
+    localStorage.setItem("agentBarMode", "panel");
     renderWithRouter("/library");
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
-    // Click semantics now use mousedown + mouseup (no drag).
-    fireEvent.mouseDown(dialog, { clientX: 200, clientY: 600 });
-    fireEvent.mouseUp(document, { clientX: 200, clientY: 600 });
     expect(dialog.getAttribute("aria-expanded")).toBe("true");
     expect(dialog.textContent).toContain("需要先配置 LLM");
   });
@@ -176,10 +178,9 @@ describe("AgentRoot — initial mount", () => {
       },
       hydrated: true,
     });
+    localStorage.setItem("agentBarMode", "panel");
     renderWithRouter("/library");
     const dialog = screen.getByRole("dialog", { name: "AI 助手" });
-    fireEvent.mouseDown(dialog, { clientX: 200, clientY: 600 });
-    fireEvent.mouseUp(document, { clientX: 200, clientY: 600 });
     // EmptyState noLlm copy must NOT be present once messages exist.
     expect(dialog.textContent).not.toContain("AI 助手需要先配置 LLM");
     // The user message content should appear.
@@ -218,18 +219,17 @@ function renderWithNav(initialPath: string, navTo: string) {
 }
 
 describe("AgentRoot — navigation nudges", () => {
-  it("navigating from /library to /player/X with mode=bar switches to icon", () => {
+  it("stays collapsed (icon) when navigating between pages — icon is the default everywhere", () => {
     renderWithNav("/library", "/player/abc");
-    // Confirm we started in bar mode.
+    // Starts collapsed (icon) on /library.
     expect(
-      screen.getByRole("dialog", { name: "AI 助手" }).getAttribute("aria-expanded"),
-    ).toBe("false");
+      screen.getByRole("button", { name: "打开 AI 助手" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "AI 助手" })).toBeNull();
     act(() => {
       fireEvent.click(screen.getByTestId("nav-trigger"));
     });
-    // After navigation: page-default for /player/X is "icon" and the mode
-    // change is an instant JSX swap (the reverse collapse animation was
-    // removed because a stale timer could leave the bar stuck mounted).
+    // Still collapsed after navigating to /player/X.
     expect(
       screen.getByRole("button", { name: "打开 AI 助手" }),
     ).toBeTruthy();

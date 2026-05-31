@@ -85,6 +85,13 @@ export interface SpeakOptions {
 
 /** Speak `text`, cancelling any in-flight utterance first. Resolves
  *  immediately after queuing — use the onStart/onEnd callbacks for state. */
+// Strong references to in-flight utterances. Chromium/WebView2 garbage-collect
+// SpeechSynthesisUtterance objects that aren't referenced anywhere, which
+// silently kills playback before any sound comes out — the single most common
+// cause of "speechSynthesis.speak() does nothing". Holding them here until
+// they end/error keeps them alive.
+const _liveUtterances = new Set<SpeechSynthesisUtterance>();
+
 export async function ttsSpeak(
   text: string,
   opts: SpeakOptions = {},
@@ -95,8 +102,15 @@ export async function ttsSpeak(
     return;
   }
   const synth = window.speechSynthesis;
-  synth.cancel(); // never overlap two utterances
+  try {
+    synth.cancel(); // never overlap two utterances
+  } catch {
+    /* ignore */
+  }
   const voices = cachedVoices.length ? cachedVoices : await loadVoices();
+  // Calling speak() in the same tick as cancel() can no-op on some Chromium
+  // builds — yield a macrotask so the queue settles first.
+  await new Promise((r) => setTimeout(r, 0));
   const lang = opts.lang ?? "zh-CN";
   const u = new SpeechSynthesisUtterance(clean);
   u.lang = lang;
@@ -104,12 +118,24 @@ export async function ttsSpeak(
   if (opts.pitch != null) u.pitch = opts.pitch;
   const v = pickVoice(voices, lang);
   if (v) u.voice = v;
-  if (opts.onStart) u.onstart = () => opts.onStart?.();
-  u.onend = () => opts.onEnd?.();
+  u.onstart = () => opts.onStart?.();
+  u.onend = () => {
+    _liveUtterances.delete(u);
+    opts.onEnd?.();
+  };
   u.onerror = () => {
+    _liveUtterances.delete(u);
     opts.onError?.();
     opts.onEnd?.();
   };
+  _liveUtterances.add(u);
+  // WebView2 sometimes leaves the synthesis queue in a paused state; resume
+  // defensively right before speaking.
+  try {
+    synth.resume();
+  } catch {
+    /* ignore */
+  }
   synth.speak(u);
 }
 

@@ -1,11 +1,41 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   stripForSpeech,
+  splitByLang,
   ttsSupported,
   isTtsEnabled,
   setTtsEnabled,
   ttsSpeak,
 } from "./tts";
+
+describe("splitByLang", () => {
+  it("keeps pure Chinese as one zh run", () => {
+    expect(splitByLang("这是一句中文")).toEqual([
+      { text: "这是一句中文", lang: "zh" },
+    ]);
+  });
+
+  it("keeps pure English as one en run", () => {
+    expect(splitByLang("hello world")).toEqual([
+      { text: "hello world", lang: "en" },
+    ]);
+  });
+
+  it("splits mixed text into zh/en runs by language", () => {
+    const segs = splitByLang("这是 I'm here for X 的用法");
+    expect(segs.map((s) => s.lang)).toEqual(["zh", "en", "zh"]);
+    // the apostrophe in I'm stays inside the English run
+    expect(segs[1].text).toContain("I'm here for X");
+    expect(segs[0].text).toContain("这是");
+    expect(segs[2].text).toContain("的用法");
+  });
+
+  it("attaches digits/punctuation to the surrounding run (no tiny fragments)", () => {
+    const segs = splitByLang("第 3 个");
+    expect(segs).toHaveLength(1);
+    expect(segs[0].lang).toBe("zh");
+  });
+});
 
 describe("stripForSpeech", () => {
   it("removes bold/italic/code markers but keeps the words", () => {

@@ -27,6 +27,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import whatsubIcon from "../../assets/whatsub-icon.png";
+import { useVoiceMode } from "../../store/voiceMode";
 
 export type ChatBarMode = "icon" | "bar" | "panel";
 
@@ -321,8 +322,8 @@ export function ChatBar({
           });
         }
       } else {
-        // Click (no drag): advance the mode by one step.
-        if (drag.mode === "icon") onModeChange("bar");
+        // Click (no drag): icon opens voice; bar expands to panel.
+        if (drag.mode === "icon") useVoiceMode.getState().openVoice();
         else if (drag.mode === "bar") onModeChange("panel");
         // panel: no-op (click-outside handles the collapse direction)
       }

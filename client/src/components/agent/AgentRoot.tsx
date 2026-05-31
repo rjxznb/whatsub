@@ -30,10 +30,9 @@ import { useAgent } from "../../store/agent";
 import { useAgentConfirms, confirmViaUI } from "../../store/agentConfirms";
 import { useSettings } from "../../store/settings";
 import { setNavigator } from "../../agent/nav";
-import { runTurn } from "../../agent/runtime";
-import { getProvider } from "../../llm/providers";
-import { getVendorKey, getModelName } from "../../llm/llmIdentity";
-import type { Message, UserMessage } from "../../types/agent";
+import { registerOpenPanel } from "../../agent/chatBarBridge";
+import { sendAgentMessage } from "../../agent/send";
+import type { Message } from "../../types/agent";
 import type { Settings } from "../../types/settings";
 import { ChatBar, type ChatBarMode } from "./ChatBar";
 import { ConversationHeader } from "./ConversationHeader";
@@ -101,6 +100,13 @@ export function AgentRoot() {
     return () => setNavigator(null);
   }, [navigate]);
 
+  // Register the panel-open bridge so VoiceMode's "打字" button can open
+  // the chat panel without prop-drilling through the portal boundary.
+  useEffect(() => {
+    registerOpenPanel(() => setMode("panel"));
+    return () => registerOpenPanel(null);
+  }, []);
+
   // Clean up legacy localStorage key (was a boolean; now replaced by mode).
   // Safe to run unconditionally — removeItem is a no-op when absent.
   useEffect(() => {
@@ -165,62 +171,17 @@ export function AgentRoot() {
     async (text: string) => {
       if (noLlm) return;
 
-      // Ensure there's an active conversation (lazy-create on first send).
-      let activeId = useAgent.getState().history.activeConversationId;
-      if (
-        !activeId ||
-        !useAgent
-          .getState()
-          .history.conversations.find((c) => c.id === activeId)
-      ) {
-        const pathname =
-          typeof window !== "undefined" ? window.location.pathname : "/";
-        activeId = useAgent.getState().createConversation({ pathname });
-      }
-
-      const userMsg: UserMessage = {
-        role: "user",
-        id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        ts: Date.now(),
-        content: text,
-      };
-
       // Auto-expand to panel so the streaming assistant reply is visible.
-      // (Sending from "bar" without this would queue the assistant reply
-      // behind a closed UI surface; user would just see their bar reset.)
       setMode("panel");
 
-      // Build provider + abort controller LATE — `settings` is read at send
-      // time so a user changing the model between turns picks up immediately.
-      // getProvider() returns the narrow Provider (stream-only) interface,
-      // but every concrete factory also implements AgentProvider (streamWithTools);
-      // we cast through unknown rather than widening the index.ts return type to
-      // avoid the change rippling into every other Provider consumer.
-      const provider = getProvider(settings) as unknown as Parameters<
-        typeof runTurn
-      >[0]["provider"];
       const ac = new AbortController();
       abortRef.current = ac;
 
-      const pathname =
-        typeof window !== "undefined" ? window.location.pathname : "/";
-
       try {
-        await runTurn({
-          history:
-            useAgent
-              .getState()
-              .history.conversations.find((c) => c.id === activeId)
-              ?.messages ?? [],
-          userMessage: userMsg,
-          provider,
-          vendor: getVendorKey(settings),
-          model: getModelName(settings),
-          page: { pathname },
+        await sendAgentMessage(text, {
           signal: ac.signal,
           confirm: confirmViaUI,
-          onMessage: (m: Message) => {
-            useAgent.getState().addMessage(activeId!, m);
+          onAssistantMessage: (m: Message) => {
             if (m.role === "assistant") {
               setStreamingMsgId(null);
               // Only set unread if user actually has the icon up (collapsed +
@@ -228,21 +189,16 @@ export function AgentRoot() {
               if (mode === "icon") setUnreadFlag(true);
             }
           },
-          onAssistantTextDelta: (msgId: string, _delta: string) => {
+          onTextDelta: (msgId: string, _delta: string) => {
             setStreamingMsgId(msgId);
           },
         });
-      } catch (e) {
-        // runTurn itself never throws on signal abort (it returns); a thrown
-        // error here is genuinely unexpected — log and let the turn end.
-        // eslint-disable-next-line no-console
-        console.warn("[agent] runTurn error:", e);
       } finally {
         abortRef.current = null;
         setStreamingMsgId(null);
       }
     },
-    [noLlm, settings, mode],
+    [noLlm, mode],
   );
 
   const handleStop = useCallback(() => {

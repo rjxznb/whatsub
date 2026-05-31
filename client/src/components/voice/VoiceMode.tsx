@@ -14,11 +14,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { X, Keyboard } from "lucide-react";
 import { useVoiceMode } from "../../store/voiceMode";
 import { useSettings } from "../../store/settings";
 import { VoiceConversation } from "../../voice/voiceConversation";
 import type { VoiceState } from "../../voice/types";
+import { openAgentPanel } from "../../agent/chatBarBridge";
 
 // ── Orb ───────────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,14 @@ function VoiceModeInner() {
     closeVoice();
   }
 
+  function handleSwitchToText() {
+    convRef.current?.stop();
+    convRef.current = null;
+    startedRef.current = false;
+    closeVoice();
+    openAgentPanel();
+  }
+
   function handleRetry() {
     convRef.current?.stop();
     convRef.current = null;
@@ -178,6 +187,17 @@ function VoiceModeInner() {
           "radial-gradient(ellipse 60% 55% at 50% 55%, rgba(59,130,246,0.07) 0%, transparent 70%), #09090b",
       }}
     >
+      {/* 打字 button — switch to text panel */}
+      <button
+        type="button"
+        onClick={handleSwitchToText}
+        aria-label="切换到文字模式"
+        title="打字"
+        className="absolute top-5 right-16 flex h-9 w-9 items-center justify-center rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+      >
+        <Keyboard className="h-5 w-5" />
+      </button>
+
       {/* Close button */}
       <button
         type="button"

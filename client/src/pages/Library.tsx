@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ChevronsLeft, ChevronsRight, Cloud, AudioLines } from "lucide-react";
-import { useVoiceMode } from "../store/voiceMode";
+import { ChevronsLeft, ChevronsRight, Cloud } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
@@ -87,7 +86,6 @@ type MenuState =
 
 export function Library() {
   const navigate = useNavigate();
-  const openVoice = useVoiceMode((s) => s.openVoice);
   const {
     library,
     reload,
@@ -509,15 +507,6 @@ export function Library() {
           placeholder="搜索..."
           className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm w-64"
         />
-        <button
-          type="button"
-          onClick={openVoice}
-          title="口语陪练（语音对话模式）"
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:bg-blue-500/20 hover:text-blue-300 text-sm rounded font-medium transition-colors"
-        >
-          <AudioLines className="h-4 w-4" />
-          口语陪练
-        </button>
         <button
           data-tour="import-button"
           onClick={() => {

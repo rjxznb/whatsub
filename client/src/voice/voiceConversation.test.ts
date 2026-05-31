@@ -1,12 +1,16 @@
 /**
  * Tests for VoiceConversation state machine.
  *
- * All real browser APIs (AudioContext, getUserMedia), whisper, LLM, and TTS
+ * All real browser APIs (AudioContext, getUserMedia), whisper, agent, and TTS
  * are replaced by fakes injected through `deps`.
+ *
+ * The `streamLlm` dep was replaced by `respond` (a simple async fn that
+ * accepts userText + signal and returns the reply string). Tests inject a fake
+ * `respond` that resolves with a predetermined string.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { VoiceConversation } from "./voiceConversation";
+import { VoiceConversation, detectLang } from "./voiceConversation";
 import type { VoiceConversationHandlers, VoiceConversationDeps } from "./voiceConversation";
 import type { VoiceState } from "./types";
 import type { Settings } from "../types/settings";
@@ -17,13 +21,6 @@ import { DEFAULT_SETTINGS } from "../types/settings";
 /** Drain all pending microtasks. */
 function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/** A fake AsyncIterable that yields the given string chunks. */
-async function* fakeStream(chunks: string[]): AsyncIterable<string> {
-  for (const c of chunks) {
-    yield c;
-  }
 }
 
 type CaptureHandlers = Parameters<VoiceConversationDeps["startCapture"]>[0];
@@ -85,9 +82,25 @@ beforeEach(() => {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+describe("detectLang", () => {
+  it("returns en-US when > 60% of chars are ASCII letters", () => {
+    expect(detectLang("Hello world")).toBe("en-US");
+    expect(detectLang("Nice to meet you!")).toBe("en-US");
+  });
+
+  it("returns zh-CN for Chinese text", () => {
+    expect(detectLang("你好，有什么需要帮助的吗？")).toBe("zh-CN");
+    expect(detectLang("好的，我明白了")).toBe("zh-CN");
+  });
+
+  it("returns zh-CN for empty string", () => {
+    expect(detectLang("")).toBe("zh-CN");
+  });
+});
+
 describe("VoiceConversation", () => {
   describe("(a) happy path — full turn", () => {
-    it("transcribe → onUserText → streamLlm → onAssistantText(done) → speak(en-US) → state ends speaking then listening", async () => {
+    it("transcribe → onUserText → respond → onAssistantText(done) → speak(detected lang) → state ends listening", async () => {
       const { startCapture, fire } = makeFakeCapture();
       const handlers = makeHandlers();
 
@@ -96,14 +109,12 @@ describe("VoiceConversation", () => {
         opts.onEnd?.();
       });
       const cancelSpeak = vi.fn();
-      const streamLlm = vi.fn<VoiceConversationDeps["streamLlm"]>().mockImplementation(
-        () => fakeStream(["Nice ", "to meet you!"]),
-      );
+      const respond = vi.fn<VoiceConversationDeps["respond"]>().mockResolvedValue("你好");
 
       const conv = new VoiceConversation(SETTINGS, handlers, {
         startCapture,
         transcribe,
-        streamLlm,
+        respond,
         speak,
         cancelSpeak,
       });
@@ -111,17 +122,11 @@ describe("VoiceConversation", () => {
       await conv.start();
       expect(handlers.states).toContain("listening");
 
-      // Fire a fake utterance and then wait for the full async turn to finish.
-      // We fire it and then flush microtasks repeatedly until the state sequence
-      // reaches the expected end state.
       fire.utterance("wav-data");
 
-      // Allow the async turn to run to completion.
-      // Use vi.waitFor to poll until the full state sequence appears.
       await vi.waitFor(
         () => {
           const last = handlers.states[handlers.states.length - 1];
-          // We expect at minimum: listening(1) + transcribing(2) + thinking(3) + speaking(4) + listening(5)
           if (handlers.states.length < 5) throw new Error("states not ready");
           if (last !== "listening") throw new Error("not yet back to listening");
         },
@@ -130,11 +135,15 @@ describe("VoiceConversation", () => {
 
       expect(transcribe).toHaveBeenCalledWith("wav-data");
       expect(handlers.userTexts).toEqual(["Hello world"]);
-      expect(streamLlm).toHaveBeenCalledOnce();
-      expect(handlers.assistantFinals).toEqual(["Nice to meet you!"]);
+      expect(respond).toHaveBeenCalledOnce();
+      // respond is called with trimmed user text + a signal
+      expect(respond.mock.calls[0][0]).toBe("Hello world");
+      expect(respond.mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+      expect(handlers.assistantFinals).toEqual(["你好"]);
+      // speak should be called with a lang from detectLang("你好") = "zh-CN"
       expect(speak).toHaveBeenCalledWith(
-        "Nice to meet you!",
-        expect.objectContaining({ lang: "en-US" }),
+        "你好",
+        expect.objectContaining({ lang: "zh-CN" }),
       );
       // State sequence: listening → transcribing → thinking → speaking → listening
       expect(handlers.states).toEqual(
@@ -145,22 +154,60 @@ describe("VoiceConversation", () => {
 
       conv.stop();
     });
+
+    it("uses en-US lang when agent replies in English", async () => {
+      const { startCapture, fire } = makeFakeCapture();
+      const handlers = makeHandlers();
+
+      const transcribe = vi.fn<VoiceConversationDeps["transcribe"]>().mockResolvedValue("Say something");
+      const speak = vi.fn<VoiceConversationDeps["speak"]>().mockImplementation(async (_text, opts) => {
+        opts.onEnd?.();
+      });
+      const cancelSpeak = vi.fn();
+      const respond = vi.fn<VoiceConversationDeps["respond"]>().mockResolvedValue("Nice to meet you!");
+
+      const conv = new VoiceConversation(SETTINGS, handlers, {
+        startCapture,
+        transcribe,
+        respond,
+        speak,
+        cancelSpeak,
+      });
+
+      await conv.start();
+      fire.utterance("wav-data");
+
+      await vi.waitFor(
+        () => {
+          const last = handlers.states[handlers.states.length - 1];
+          if (last !== "listening") throw new Error("not yet back to listening");
+        },
+        { timeout: 5000, interval: 10 },
+      );
+
+      expect(speak).toHaveBeenCalledWith(
+        "Nice to meet you!",
+        expect.objectContaining({ lang: "en-US" }),
+      );
+
+      conv.stop();
+    });
   });
 
   describe("(b) empty transcript", () => {
-    it("returns to listening without calling LLM", async () => {
+    it("returns to listening without calling agent", async () => {
       const { startCapture, fire } = makeFakeCapture();
       const handlers = makeHandlers();
 
       const transcribe = vi.fn<VoiceConversationDeps["transcribe"]>().mockResolvedValue("   ");
-      const streamLlm = vi.fn<VoiceConversationDeps["streamLlm"]>();
+      const respond = vi.fn<VoiceConversationDeps["respond"]>();
       const speak = vi.fn<VoiceConversationDeps["speak"]>();
       const cancelSpeak = vi.fn();
 
       const conv = new VoiceConversation(SETTINGS, handlers, {
         startCapture,
         transcribe,
-        streamLlm,
+        respond,
         speak,
         cancelSpeak,
       });
@@ -168,7 +215,6 @@ describe("VoiceConversation", () => {
       await conv.start();
       fire.utterance("silent-wav");
 
-      // Wait for state to return to listening: listening(1) → transcribing(2) → listening(3)
       await vi.waitFor(
         () => {
           if (handlers.states.length < 3) throw new Error("states not ready");
@@ -178,7 +224,7 @@ describe("VoiceConversation", () => {
         { timeout: 3000, interval: 10 },
       );
 
-      expect(streamLlm).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
       expect(speak).not.toHaveBeenCalled();
 
       conv.stop();
@@ -196,24 +242,20 @@ describe("VoiceConversation", () => {
       );
       const cancelSpeak = vi.fn();
       const transcribe = vi.fn<VoiceConversationDeps["transcribe"]>().mockResolvedValue("barge in test");
-      const streamLlm = vi.fn<VoiceConversationDeps["streamLlm"]>().mockImplementation(
-        () => fakeStream(["Sure!"]),
-      );
+      const respond = vi.fn<VoiceConversationDeps["respond"]>().mockResolvedValue("Sure!");
 
       const conv = new VoiceConversation(SETTINGS, handlers, {
         startCapture,
         transcribe,
-        streamLlm,
+        respond,
         speak,
         cancelSpeak,
       });
 
       await conv.start();
 
-      // Trigger a full turn so we reach "speaking".
       fire.utterance("wav1");
 
-      // Wait until state reaches "speaking" before barge-in.
       await vi.waitFor(
         () => {
           if (!handlers.states.includes("speaking")) throw new Error("not speaking yet");
@@ -221,17 +263,12 @@ describe("VoiceConversation", () => {
         { timeout: 3000, interval: 10 },
       );
 
-      // Allow any in-flight microtasks to settle so the state machine has
-      // fully committed to the speaking await before we fire the interrupt.
       await flushMicrotasks();
 
-      // Now fire speech-start (barge-in).
       fire.speechStart();
 
-      // Give microtasks a chance to run after the synchronous handler.
       await flushMicrotasks();
 
-      // Should have cancelled TTS and gone back to listening.
       expect(cancelSpeak).toHaveBeenCalled();
 
       const last = handlers.states[handlers.states.length - 1];
@@ -241,42 +278,34 @@ describe("VoiceConversation", () => {
     });
   });
 
-  describe("(d) stop() aborts in-flight LLM + calls capture.stop", () => {
+  describe("(d) stop() aborts in-flight agent + calls capture.stop", () => {
     it("capture.stop is called and no further state changes after stop", async () => {
       const { startCapture, stopSpy } = makeFakeCapture();
       const handlers = makeHandlers();
 
-      // LLM stream that never finishes.
-      async function* infiniteStream(): AsyncIterable<string> {
-        while (true) {
-          await new Promise((r) => setTimeout(r, 50));
-          yield "chunk";
-        }
-      }
-
+      // respond that never finishes.
+      const respond = vi.fn<VoiceConversationDeps["respond"]>().mockReturnValue(
+        new Promise(() => { /* never resolves */ }),
+      );
       const transcribe = vi.fn<VoiceConversationDeps["transcribe"]>().mockResolvedValue("test");
-      const streamLlm = vi.fn<VoiceConversationDeps["streamLlm"]>().mockReturnValue(infiniteStream());
       const speak = vi.fn<VoiceConversationDeps["speak"]>();
       const cancelSpeak = vi.fn();
 
       const conv = new VoiceConversation(SETTINGS, handlers, {
         startCapture,
         transcribe,
-        streamLlm,
+        respond,
         speak,
         cancelSpeak,
       });
 
       await conv.start();
 
-      // Stop immediately without firing any utterance.
       conv.stop();
 
       expect(stopSpy).toHaveBeenCalled();
-      // cancelSpeak must have been called.
       expect(cancelSpeak).toHaveBeenCalled();
 
-      // State should be idle after stop.
       const last = handlers.states[handlers.states.length - 1];
       expect(last).toBe("idle");
     });

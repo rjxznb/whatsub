@@ -1,18 +1,25 @@
 /**
- * VoiceConversation — state machine that orchestrates capture → STT → LLM → TTS
+ * VoiceConversation — state machine that orchestrates capture → STT → Agent → TTS
  * in a loop, with barge-in support.
  *
- * All dependencies are injectable so the class is unit-testable without real
- * browser audio, whisper, or network calls.
+ * The LLM step now goes through `sendAgentMessage` (the shared 22-tool agent)
+ * instead of a standalone one-shot `streamLlm`. All other dependencies remain
+ * injectable so the class is unit-testable without real browser audio, whisper,
+ * or network calls.
+ *
+ * HIGH-risk tool confirmations are auto-declined in voice mode (no UI for
+ * inline confirm cards). LOW / MID tools proceed normally.
  */
 
-import type { VoiceState, VoiceTurn } from "./types";
+import type { VoiceState } from "./types";
 import { startVoiceCapture } from "./voiceCapture";
 import { transcribeVoice } from "./voiceStt";
-import { getProvider } from "../llm/providers";
 import { ttsSpeak, ttsCancel } from "../tutor/tts";
 import type { Settings } from "../types/settings";
 import type { VoiceCaptureHandlers } from "./voiceCapture";
+import type { ToolDef } from "../agent/types";
+import type { ConfirmDecision } from "../agent/runtime";
+import { sendAgentMessage } from "../agent/send";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,11 +33,8 @@ export interface VoiceConversationDeps {
     vadConfig?: Record<string, unknown>,
   ) => Promise<VoiceCapture>;
   transcribe: (wav: string) => Promise<string>;
-  streamLlm: (
-    systemPrompt: string,
-    userPrompt: string,
-    signal: AbortSignal,
-  ) => AsyncIterable<string>;
+  /** Send user text through the agent and resolve with the reply text. */
+  respond: (userText: string, signal: AbortSignal) => Promise<string>;
   speak: (
     text: string,
     opts: { lang: string; onStart?: () => void; onEnd?: () => void },
@@ -46,35 +50,45 @@ export interface VoiceConversationHandlers {
   onError: (msg: string) => void;
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
+// ── TTS language auto-detect ──────────────────────────────────────────────────
 
-const SYSTEM_PROMPT =
-  "You are a warm, encouraging English conversation partner helping a Chinese " +
-  "learner practice speaking. Reply in natural spoken English, 1-3 short sentences. " +
-  "Keep the conversation going by asking a simple follow-up question. If the learner " +
-  "seems stuck or asks in Chinese, you may briefly use Chinese to help, then steer " +
-  "back to English. Gently model better phrasing when they make a clear mistake, " +
-  "but don't lecture.";
+/**
+ * Pick a TTS language based on the character composition of `text`.
+ * If > 60% of non-space characters are ASCII letters, we treat the reply as
+ * English; otherwise Chinese. The agent typically replies in Chinese unless
+ * the conversation is explicitly in English.
+ */
+export function detectLang(text: string): "en-US" | "zh-CN" {
+  const stripped = text.replace(/\s/g, "");
+  if (!stripped.length) return "zh-CN";
+  const asciiLetters = stripped.replace(/[^A-Za-z]/g, "").length;
+  return asciiLetters / stripped.length > 0.6 ? "en-US" : "zh-CN";
+}
 
-// ── Helper: build userPrompt from history ─────────────────────────────────────
+// ── Voice confirm — auto-decline HIGH-risk tools ──────────────────────────────
 
-function buildUserPrompt(history: VoiceTurn[]): string {
-  // Fold entire history into the user prompt since provider.stream() only
-  // has systemPrompt + userPrompt (no messages array).
-  return history
-    .map((t) => `${t.role === "user" ? "User" : "Assistant"}: ${t.text}`)
-    .join("\n");
+/**
+ * Confirm callback for voice mode. HIGH-risk tools (delete_video, etc.) are
+ * automatically declined because there are no visible confirm cards in the
+ * full-screen orb. LOW tools never call confirm; MID tools are allowed through
+ * with "yes" (they are reversible and non-destructive).
+ */
+export async function voiceConfirm(
+  _toolDef: ToolDef,
+  _args: unknown,
+  tier: "MID" | "HIGH",
+): Promise<ConfirmDecision> {
+  if (tier === "HIGH") return "no_user_clicked";
+  return "yes";
 }
 
 // ── VoiceConversation class ───────────────────────────────────────────────────
 
 export class VoiceConversation {
-  private readonly settings: Settings;
   private readonly handlers: VoiceConversationHandlers;
   private readonly deps: VoiceConversationDeps;
 
   private state: VoiceState = "idle";
-  private history: VoiceTurn[] = [];
   private capture: VoiceCapture | null = null;
   private abortController: AbortController | null = null;
   private stopped = false;
@@ -84,17 +98,17 @@ export class VoiceConversation {
     handlers: VoiceConversationHandlers,
     deps?: Partial<VoiceConversationDeps>,
   ) {
-    this.settings = settings;
+    // settings is accepted for API compatibility but not needed internally
+    // (sendAgentMessage reads it from the store). Kept in the constructor so
+    // callers don't need to change their instantiation code.
+    void settings;
     this.handlers = handlers;
 
-    // Build default deps from real modules; callers can override any subset
-    // for testing.
-    const self = this;
     this.deps = {
       startCapture: startVoiceCapture as unknown as VoiceConversationDeps["startCapture"],
       transcribe: transcribeVoice,
-      streamLlm(systemPrompt, userPrompt, signal) {
-        return getProvider(self.settings).stream({ systemPrompt, userPrompt, signal });
+      respond(userText, signal) {
+        return sendAgentMessage(userText, { signal, confirm: voiceConfirm });
       },
       speak(text, opts) {
         return ttsSpeak(text, opts);
@@ -116,9 +130,8 @@ export class VoiceConversation {
         onSpeechStart: () => this.handleSpeechStart(),
         onError: (msg) => this.handleError(msg),
       });
-    } catch (err) {
+    } catch {
       // startCapture already called onError; nothing extra to do.
-      // The caller may inspect state === "error" for UI feedback.
       return;
     }
 
@@ -129,7 +142,7 @@ export class VoiceConversation {
     if (this.stopped) return;
     this.stopped = true;
 
-    // Abort any in-flight LLM request.
+    // Abort any in-flight agent request.
     this.abortController?.abort();
     this.abortController = null;
 
@@ -203,49 +216,38 @@ export class VoiceConversation {
       return;
     }
 
-    // Commit user turn to history and notify UI.
-    this.history.push({ role: "user", text: userText.trim() });
     this.handlers.onUserText(userText.trim());
 
-    // ── LLM ──────────────────────────────────────────────────────────────────
+    // ── Agent ─────────────────────────────────────────────────────────────────
     this.setState("thinking");
 
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
-    let accumulated = "";
+    let replyText = "";
     try {
-      const stream = this.deps.streamLlm(
-        SYSTEM_PROMPT,
-        buildUserPrompt(this.history),
-        signal,
-      );
-      for await (const chunk of stream) {
-        if (this.stopped || signal.aborted) break;
-        accumulated += chunk;
-        this.handlers.onAssistantText(accumulated, false);
-      }
+      replyText = await this.deps.respond(userText.trim(), signal);
     } catch (err) {
       if (this.stopped || signal.aborted) {
         // Normal shutdown — don't report as error.
         return;
       }
-      this.handleError(`LLM 错误: ${err}`);
+      this.handleError(`Agent 错误: ${err}`);
       return;
     }
 
     if (this.stopped || signal.aborted) return;
 
-    const assistantText = accumulated.trim();
-    this.history.push({ role: "assistant", text: assistantText });
-    this.handlers.onAssistantText(assistantText, true);
+    this.handlers.onAssistantText(replyText, true);
 
     // ── TTS ──────────────────────────────────────────────────────────────────
     this.setState("speaking");
 
+    const lang = detectLang(replyText);
+
     await new Promise<void>((resolve) => {
-      this.deps.speak(assistantText, {
-        lang: "en-US",
+      this.deps.speak(replyText, {
+        lang,
         onEnd: () => {
           resolve();
         },

@@ -8,10 +8,10 @@ import { openVideoTool } from "./tools/open_video";
 import { openPageTool } from "./tools/open_page";
 import { seekToTimeTool } from "./tools/seek_to_time";
 import { jumpToCueTool } from "./tools/jump_to_cue";
-import { explainPassageTool } from "./tools/explain_passage";
-import { generateQuizTool } from "./tools/generate_quiz";
-import { markLiaisonsTool } from "./tools/mark_liaisons";
-import { translatePhraseTool } from "./tools/translate_phrase";
+import { startLessonTool } from "./tools/start_lesson";
+import { startRoleplayTool } from "./tools/start_roleplay";
+import { startRemediationTool } from "./tools/start_remediation";
+import { queryLearnerProfileTool } from "./tools/query_learner_profile";
 import { vocabAddTool } from "./tools/vocab_add";
 import { vocabRemoveTool } from "./tools/vocab_remove";
 import { vocabUpdateNoteTool } from "./tools/vocab_update_note";
@@ -37,11 +37,11 @@ export const TOOLS: ToolDef[] = [
   openPageTool as unknown as ToolDef,
   seekToTimeTool as unknown as ToolDef,
   jumpToCueTool as unknown as ToolDef,
-  // in-video AI (T16)
-  explainPassageTool as unknown as ToolDef,
-  generateQuizTool as unknown as ToolDef,
-  markLiaisonsTool as unknown as ToolDef,
-  translatePhraseTool as unknown as ToolDef,
+  // tutor entry points (T13, replaces in-video AI)
+  startLessonTool as unknown as ToolDef,
+  startRoleplayTool as unknown as ToolDef,
+  startRemediationTool as unknown as ToolDef,
+  queryLearnerProfileTool as unknown as ToolDef,
   // vocab write (T17)
   vocabAddTool as unknown as ToolDef,
   vocabRemoveTool as unknown as ToolDef,

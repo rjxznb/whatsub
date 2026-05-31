@@ -12,6 +12,7 @@ import { UpdateChecker } from "./components/UpdateChecker";
 import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { AgentRoot } from "./components/agent/AgentRoot";
 import { TutorPortalRoot } from "./components/tutor/TutorPortalRoot";
+import { VoiceMode } from "./components/voice/VoiceMode";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
@@ -110,6 +111,7 @@ function App() {
             <DownloadQueueWidget />
             <AgentRoot />
             <TutorPortalRoot />
+            <VoiceMode />
           </BrowserRouter>
         </LicenseSessionGate>
       </LicenseGate>

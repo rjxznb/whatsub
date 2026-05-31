@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, BookOpen, FileOutput, RefreshCw } from "lucide-react";
+import { ArrowLeft, GraduationCap, FileOutput, RefreshCw } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
@@ -824,16 +824,9 @@ export function Player() {
             }
           }}
           title={analysis.subtitles.length === 0 ? "字幕分析完成后可开始精讲" : "精讲这个视频"}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-300 border border-blue-500/25 hover:bg-blue-500/20 hover:border-blue-500/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-500/10 disabled:hover:border-blue-500/25"
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
         >
-          {tutorPreparing ? (
-            <span className="animate-pulse">准备中…</span>
-          ) : (
-            <>
-              <BookOpen className="h-3.5 w-3.5" />
-              精讲
-            </>
-          )}
+          <GraduationCap className={`h-[18px] w-[18px] ${tutorPreparing ? "animate-pulse" : ""}`} />
         </button>
         <button
           type="button"

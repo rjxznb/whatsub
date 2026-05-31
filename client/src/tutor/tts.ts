@@ -1,16 +1,19 @@
 // src/tutor/tts.ts
 //
-// Text-to-speech for 精讲 (guided lessons) — makes the tutor read its
-// explanations / questions / feedback aloud so a lesson feels like a real
-// class instead of a wall of text.
+// Text-to-speech for 精讲 (guided lessons) + voice mode — reads the tutor's
+// explanations / replies aloud so it feels like a class, not a wall of text.
 //
-// Uses the Web Speech API (`window.speechSynthesis`), which is the WebView's
-// binding to the OS-native TTS engine: SAPI voices on Windows (WebView2),
-// AVSpeechSynthesizer voices on macOS (WKWebView). No sidecar, no network
-// (TTS runs locally), no permissions — so there's no CSP impact.
-//
-// Everything degrades gracefully when speechSynthesis is unavailable: speak
-// becomes a no-op that still fires onEnd, so callers never hang.
+// PRIMARY engine: Microsoft Edge neural TTS (edgeTts.ts) — natural cloud
+// voices (晓晓 / Aria) that need no locally-installed voice. FALLBACK: the
+// local Web Speech API (window.speechSynthesis / OS SAPI voices) when edge-tts
+// is unreachable (offline / blocked). Text is split by language so Chinese
+// runs use a Chinese voice and English runs an English voice.
+
+import {
+  edgeSynthesize,
+  EDGE_VOICE_ZH,
+  EDGE_VOICE_EN,
+} from "./edgeTts";
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
@@ -127,12 +130,119 @@ export function splitByLang(
   return out;
 }
 
+// ── Playback state (for cancellation across both engines) ────────────────
+let _currentAudio: HTMLAudioElement | null = null;
+let _currentAbort: AbortController | null = null;
+let _cancelled = false;
+
+/** Primary path: synthesize each language run via Edge neural TTS and play the
+ *  MP3s in order. Returns true if it handled playback (firing onStart/onEnd as
+ *  needed), or false if it could not even start (synth failed / autoplay
+ *  blocked on the first clip) so the caller can fall back to Web Speech. Never
+ *  fires onStart/onEnd when it returns false. */
+async function edgeTtsSpeak(
+  clean: string,
+  opts: SpeakOptions,
+): Promise<boolean> {
+  const segments = splitByLang(clean);
+  if (segments.length === 0) {
+    opts.onEnd?.();
+    return true;
+  }
+  const ac = new AbortController();
+  _currentAbort = ac;
+  const rate = opts.rate ?? 1.12;
+
+  // Synthesize all runs up front (parallel) — all-or-nothing, so a failure
+  // cleanly falls back to Web Speech rather than half-speaking.
+  let mp3s: ArrayBuffer[];
+  try {
+    mp3s = await Promise.all(
+      segments.map((seg) =>
+        edgeSynthesize(seg.text, {
+          voice: seg.lang === "zh" ? EDGE_VOICE_ZH : EDGE_VOICE_EN,
+          rate,
+          signal: ac.signal,
+        }),
+      ),
+    );
+  } catch {
+    if (_currentAbort === ac) _currentAbort = null;
+    return false; // → fall back to Web Speech
+  }
+  if (_cancelled || ac.signal.aborted) {
+    opts.onEnd?.();
+    return true;
+  }
+
+  // Play each clip in order.
+  let started = false;
+  for (let i = 0; i < mp3s.length; i++) {
+    if (_cancelled || ac.signal.aborted) break;
+    const url = URL.createObjectURL(
+      new Blob([mp3s[i]], { type: "audio/mpeg" }),
+    );
+    const audio = new Audio(url);
+    _currentAudio = audio;
+    try {
+      await audio.play(); // resolves once playback begins; throws if blocked
+    } catch {
+      URL.revokeObjectURL(url);
+      if (!started) {
+        // Autoplay blocked before any sound — fall back to Web Speech, which
+        // isn't subject to the autoplay policy.
+        _currentAudio = null;
+        if (_currentAbort === ac) _currentAbort = null;
+        return false;
+      }
+      continue; // a later clip failed; skip it
+    }
+    if (!started) {
+      started = true;
+      opts.onStart?.();
+    }
+    await new Promise<void>((res) => {
+      audio.onended = () => res();
+      audio.onerror = () => res();
+    });
+    URL.revokeObjectURL(url);
+  }
+  _currentAudio = null;
+  if (_currentAbort === ac) _currentAbort = null;
+  opts.onEnd?.();
+  return true;
+}
+
+/** Speak `text`: Edge neural TTS first, local Web Speech as fallback. */
 export async function ttsSpeak(
   text: string,
   opts: SpeakOptions = {},
 ): Promise<void> {
   const clean = stripForSpeech(text);
-  if (!ttsSupported() || !clean) {
+  if (!clean) {
+    opts.onEnd?.();
+    return;
+  }
+  _cancelled = false;
+  // Stop anything currently playing on either engine.
+  ttsCancel();
+  _cancelled = false; // ttsCancel set it true; reset for this new utterance
+
+  let handled = false;
+  try {
+    handled = await edgeTtsSpeak(clean, opts);
+  } catch {
+    handled = false;
+  }
+  if (handled || _cancelled) return;
+  await webSpeechSpeak(clean, opts);
+}
+
+async function webSpeechSpeak(
+  clean: string,
+  opts: SpeakOptions = {},
+): Promise<void> {
+  if (!ttsSupported()) {
     opts.onEnd?.();
     return;
   }
@@ -205,7 +315,31 @@ export async function ttsSpeak(
 }
 
 export function ttsCancel(): void {
-  if (ttsSupported()) window.speechSynthesis.cancel();
+  _cancelled = true;
+  if (_currentAbort) {
+    try {
+      _currentAbort.abort();
+    } catch {
+      /* ignore */
+    }
+    _currentAbort = null;
+  }
+  if (_currentAudio) {
+    try {
+      _currentAudio.pause();
+      _currentAudio.src = "";
+    } catch {
+      /* ignore */
+    }
+    _currentAudio = null;
+  }
+  if (ttsSupported()) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 // ── Mute preference (persisted) ──────────────────────────────────────────

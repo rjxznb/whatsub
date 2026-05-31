@@ -122,7 +122,7 @@ export function LessonStepView({
               title="重读"
               className={ICON_BTN}
             >
-              <RotateCcw size={15} className={speaking ? "text-sky-400" : ""} />
+              <RotateCcw size={15} className={speaking ? "text-blue-400" : ""} />
             </button>
           ) : null}
           <button
@@ -131,7 +131,7 @@ export function LessonStepView({
             title={muted ? "开启朗读" : "静音"}
             className={ICON_BTN}
           >
-            {muted ? <VolumeX size={16} /> : <Volume2 size={16} className={speaking ? "text-sky-400" : ""} />}
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} className={speaking ? "text-blue-400" : ""} />}
           </button>
         </div>
       </div>

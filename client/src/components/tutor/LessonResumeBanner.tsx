@@ -35,15 +35,15 @@ export function LessonResumeBanner({ videoId, onResume }: Props) {
   return (
     <div
       data-tutor-resume
-      className="bg-sky-500/10 border border-sky-500/30 rounded-md px-4 py-3 mb-3 flex items-center gap-3"
+      className="bg-blue-500/10 border border-blue-500/30 rounded-md px-4 py-3 mb-3 flex items-center gap-3"
     >
-      <div className="text-sm text-sky-100 flex-1">
+      <div className="text-sm text-blue-100 flex-1">
         上次精讲到 <span className="font-medium">{completed} / {total}</span>
       </div>
       <button
         type="button"
         onClick={() => onResume(pending)}
-        className="px-3 py-1 rounded text-sm bg-sky-500 hover:bg-sky-400 text-white"
+        className="px-3 py-1 rounded text-sm bg-blue-500 hover:bg-blue-400 text-black"
       >
         继续
       </button>
@@ -53,14 +53,14 @@ export function LessonResumeBanner({ videoId, onResume }: Props) {
           await clearLessonState();
           setDismissed(true);
         }}
-        className="px-3 py-1 rounded text-sm text-sky-200 hover:bg-white/5"
+        className="px-3 py-1 rounded text-sm text-blue-200 hover:bg-white/5"
       >
         重新开始
       </button>
       <button
         type="button"
         onClick={() => setDismissed(true)}
-        className="px-2 py-1 text-sm text-sky-300 hover:text-sky-100"
+        className="px-2 py-1 text-sm text-blue-300 hover:text-blue-100"
       >
         关掉
       </button>

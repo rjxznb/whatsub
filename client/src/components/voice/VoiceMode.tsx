@@ -54,7 +54,7 @@ function Orb({ state, level }: OrbProps) {
           height: 180,
           transform: `scale(${ringScale})`,
           background:
-            "radial-gradient(circle, rgba(56,189,248,0.18) 0%, rgba(14,165,233,0.06) 55%, transparent 75%)",
+            "radial-gradient(circle, rgba(96,165,250,0.18) 0%, rgba(59,130,246,0.06) 55%, transparent 75%)",
         }}
       />
 
@@ -66,10 +66,10 @@ function Orb({ state, level }: OrbProps) {
           height: 144,
           background: dimmed
             ? "radial-gradient(circle at 40% 35%, #71717a 0%, #3f3f46 100%)"
-            : "radial-gradient(circle at 40% 35%, #38bdf8 0%, #0ea5e9 45%, #0369a1 100%)",
+            : "radial-gradient(circle at 40% 35%, #60a5fa 0%, #3b82f6 45%, #1d4ed8 100%)",
           boxShadow: dimmed
             ? "none"
-            : "0 0 32px 4px rgba(14,165,233,0.35), 0 0 80px 8px rgba(56,189,248,0.12), inset 0 2px 6px rgba(255,255,255,0.18)",
+            : "0 0 32px 4px rgba(59,130,246,0.35), 0 0 80px 8px rgba(96,165,250,0.12), inset 0 2px 6px rgba(255,255,255,0.18)",
         }}
       />
     </div>
@@ -175,7 +175,7 @@ function VoiceModeInner() {
       className="fixed inset-0 z-[110] bg-zinc-950 flex flex-col items-center justify-center"
       style={{
         background:
-          "radial-gradient(ellipse 60% 55% at 50% 55%, rgba(14,165,233,0.07) 0%, transparent 70%), #09090b",
+          "radial-gradient(ellipse 60% 55% at 50% 55%, rgba(59,130,246,0.07) 0%, transparent 70%), #09090b",
       }}
     >
       {/* Close button */}
@@ -191,7 +191,6 @@ function VoiceModeInner() {
       {micDenied ? (
         /* ── Mic permission error ────────────────────────────────────────── */
         <div className="flex flex-col items-center gap-5 px-8 text-center max-w-sm">
-          <div className="text-4xl select-none">🎤</div>
           <p className="text-zinc-200 text-sm leading-relaxed">
             无法访问麦克风。请在系统设置中允许 whatsub 使用麦克风后重试。
           </p>
@@ -199,7 +198,7 @@ function VoiceModeInner() {
             <button
               type="button"
               onClick={handleRetry}
-              className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-white text-sm rounded font-medium transition-colors"
+              className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-black text-sm rounded font-medium transition-colors"
             >
               重试
             </button>

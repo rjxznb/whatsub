@@ -824,7 +824,7 @@ export function Player() {
             }
           }}
           title={analysis.subtitles.length === 0 ? "字幕分析完成后可开始精讲" : "精讲这个视频"}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-sky-500/10 text-sky-300 border border-sky-500/25 hover:bg-sky-500/20 hover:border-sky-500/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-sky-500/10 disabled:hover:border-sky-500/25"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-300 border border-blue-500/25 hover:bg-blue-500/20 hover:border-blue-500/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-500/10 disabled:hover:border-blue-500/25"
         >
           {tutorPreparing ? (
             <span className="animate-pulse">准备中…</span>

@@ -2,7 +2,7 @@
 //
 // Shared visual language for the 私教 (tutor) overlays. Deliberately matches
 // the rest of the app — flat zinc surfaces with thin `border-zinc-800`
-// borders (like Player/Settings), NOT frosted glass — and uses sky-500 as the
+// borders (like Player/Settings), NOT frosted glass — and uses blue-500 as the
 // single restrained accent. Centralising the tokens keeps every overlay
 // (pre-class / lesson / roleplay / remediation / report) cohesive and premium.
 
@@ -18,9 +18,10 @@ export const TUTOR_BACKDROP =
 export const TUTOR_EYEBROW =
   "text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500";
 
-/** Primary call-to-action — the app's sky accent, solid. */
+/** Primary call-to-action — the app's blue accent with black text, matching
+ *  the Library/Import primary buttons (bg-blue-500 hover:bg-blue-400 text-black). */
 export const BTN_PRIMARY =
-  "px-4 py-2 rounded-lg text-sm font-medium bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-white transition-colors disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed";
+  "px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 hover:bg-blue-400 text-black transition-colors disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed";
 
 /** Secondary filled button (重听 / 再试一次). */
 export const BTN_SUBTLE =
@@ -40,4 +41,4 @@ export const ICON_BTN =
 
 /** Textarea used for answers / chat input. */
 export const TUTOR_TEXTAREA =
-  "w-full bg-zinc-950/60 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-sky-500/70 transition-colors resize-none";
+  "w-full bg-zinc-950/60 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-blue-500/70 transition-colors resize-none";

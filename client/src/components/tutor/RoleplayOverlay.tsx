@@ -44,7 +44,7 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
                 className={
                   "max-w-[80%] rounded-lg px-3 py-2 text-sm " +
                   (t.role === "user"
-                    ? "bg-sky-500/20 text-sky-100"
+                    ? "bg-blue-500/20 text-blue-100"
                     : "bg-zinc-800 text-zinc-100")
                 }
               >

@@ -36,9 +36,9 @@ describe("LessonStepView", () => {
     expect(screen.getByText(/重听/)).toBeTruthy();
   });
 
-  it("step 2 with empty explain shows 生成中", () => {
+  it("step 2 with empty explain shows the 讲解 placeholder", () => {
     render(<LessonStepView runtime={makeRuntime({ currentStep: 2 })} onContinue={vi.fn()} onRetry={vi.fn()} onReplayCue={vi.fn()} onSubmitAnswer={vi.fn()} />);
-    expect(screen.getByText(/生成中/)).toBeTruthy();
+    expect(screen.getByText(/老师正在讲解/)).toBeTruthy();
   });
 
   it("step 5 correct verdict shows ✓ 答对了", () => {

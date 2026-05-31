@@ -1,5 +1,21 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Volume2, VolumeX, RotateCcw, Play } from "lucide-react";
 import type { LessonRuntime } from "../../tutor/lessonRuntime";
+import {
+  ttsSpeak,
+  ttsCancel,
+  isTtsEnabled,
+  setTtsEnabled,
+} from "../../tutor/tts";
+import {
+  TUTOR_CARD,
+  TUTOR_EYEBROW,
+  TUTOR_INSET,
+  TUTOR_TEXTAREA,
+  ICON_BTN,
+  BTN_PRIMARY,
+  BTN_SUBTLE,
+} from "./styles";
 
 interface Props {
   runtime: LessonRuntime;
@@ -9,46 +25,129 @@ interface Props {
   onSubmitAnswer: (answer: string) => void;
 }
 
-/** Renders the current step of the lesson runtime. Step 1 starts with
- *  a replay button + "试试理解" toggle; steps 2/3 render LLM-streamed
- *  content; step 4 is the textarea; step 5 is feedback + continue.
- *  All step transitions are driven by the parent overlay calling runtime
- *  methods after this component dispatches an `on*` callback. */
-export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue, onSubmitAnswer }: Props) {
+/** Renders the current step of the lesson runtime. The tutor "speaks" its
+ *  explanation / question / feedback aloud via OS-native TTS (so a lesson
+ *  feels like a class, not a wall of text); step 1's 重听 replays the real
+ *  video audio (the English the learner should listen to), the spoken
+ *  Chinese coaching is steps 2/3/5. A header toggle mutes the voice. */
+export function LessonStepView({
+  runtime,
+  onContinue,
+  onRetry,
+  onReplayCue,
+  onSubmitAnswer,
+}: Props) {
   const [draft, setDraft] = useState("");
+  const [muted, setMuted] = useState(() => !isTtsEnabled());
+  const [speaking, setSpeaking] = useState(false);
 
-  const { currentStep, currentExplainText, currentQuestion, currentFeedback,
-    canRetry, answerRevealed, currentAnchorIdx } = runtime.state;
+  const {
+    currentStep,
+    currentExplainText,
+    currentQuestion,
+    currentFeedback,
+    canRetry,
+    answerRevealed,
+    currentAnchorIdx,
+  } = runtime.state;
   const totalAnchors = runtime.state.plan.anchors.length;
   const anchor = runtime.state.plan.anchors[currentAnchorIdx];
 
+  // The line the tutor should read aloud for the current step.
+  const spokenLine =
+    currentStep === 2
+      ? currentExplainText
+      : currentStep === 3
+        ? currentQuestion?.question ?? ""
+        : currentStep === 5
+          ? currentFeedback?.feedback ?? ""
+          : "";
+
+  // Auto-speak the current step's coaching line when it appears (unless
+  // muted). Re-runs when the step or its text changes; cancels on cleanup so
+  // advancing/closing never leaves a voice droning over the next screen.
+  const lastSpokenRef = useRef<string>("");
+  useEffect(() => {
+    if (muted || !spokenLine) {
+      ttsCancel();
+      setSpeaking(false);
+      return;
+    }
+    if (lastSpokenRef.current === spokenLine) return; // don't re-read on unrelated re-renders
+    lastSpokenRef.current = spokenLine;
+    void ttsSpeak(spokenLine, {
+      onStart: () => setSpeaking(true),
+      onEnd: () => setSpeaking(false),
+    });
+    return () => {
+      ttsCancel();
+      setSpeaking(false);
+    };
+  }, [spokenLine, muted]);
+
+  const replaySpoken = () => {
+    if (!spokenLine) return;
+    lastSpokenRef.current = ""; // allow re-speak of the same line
+    void ttsSpeak(spokenLine, {
+      onStart: () => setSpeaking(true),
+      onEnd: () => setSpeaking(false),
+    });
+  };
+
+  const toggleMute = () => {
+    const next = !muted;
+    setMuted(next);
+    setTtsEnabled(!next);
+    if (next) {
+      ttsCancel();
+      setSpeaking(false);
+    }
+  };
+
   return (
-    <div className="bg-zinc-900/80 backdrop-blur-2xl ring-1 ring-white/10 rounded-2xl shadow-2xl shadow-black/40 w-full max-w-[640px] p-7 text-zinc-100">
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-xs text-zinc-500 uppercase tracking-wider">
-          教学点 {currentAnchorIdx + 1} / {totalAnchors}
+    <div className={`${TUTOR_CARD} w-full max-w-[640px] p-7`}>
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-baseline gap-3 min-w-0">
+          <span className={TUTOR_EYEBROW}>
+            教学点 {currentAnchorIdx + 1} / {totalAnchors}
+          </span>
+          <span className="text-sm text-zinc-400 truncate">{anchor?.topic}</span>
         </div>
-        <div className="text-xs text-zinc-500">{anchor?.topic}</div>
+        {/* Voice controls: mute toggle (persisted) + a subtle speaking pulse. */}
+        <div className="flex items-center gap-1 shrink-0">
+          {!muted && spokenLine ? (
+            <button
+              type="button"
+              onClick={replaySpoken}
+              title="重读"
+              className={ICON_BTN}
+            >
+              <RotateCcw size={15} className={speaking ? "text-sky-400" : ""} />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={toggleMute}
+            title={muted ? "开启朗读" : "静音"}
+            className={ICON_BTN}
+          >
+            {muted ? <VolumeX size={16} /> : <Volume2 size={16} className={speaking ? "text-sky-400" : ""} />}
+          </button>
+        </div>
       </div>
 
       {currentStep === 1 && (
-        <div className="space-y-4">
-          <div className="text-sm text-zinc-300 leading-relaxed">
-            这一段你听到了什么？先试试理解。
-          </div>
+        <div className="space-y-5">
+          <p className="text-[15px] text-zinc-300 leading-relaxed">
+            先听这一句，试着理解它在说什么。
+          </p>
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onReplayCue}
-              className="px-4 py-2 rounded-md text-sm bg-white/5 hover:bg-white/10 text-zinc-200"
-            >
-              ▶ 重听
+            <button type="button" onClick={onReplayCue} className={BTN_SUBTLE}>
+              <span className="inline-flex items-center gap-1.5">
+                <Play size={13} /> 重听原句
+              </span>
             </button>
-            <button
-              type="button"
-              onClick={onContinue}
-              className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
-            >
+            <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
               我准备好了
             </button>
           </div>
@@ -56,17 +155,15 @@ export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue, onSu
       )}
 
       {currentStep === 2 && (
-        <div className="space-y-4">
-          <div className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-            {currentExplainText || <span className="text-zinc-600">生成中…</span>}
+        <div className="space-y-5">
+          <div className="text-[15px] text-zinc-200 leading-7 whitespace-pre-wrap">
+            {currentExplainText || (
+              <span className="text-zinc-600">老师正在讲解…</span>
+            )}
           </div>
           {currentExplainText && (
-            <button
-              type="button"
-              onClick={onContinue}
-              className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
-            >
-              下一步 →
+            <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
+              下一步
             </button>
           )}
         </div>
@@ -74,14 +171,16 @@ export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue, onSu
 
       {currentStep === 3 && currentQuestion && (
         <div className="space-y-4">
-          <div className="text-sm text-zinc-400">题目</div>
-          <div className="text-base text-zinc-100">{currentQuestion.question}</div>
+          <div className={TUTOR_EYEBROW}>提问</div>
+          <p className="text-[15px] text-zinc-100 leading-relaxed">
+            {currentQuestion.question}
+          </p>
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="用英文作答…"
             rows={3}
-            className="w-full bg-zinc-900/60 ring-1 ring-white/10 rounded-md p-3 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-sky-500"
+            className={TUTOR_TEXTAREA}
           />
           <button
             type="button"
@@ -92,7 +191,7 @@ export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue, onSu
               onSubmitAnswer(answer);
             }}
             disabled={draft.trim().length === 0}
-            className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-white"
+            className={BTN_PRIMARY}
           >
             提交答案
           </button>
@@ -104,39 +203,38 @@ export function LessonStepView({ runtime, onContinue, onRetry, onReplayCue, onSu
           <div
             className={
               "text-sm font-medium " +
-              (currentFeedback.verdict === "correct" ? "text-emerald-400"
-                : currentFeedback.verdict === "partial" ? "text-amber-400"
-                : "text-rose-400")
+              (currentFeedback.verdict === "correct"
+                ? "text-emerald-400"
+                : currentFeedback.verdict === "partial"
+                  ? "text-amber-400"
+                  : "text-rose-400")
             }
           >
-            {currentFeedback.verdict === "correct" ? "✓ 答对了" :
-              currentFeedback.verdict === "partial" ? "≈ 基本对" : "✗ 还差一点"}
+            {currentFeedback.verdict === "correct"
+              ? "✓ 答对了"
+              : currentFeedback.verdict === "partial"
+                ? "≈ 基本正确"
+                : "✗ 还差一点"}
           </div>
-          <div className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">
+          <div className="text-[15px] text-zinc-200 leading-7 whitespace-pre-wrap">
             {currentFeedback.feedback}
           </div>
           {answerRevealed && currentQuestion && (
-            <div className="text-sm text-zinc-400 bg-white/5 rounded p-3">
-              <div className="text-xs text-zinc-500 mb-1">参考答案</div>
-              {currentQuestion.expectedAnswer}
+            <div className={`${TUTOR_INSET} p-3`}>
+              <div className={`${TUTOR_EYEBROW} mb-1.5`}>参考答案</div>
+              <div className="text-sm text-zinc-300">
+                {currentQuestion.expectedAnswer}
+              </div>
             </div>
           )}
           <div className="flex gap-2">
             {canRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                className="px-4 py-2 rounded-md text-sm bg-white/5 hover:bg-white/10 text-zinc-200"
-              >
+              <button type="button" onClick={onRetry} className={BTN_SUBTLE}>
                 再试一次
               </button>
             )}
-            <button
-              type="button"
-              onClick={onContinue}
-              className="px-4 py-2 rounded-md text-sm bg-sky-500 hover:bg-sky-400 text-white"
-            >
-              {runtime.hasNextAnchor() ? "下一个教学点 →" : "结课"}
+            <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
+              {runtime.hasNextAnchor() ? "下一个教学点" : "结课"}
             </button>
           </div>
         </div>

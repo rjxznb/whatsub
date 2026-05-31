@@ -108,16 +108,28 @@ export async function ttsSpeak(
     /* ignore */
   }
   const voices = cachedVoices.length ? cachedVoices : await loadVoices();
-  // Calling speak() in the same tick as cancel() can no-op on some Chromium
-  // builds — yield a macrotask so the queue settles first.
-  await new Promise((r) => setTimeout(r, 0));
   const lang = opts.lang ?? "zh-CN";
   const u = new SpeechSynthesisUtterance(clean);
-  u.lang = lang;
   u.rate = opts.rate ?? 1;
   if (opts.pitch != null) u.pitch = opts.pitch;
-  const v = pickVoice(voices, lang);
-  if (v) u.voice = v;
+  // CRITICAL: always hand the engine a REAL, installed voice. Setting
+  // `u.lang` to a language with no installed voice (e.g. zh-CN when the user
+  // only has English voices) produces total SILENCE in Chromium/WebView2 —
+  // this was the silent-精讲 bug. So pick the best match for the requested
+  // language, fall back to any English / the first available voice, and align
+  // `u.lang` to whatever voice we actually got (mirrors the working
+  // useSpeech hook, which never sets a bare lang). Only when there are no
+  // voices at all do we fall back to the requested lang.
+  const voice =
+    pickVoice(voices, lang) ??
+    voices.find((vv) => vv.lang.toLowerCase().startsWith("en")) ??
+    voices[0];
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang;
+  } else {
+    u.lang = lang;
+  }
   u.onstart = () => opts.onStart?.();
   u.onend = () => {
     _liveUtterances.delete(u);

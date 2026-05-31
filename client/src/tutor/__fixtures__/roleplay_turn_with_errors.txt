@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"I see, you really enjoy the food here.\n<<<OBSERVATIONS>>>\n{\"observedErrors\":[{\"pattern\":\"chinglish_directness\",\"userText\":\"I very like the food\",\"correction\":\"I really like the food\",\"detail\":\"用 really 代替 very like\"}]}\n<<<END>>>"}}]}
+
+data: [DONE]

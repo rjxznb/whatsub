@@ -1,0 +1,3 @@
+data: {"choices":[{"delta":{"content":"Welcome to the UK. What's the purpose of your visit?\n<<<OBSERVATIONS>>>\n{\"observedErrors\":[]}\n<<<END>>>"}}]}
+
+data: [DONE]

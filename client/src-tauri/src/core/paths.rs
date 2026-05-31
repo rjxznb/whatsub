@@ -34,6 +34,12 @@ pub fn agent_history_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("agent_history.json"))
 }
 
+/// Returns %APPDATA%/whatsub/learner_profile.json — the persistent learner
+/// model: error events + derived mastery index. Local only, never synced.
+pub fn learner_profile_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("learner_profile.json"))
+}
+
 /// Multi-site cookie jar (JSON, source of truth). Holds per-site
 /// buckets keyed by site_key. Always re-derive cookies.txt from this.
 pub fn cookies_jar_path() -> Result<PathBuf, String> {

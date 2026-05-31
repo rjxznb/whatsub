@@ -11,5 +11,6 @@ pub mod auth;
 pub mod corpus;
 pub mod library_sync;
 pub mod agent;
+pub mod learner_profile;
 pub mod youtube_search;
 pub mod import_queue_http;

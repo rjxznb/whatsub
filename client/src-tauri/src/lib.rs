@@ -100,6 +100,12 @@ pub fn run() {
             commands::import_queue_http::import_queue_list_pending_http,
             commands::import_queue_http::import_queue_claim_http,
             commands::import_queue_http::import_queue_set_status_http,
+            commands::learner_profile::learner_profile_load,
+            commands::learner_profile::learner_profile_log_event,
+            commands::learner_profile::learner_profile_resolve_events,
+            commands::learner_profile::learner_profile_rebuild_index,
+            commands::learner_profile::learner_profile_export,
+            commands::learner_profile::learner_profile_reset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

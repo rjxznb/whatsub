@@ -659,7 +659,26 @@ export function Player() {
     usePlayerState.getState().setSeekHandler((sec) => {
       if (videoRef.current) videoRef.current.currentTime = sec;
     });
-    return () => usePlayerState.getState().setSeekHandler(null);
+    // Play a single cue's range, then auto-pause. Used by 精讲 重听原句 to
+    // replay one sentence's audio while the lesson overlay covers the video.
+    usePlayerState.getState().setPlayRangeHandler((start, end) => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.currentTime = start;
+      const stopAt = end > start ? end : start + 5;
+      const onTime = () => {
+        if (v.currentTime >= stopAt) {
+          v.pause();
+          v.removeEventListener("timeupdate", onTime);
+        }
+      };
+      v.addEventListener("timeupdate", onTime);
+      void v.play().catch(() => v.removeEventListener("timeupdate", onTime));
+    });
+    return () => {
+      usePlayerState.getState().setSeekHandler(null);
+      usePlayerState.getState().setPlayRangeHandler(null);
+    };
   }, []);
 
   // Throttle currentIdx + currentTime writes to 500ms (spec §7.4) — useVideoSync

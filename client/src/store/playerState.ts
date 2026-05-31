@@ -10,9 +10,14 @@ interface PlayerStateStore {
    *  player without importing Player.tsx internals. Null when not on the
    *  Player page (set on Player mount, cleared on unmount). */
   seekHandler: ((sec: number) => void) | null;
+  /** Registered by Player.tsx — seek to `start`, play, and auto-pause at
+   *  `end`. Used by 精讲's 重听原句 to replay just one cue's audio while the
+   *  full-screen lesson overlay is up (the video is heard, not seen). */
+  playRangeHandler: ((start: number, end: number) => void) | null;
   setActive: (args: { videoId: string; videoTitle: string }) => void;
   setCue: (args: { currentIdx: number | null; currentTime: number | null }) => void;
   setSeekHandler: (fn: ((sec: number) => void) | null) => void;
+  setPlayRangeHandler: (fn: ((start: number, end: number) => void) | null) => void;
   clear: () => void;
 }
 
@@ -22,9 +27,11 @@ export const usePlayerState = create<PlayerStateStore>((set) => ({
   currentTime: null,
   videoTitle: null,
   seekHandler: null,
+  playRangeHandler: null,
   setActive: ({ videoId, videoTitle }) => set({ videoId, videoTitle }),
   setCue: ({ currentIdx, currentTime }) => set({ currentIdx, currentTime }),
   setSeekHandler: (fn) => set({ seekHandler: fn }),
+  setPlayRangeHandler: (fn) => set({ playRangeHandler: fn }),
   clear: () =>
     set({
       videoId: null,
@@ -32,5 +39,6 @@ export const usePlayerState = create<PlayerStateStore>((set) => ({
       currentTime: null,
       videoTitle: null,
       seekHandler: null,
+      playRangeHandler: null,
     }),
 }));

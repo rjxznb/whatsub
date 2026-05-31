@@ -4,6 +4,7 @@ import { useSettings } from "../../store/settings";
 import { useAnalysis } from "../../store/analysis";
 import { usePlayerState } from "../../store/playerState";
 import { useLearnerProfile, loadLearnerProfile } from "../../tutor/learnerProfile";
+import { ttsCancel } from "../../tutor/tts";
 import { LessonOverlay } from "./LessonOverlay";
 import { LessonPreClass } from "./LessonPreClass";
 import { LessonStepView } from "./LessonStepView";
@@ -146,9 +147,15 @@ export function TutorPortalRoot() {
         <LessonStepView
           runtime={r}
           onReplayCue={() => {
-            // Seek back to the current anchor's cue
+            // Replay just this anchor's cue audio (the original English) —
+            // seek + play + auto-pause at the cue end. Cancel the TTS first
+            // so the tutor's voice doesn't talk over the replayed sentence.
             const anchor = r.state.plan.anchors[r.state.currentAnchorIdx];
-            if (anchor) makePlayerAdapter().seek(anchor.cueIdx);
+            if (!anchor) return;
+            const cue = useAnalysis.getState().subtitles[anchor.cueIdx];
+            if (!cue) return;
+            ttsCancel();
+            usePlayerState.getState().playRangeHandler?.(cue.time, cue.endTime);
           }}
           onRetry={() => {
             // Transient retry: jump the UI back to the question step. We

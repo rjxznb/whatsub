@@ -22,6 +22,9 @@ import type { VoiceState } from "../../voice/types";
 
 const IDLE_DISMISS_MS = 6000; // silence this long (while listening) → close
 const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
+// Raw mic RMS rarely exceeds ~0.15 even when speaking loudly, so map it onto a
+// full 0..1 range for the orb (the orb grows up to +75%). Above this RMS = max.
+const RMS_FULL_SCALE = 0.13;
 
 // ── Orb ───────────────────────────────────────────────────────────────────────
 
@@ -31,11 +34,33 @@ const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
  *  with mic level (the size IS the listening signal). A warm palette shift is
  *  used only while transcribing. */
 function Orb({ state, level }: { state: VoiceState; level: number }) {
-  const clamped = Math.min(1, Math.max(0, level));
-  // The orb visibly GROWS as the user speaks — the size is the signal.
-  const scale = 1 + clamped * 0.55;
   const active = state !== "error";
   const warm = state === "transcribing";
+
+  // The orb visibly GROWS with the voice — the size IS the listening signal.
+  // The mic reports level only ~4×/sec, so we ease the rendered scale toward it
+  // at 60fps (written straight to the node to avoid a per-frame re-render),
+  // attack faster than release for a punchy Siri-like pulse. `level` is already
+  // normalized to 0..1 by VoiceMode.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const targetRef = useRef(0);
+  targetRef.current = Math.min(1, Math.max(0, level));
+  const dispRef = useRef(0);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const t = targetRef.current;
+      const d = dispRef.current;
+      const k = t > d ? 0.35 : 0.12; // fast attack, slower release
+      const next = d + (t - d) * k;
+      dispRef.current = next;
+      const el = wrapRef.current;
+      if (el) el.style.transform = `scale(${(1 + next * 0.75).toFixed(4)})`;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   const SIZE = 120;
   const HALO = SIZE * 1.8;
@@ -47,18 +72,11 @@ function Orb({ state, level }: { state: VoiceState; level: number }) {
   const pink = warm ? "rgba(255,170,72,0.92)" : "rgba(248,150,214,0.92)";
   const glowCyan = warm ? "rgba(255,200,90," : "rgba(96,188,255,";
   const glowPink = warm ? "rgba(255,150,60," : "rgba(248,150,214,";
-  const glowAlpha = 0.5 + clamped * 0.3;
+  const glowAlpha = 0.6;
 
   return (
-    <div
-      className="relative pointer-events-none"
-      style={{
-        width: HALO,
-        height: HALO,
-        transform: `scale(${scale})`,
-        transition: "transform 90ms ease-out",
-      }}
-    >
+    // transform is owned by the rAF loop above — intentionally NOT in style.
+    <div ref={wrapRef} className="relative pointer-events-none" style={{ width: HALO, height: HALO }}>
       {/* 1. soft outer glow — cyan→pink halo, blurred, gently breathing */}
       <div
         className={active ? "absolute inset-0 animate-orb-glow-breathe" : "absolute inset-0"}
@@ -192,7 +210,10 @@ function VoiceModeInner() {
         if (s === "transcribing" || s === "thinking" || s === "speaking") bumpActivity();
       },
       onLevel: (rms) => {
-        setLevel(rms);
+        // Normalize raw RMS → 0..1 so the orb actually reacts (the iOS orb gets
+        // a pre-normalized level; the web mic gives raw RMS). The orb smooths
+        // it at 60fps internally.
+        setLevel(Math.min(1, rms / RMS_FULL_SCALE));
         if (rms > ACTIVITY_LEVEL) bumpActivity();
       },
       onUserText: () => bumpActivity(),

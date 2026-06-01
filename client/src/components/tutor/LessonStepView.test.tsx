@@ -89,6 +89,23 @@ describe("LessonStepView", () => {
     expect(screen.queryByText(/\*\*/)).toBeNull();
   });
 
+  it("shows the accent picker with an 自动 default option", () => {
+    render(
+      <LessonStepView
+        runtime={makeRuntime({ currentStep: 2, currentExplainText: "讲解中" })}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onReplayCue={vi.fn()}
+        onSubmitAnswer={vi.fn()}
+      />,
+    );
+    const picker = screen.getByLabelText("朗读口音") as HTMLSelectElement;
+    expect(picker).toBeTruthy();
+    expect(screen.getByText("自动（按内容）")).toBeTruthy();
+    // a representative accent option is present
+    expect(screen.getByText("Sonia（女）")).toBeTruthy();
+  });
+
   it("step 5 correct verdict shows ✓ 答对了", () => {
     render(
       <LessonStepView

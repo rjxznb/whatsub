@@ -11,6 +11,8 @@ import {
   ttsPause,
   ttsResume,
   getTtsRate,
+  getTtsVoice,
+  setTtsVoice,
   TTS_RATE_MAX,
   TTS_RATE_MIN,
 } from "./tts";
@@ -121,6 +123,17 @@ describe("tts rate + pause controls", () => {
       ttsPause();
       ttsResume();
     }).not.toThrow();
+  });
+
+  it("voice preference defaults to auto and persists a valid catalog id", () => {
+    expect(getTtsVoice()).toBe("");
+    setTtsVoice("en-GB-SoniaNeural");
+    expect(getTtsVoice()).toBe("en-GB-SoniaNeural");
+  });
+
+  it("ignores an unknown voice id (falls back to auto)", () => {
+    setTtsVoice("not-a-real-voice");
+    expect(getTtsVoice()).toBe("");
   });
 });
 

@@ -9,7 +9,12 @@
 // is unreachable (offline / blocked). Text is split by language so Chinese
 // runs use a Chinese voice and English runs an English voice.
 
-import { edgeSynthesize, EDGE_VOICE_ZH, EDGE_VOICE_EN } from "./edgeTts";
+import {
+  edgeSynthesize,
+  EDGE_VOICE_ZH,
+  EDGE_VOICE_EN,
+  EDGE_VOICE_IDS,
+} from "./edgeTts";
 import { useTtsStatus } from "./ttsStatus";
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
@@ -176,6 +181,30 @@ export function pickEdgeVoice(text: string): string {
   return latin > cjk ? EDGE_VOICE_EN : EDGE_VOICE_ZH;
 }
 
+// ── Voice preference (persisted) ─────────────────────────────────────────
+// "" = auto (pickEdgeVoice by dominant script); otherwise a specific edge-tts
+// voice id the user chose in the lesson accent dropdown.
+const TTS_VOICE_KEY = "tutor.ttsVoice";
+
+/** The user's chosen edge-tts voice, or "" for auto. Falls back to "" if the
+ *  stored id is no longer in the catalog. */
+export function getTtsVoice(): string {
+  try {
+    const v = localStorage.getItem(TTS_VOICE_KEY) ?? "";
+    return v && EDGE_VOICE_IDS.has(v) ? v : "";
+  } catch {
+    return "";
+  }
+}
+
+export function setTtsVoice(id: string): void {
+  try {
+    localStorage.setItem(TTS_VOICE_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function edgeTtsSpeak(
   clean: string,
   opts: SpeakOptions,
@@ -195,10 +224,12 @@ async function edgeTtsSpeak(
   // the user pause/resume and drag the speed slider LIVE at the current
   // position — baking the rate into the SSML would force a re-synth from the
   // start on every change.
+  // The user's chosen accent overrides the automatic per-content pick.
+  const voice = getTtsVoice() || pickEdgeVoice(clean);
   let mp3: ArrayBuffer;
   try {
     mp3 = await edgeSynthesize(clean, {
-      voice: pickEdgeVoice(clean),
+      voice,
       rate: 1,
       signal: ac.signal,
     });

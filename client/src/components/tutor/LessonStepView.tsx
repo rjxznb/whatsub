@@ -7,12 +7,15 @@ import {
   ttsPause,
   ttsResume,
   ttsSetRate,
+  getTtsVoice,
+  setTtsVoice,
   isTtsEnabled,
   setTtsEnabled,
   getTtsRate,
   TTS_RATE_MIN,
   TTS_RATE_MAX,
 } from "../../tutor/tts";
+import { EDGE_VOICE_GROUPS } from "../../tutor/edgeTts";
 import { MarkdownText } from "../agent/markdown";
 import {
   TUTOR_CARD,
@@ -53,6 +56,7 @@ export function LessonStepView({
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [rate, setRate] = useState(() => getTtsRate());
+  const [voice, setVoice] = useState(() => getTtsVoice());
 
   const {
     currentStep,
@@ -169,8 +173,33 @@ export function LessonStepView({
           </span>
           <span className="text-sm text-zinc-400 truncate">{anchor?.topic}</span>
         </div>
-        {/* Voice controls: rate slider + pause/resume + replay + mute. */}
+        {/* Voice controls: accent picker + rate slider + pause/resume + replay + mute. */}
         <div className="flex items-center gap-2 shrink-0">
+          {!muted && (
+            <select
+              value={voice}
+              onChange={(e) => {
+                const v = e.target.value;
+                setVoice(v);
+                setTtsVoice(v);
+                replaySpoken(); // re-read the current line in the new accent
+              }}
+              title="朗读口音"
+              aria-label="朗读口音"
+              className="max-w-[128px] bg-zinc-800/80 text-zinc-200 text-[11px] rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
+            >
+              <option value="">自动（按内容）</option>
+              {EDGE_VOICE_GROUPS.map((g) => (
+                <optgroup key={g.group} label={g.group}>
+                  {g.voices.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          )}
           {!muted && (
             <div className="flex items-center gap-1.5" title="语速">
               <input

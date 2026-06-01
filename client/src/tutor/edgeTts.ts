@@ -22,6 +22,88 @@ import { invoke } from "@tauri-apps/api/core";
 export const EDGE_VOICE_ZH = "zh-CN-XiaoxiaoNeural"; // 晓晓 — warm female
 export const EDGE_VOICE_EN = "en-US-AriaNeural"; // Aria — natural female
 
+/** Curated edge-tts voices for the lesson accent picker, grouped by accent.
+ *  Not the full ~300-voice catalog — these are the accents that matter for an
+ *  English learner (US / UK / AU / CA / IN / IE) plus Chinese voices for the
+ *  Chinese coaching. Picking one overrides the automatic per-content choice. */
+export const EDGE_VOICE_GROUPS: {
+  group: string;
+  voices: { id: string; label: string }[];
+}[] = [
+  {
+    group: "美式英语",
+    voices: [
+      { id: "en-US-AriaNeural", label: "Aria（女）" },
+      { id: "en-US-JennyNeural", label: "Jenny（女）" },
+      { id: "en-US-MichelleNeural", label: "Michelle（女）" },
+      { id: "en-US-GuyNeural", label: "Guy（男）" },
+      { id: "en-US-ChristopherNeural", label: "Christopher（男）" },
+      { id: "en-US-EricNeural", label: "Eric（男）" },
+    ],
+  },
+  {
+    group: "英式英语",
+    voices: [
+      { id: "en-GB-SoniaNeural", label: "Sonia（女）" },
+      { id: "en-GB-LibbyNeural", label: "Libby（女）" },
+      { id: "en-GB-RyanNeural", label: "Ryan（男）" },
+      { id: "en-GB-ThomasNeural", label: "Thomas（男）" },
+    ],
+  },
+  {
+    group: "澳洲英语",
+    voices: [
+      { id: "en-AU-NatashaNeural", label: "Natasha（女）" },
+      { id: "en-AU-WilliamMultilingualNeural", label: "William（男）" },
+    ],
+  },
+  {
+    group: "加拿大英语",
+    voices: [
+      { id: "en-CA-ClaraNeural", label: "Clara（女）" },
+      { id: "en-CA-LiamNeural", label: "Liam（男）" },
+    ],
+  },
+  {
+    group: "印度英语",
+    voices: [
+      { id: "en-IN-NeerjaNeural", label: "Neerja（女）" },
+      { id: "en-IN-PrabhatNeural", label: "Prabhat（男）" },
+    ],
+  },
+  {
+    group: "爱尔兰英语",
+    voices: [
+      { id: "en-IE-EmilyNeural", label: "Emily（女）" },
+      { id: "en-IE-ConnorNeural", label: "Connor（男）" },
+    ],
+  },
+  {
+    group: "中文 · 普通话",
+    voices: [
+      { id: "zh-CN-XiaoxiaoNeural", label: "晓晓（女）" },
+      { id: "zh-CN-XiaoyiNeural", label: "晓伊（女）" },
+      { id: "zh-CN-YunxiNeural", label: "云希（男）" },
+      { id: "zh-CN-YunjianNeural", label: "云健（男）" },
+      { id: "zh-CN-YunyangNeural", label: "云扬（男）" },
+    ],
+  },
+  {
+    group: "中文 · 台湾 / 粤语",
+    voices: [
+      { id: "zh-TW-HsiaoChenNeural", label: "曉臻 · 台湾（女）" },
+      { id: "zh-TW-YunJheNeural", label: "雲哲 · 台湾（男）" },
+      { id: "zh-HK-HiuMaanNeural", label: "曉曼 · 粤语（女）" },
+      { id: "zh-HK-WanLungNeural", label: "雲龍 · 粤语（男）" },
+    ],
+  },
+];
+
+/** Flat set of valid picker voice ids — used to validate a persisted choice. */
+export const EDGE_VOICE_IDS: ReadonlySet<string> = new Set(
+  EDGE_VOICE_GROUPS.flatMap((g) => g.voices.map((v) => v.id)),
+);
+
 export interface EdgeSynthOptions {
   voice: string;
   rate?: number; // multiplier; default 1 (converted to the +N% Edge expects)

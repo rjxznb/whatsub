@@ -68,8 +68,40 @@ const BAR_W = 600;
 const BAR_H = 50;
 const STRETCH_MS = 280;
 const DRAG_THRESHOLD_PX = 5;
+// Drop the icon within this many px of the left/right edge to "dock" it: the
+// icon hides and only a thin highlight line remains; hover pops it back out.
+const DOCK_SNAP_PX = 14;
 const ICON_POS_KEY = "agentIconPos";
 const BAR_POS_KEY = "agentBarPos";
+const ICON_DOCK_KEY = "agentIconDock";
+
+type DockEdge = "left" | "right" | null;
+
+function loadDock(): DockEdge {
+  try {
+    const v = localStorage.getItem(ICON_DOCK_KEY);
+    if (v === "left" || v === "right") return v;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function saveDock(edge: DockEdge) {
+  try {
+    if (edge) localStorage.setItem(ICON_DOCK_KEY, edge);
+    else localStorage.removeItem(ICON_DOCK_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Which edge (if any) the icon should dock to given its resting x. */
+function dockEdgeFor(x: number): DockEdge {
+  if (x <= DOCK_SNAP_PX) return "left";
+  if (x >= viewportW() - ICON_W - DOCK_SNAP_PX) return "right";
+  return null;
+}
 
 function viewportW(): number {
   return typeof window === "undefined" ? 1024 : window.innerWidth;
@@ -167,6 +199,9 @@ export function ChatBar({
   // Disables the size CSS-transition while actively resizing so the panel
   // tracks the cursor 1:1 (same reason `dragging` disables it for moves).
   const [resizing, setResizing] = useState(false);
+  // When set, the icon is collapsed to a thin highlight line at that edge;
+  // hover pops it out, dragging it away undocks.
+  const [dockedEdge, setDockedEdge] = useState<DockEdge>(() => loadDock());
 
   // Re-clamp on viewport resize so a previously-fine position doesn't end up
   // off-screen after the user resizes the Tauri window.
@@ -327,6 +362,10 @@ export function ChatBar({
         if (drag.mode === "icon") {
           setIconPos((p) => {
             savePos(ICON_POS_KEY, p);
+            // Dragged to an edge → dock (collapse to a highlight line).
+            const edge = dockEdgeFor(p.x);
+            setDockedEdge(edge);
+            saveDock(edge);
             return p;
           });
         } else {
@@ -398,6 +437,114 @@ export function ChatBar({
     document.addEventListener("mouseup", onUp);
   };
 
+  // Drag/click for the DOCKED (popped-out) icon: a real drag UNdocks and moves
+  // it back into the canvas; a plain click opens the panel.
+  const onDockedIconMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startMouse = { x: e.clientX, y: e.clientY };
+    const startX = dockedEdge === "left" ? 0 : viewportW() - ICON_W;
+    const startPos = { x: startX, y: iconPos.y };
+    let moved = false;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startMouse.x;
+      const dy = ev.clientY - startMouse.y;
+      if (
+        !moved &&
+        (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX)
+      ) {
+        moved = true;
+        setDragging(true);
+        setDockedEdge(null); // undock as soon as a real drag begins
+        saveDock(null);
+      }
+      if (!moved) return;
+      setIconPos(
+        clampToViewport({ x: startPos.x + dx, y: startPos.y + dy }, ICON_W, ICON_H),
+      );
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setDragging(false);
+      if (moved) {
+        setIconPos((p) => {
+          savePos(ICON_POS_KEY, p);
+          return p;
+        });
+      } else {
+        onModeChange("panel");
+      }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  // ── icon: docked to an edge ──────────────────────────────────────────
+  // Collapsed to a thin blue highlight line; hovering pops the icon out,
+  // dragging the popped icon away undocks it.
+  if (mode === "icon" && dockedEdge) {
+    const side = dockedEdge;
+    const dockStyle: React.CSSProperties = {
+      top: iconPos.y,
+      width: 12,
+      height: ICON_H,
+    };
+    if (side === "left") dockStyle.left = 0;
+    else dockStyle.right = 0;
+    return (
+      <div
+        className="fixed z-50 group select-none"
+        style={dockStyle}
+        onMouseDown={onDockedIconMouseDown}
+        role="button"
+        aria-label="打开 AI 助手"
+        title="AI 助手 · 悬停展开 · 拖拽拉出"
+      >
+        {/* highlight line — the only thing visible at rest */}
+        <span
+          aria-hidden
+          data-testid="agent-dock-line"
+          className={
+            "absolute top-0 h-full w-1.5 bg-blue-500 shadow-[0_0_10px_2px_rgba(59,130,246,0.75)] " +
+            "transition-opacity duration-200 group-hover:opacity-0 " +
+            (side === "left" ? "left-0 rounded-r-full" : "right-0 rounded-l-full")
+          }
+        />
+        {/* icon — hidden off the edge, slides in on hover */}
+        <div
+          className={
+            "absolute top-0 transition-transform duration-200 ease-out " +
+            "cursor-grab active:cursor-grabbing " +
+            (side === "left"
+              ? "left-0 -translate-x-[52px] group-hover:translate-x-0"
+              : "right-0 translate-x-[52px] group-hover:translate-x-0")
+          }
+          style={{ width: ICON_W, height: ICON_H }}
+        >
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-full bg-blue-500/50 blur-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 scale-150"
+          />
+          <img
+            src={whatsubIcon}
+            alt="打开 AI 助手"
+            width={ICON_W}
+            height={ICON_H}
+            draggable={false}
+            className="relative block h-full w-full rounded drop-shadow-lg"
+          />
+          {hasUnread && (
+            <span
+              data-testid="agent-unread-dot"
+              className="absolute top-0 right-0 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-zinc-900"
+              aria-hidden="true"
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // ── icon ───────────────────────────────────────────────────────────
   // Bare logo, no chrome — relies on drop-shadow to stay visible on bright
   // video backgrounds. Hover lift via scale-110.
@@ -410,7 +557,7 @@ export function ChatBar({
         aria-expanded={false}
         title="AI 助手 · 找 YouTube 视频 / 解释字幕 / 加生词 / 同步管理库&#10;点击展开输入框 · 长按拖动移动位置"
         onMouseDown={onContainerMouseDown}
-        className="fixed z-50 select-none cursor-grab active:cursor-grabbing"
+        className="fixed z-50 select-none cursor-grab active:cursor-grabbing group"
         style={{
           top: iconPos.y,
           left: iconPos.x,
@@ -418,13 +565,18 @@ export function ChatBar({
           height: ICON_H,
         }}
       >
+        {/* hover halo */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 rounded-full bg-blue-500/50 blur-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 scale-150"
+        />
         <img
           src={whatsubIcon}
           alt="打开 AI 助手"
           width={ICON_W}
           height={ICON_H}
           draggable={false}
-          className="block h-full w-full rounded drop-shadow-lg hover:scale-110 transition-transform"
+          className="relative block h-full w-full rounded drop-shadow-lg group-hover:scale-110 transition-transform"
         />
         {hasUnread && (
           <span

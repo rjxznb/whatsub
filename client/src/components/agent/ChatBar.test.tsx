@@ -26,6 +26,7 @@ beforeEach(() => {
   try {
     localStorage.removeItem("agentIconPos");
     localStorage.removeItem("agentBarPos");
+    localStorage.removeItem("agentIconDock");
   } catch {
     /* ignore */
   }
@@ -44,6 +45,19 @@ describe("ChatBar — mode rendering", () => {
     expect(
       screen.getByRole("button", { name: "打开 AI 助手" }),
     ).toBeTruthy();
+  });
+
+  it("icon docked: renders the edge highlight line", () => {
+    localStorage.setItem("agentIconDock", "right");
+    render(<ChatBar {...defaults({ mode: "icon" })} />);
+    expect(screen.getByTestId("agent-dock-line")).toBeTruthy();
+    // still discoverable as the AI button (the popped icon is just hidden)
+    expect(screen.getByRole("button", { name: "打开 AI 助手" })).toBeTruthy();
+  });
+
+  it("icon not docked: no highlight line", () => {
+    render(<ChatBar {...defaults({ mode: "icon" })} />);
+    expect(screen.queryByTestId("agent-dock-line")).toBeNull();
   });
 
   it("icon mode: hasUnread renders the unread dot", () => {

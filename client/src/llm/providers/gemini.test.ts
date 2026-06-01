@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+
+// gemini.ts fetches via @tauri-apps/plugin-http (Rust-side, to bypass the
+// WebView CSP/CORS); mock it. vi.hoisted survives vi.mock's top-of-file hoist.
+const { mockFetch } = vi.hoisted(() => ({ mockFetch: vi.fn() }));
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mockFetch }));
+
 import {
   createGeminiProvider,
   formatHistory,
@@ -10,7 +16,7 @@ import { DEFAULT_SETTINGS } from "../../types/settings";
 import type { AgentEvent } from "../../agent/types";
 import type { Message } from "../../types/agent";
 
-beforeEach(() => vi.restoreAllMocks());
+beforeEach(() => mockFetch.mockReset());
 
 function makeStream(chunks: string[]) {
   const encoder = new TextEncoder();
@@ -27,7 +33,7 @@ describe("gemini provider", () => {
     const body =
       `data: {"candidates":[{"content":{"parts":[{"text":"hel"}]}}]}\n\n` +
       `data: {"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}\n\n`;
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    mockFetch.mockResolvedValue(
       new Response(makeStream([body]), { status: 200 })
     );
     const p = createGeminiProvider({

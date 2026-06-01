@@ -28,34 +28,36 @@ const RMS_FULL_SCALE = 0.13;
 
 // ── Orb ───────────────────────────────────────────────────────────────────────
 
-/** Siri-style iridescent orb — a layered port of the iOS VoiceOrbView:
- *  a bright cyan/white emissive body with soft pink wisp ellipses and a white
- *  swoosh brushstroke, all blurred (no hard conic seams). The whole orb scales
- *  with mic level (the size IS the listening signal). A warm palette shift is
- *  used only while transcribing. */
+/** Light-blue Siri-style orb: a fixed-size sky-blue emissive body (white-blue
+ *  center → 天空蓝) with a white swoosh + light-blue wisp + glass sheen. The
+ *  BODY size stays constant; the volume only drives how far the soft light-blue
+ *  glow RADIATES outward (scale + brightness). */
 function Orb({ state, level }: { state: VoiceState; level: number }) {
   const active = state !== "error";
-  const warm = state === "transcribing";
 
-  // The orb visibly GROWS with the voice — the size IS the listening signal.
-  // The mic reports level only ~4×/sec, so we ease the rendered scale toward it
-  // at 60fps (written straight to the node to avoid a per-frame re-render),
-  // attack faster than release for a punchy Siri-like pulse. `level` is already
-  // normalized to 0..1 by VoiceMode.
-  const wrapRef = useRef<HTMLDivElement>(null);
+  // The mic reports level only ~4×/sec, so we ease toward it at 60fps and write
+  // straight to the GLOW node (no per-frame re-render): the glow scales +
+  // brightens with volume, the body never moves. Fast attack, slower release;
+  // a subtle idle breath keeps it alive when quiet. `level` is 0..1 already.
+  const glowRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef(0);
-  targetRef.current = Math.min(1, Math.max(0, level));
+  targetRef.current = active ? Math.min(1, Math.max(0, level)) : 0;
   const dispRef = useRef(0);
   useEffect(() => {
     let raf = 0;
-    const tick = () => {
+    const tick = (ts: number) => {
       const t = targetRef.current;
       const d = dispRef.current;
       const k = t > d ? 0.35 : 0.12; // fast attack, slower release
       const next = d + (t - d) * k;
       dispRef.current = next;
-      const el = wrapRef.current;
-      if (el) el.style.transform = `scale(${(1 + next * 0.75).toFixed(4)})`;
+      const g = glowRef.current;
+      if (g) {
+        const breath = 1 + Math.sin(ts / 1500) * 0.05; // gentle idle pulse
+        const radiate = 1 + next * 1.0; // glow expands up to ~+100% on loud voice
+        g.style.transform = `scale(${(breath * radiate).toFixed(4)})`;
+        g.style.opacity = (0.4 + next * 0.55).toFixed(3); // brighter when louder
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -63,31 +65,29 @@ function Orb({ state, level }: { state: VoiceState; level: number }) {
   }, []);
 
   const SIZE = 120;
-  const HALO = SIZE * 1.8;
+  const HALO = SIZE * 1.9;
 
-  // Palette (sky-cyan/pink normally; warm amber while transcribing).
-  const bodyCenter = "rgba(245,252,255,1)";
-  const bodyMid = warm ? "rgba(255,206,112,1)" : "rgba(96,188,255,1)";
-  const bodyEdge = warm ? "rgba(238,168,68,0.9)" : "rgba(62,150,236,0.9)";
-  const pink = warm ? "rgba(255,170,72,0.92)" : "rgba(248,150,214,0.92)";
-  const glowCyan = warm ? "rgba(255,200,90," : "rgba(96,188,255,";
-  const glowPink = warm ? "rgba(255,150,60," : "rgba(248,150,214,";
-  const glowAlpha = 0.6;
+  // Light-blue palette. Body = 天空蓝 (sky blue); glow + wisp = lighter blue.
+  const bodyCenter = "rgba(232,245,255,1)"; // near-white blue highlight
+  const bodyMid = "rgba(125,200,255,1)"; // 天空蓝
+  const bodyEdge = "rgba(99,165,250,0.92)"; // soft light-blue edge
+  const wisp = "rgba(196,226,255,0.85)"; // light-blue tint wisp
+  const glow = "rgba(140,196,255,"; // 浅蓝 radiating glow
 
   return (
-    // transform is owned by the rAF loop above — intentionally NOT in style.
-    <div ref={wrapRef} className="relative pointer-events-none" style={{ width: HALO, height: HALO }}>
-      {/* 1. soft outer glow — cyan→pink halo, blurred, gently breathing */}
+    <div className="relative pointer-events-none" style={{ width: HALO, height: HALO }}>
+      {/* outer glow — light blue; the rAF loop owns its transform + opacity */}
       <div
-        className={active ? "absolute inset-0 animate-orb-glow-breathe" : "absolute inset-0"}
+        ref={glowRef}
+        className="absolute inset-0"
         style={{
           borderRadius: "9999px",
-          background: `radial-gradient(circle, ${glowCyan}${glowAlpha}) 0%, ${glowPink}0.28) 45%, transparent 70%)`,
-          filter: "blur(26px)",
+          background: `radial-gradient(circle, ${glow}0.85) 0%, ${glow}0.3) 45%, transparent 72%)`,
+          filter: "blur(24px)",
         }}
       />
 
-      {/* orb circle: body + wisps + swoosh + highlight, clipped to a circle */}
+      {/* orb circle: fixed-size sky-blue body + wisps + swoosh + sheen */}
       <div
         className="absolute overflow-hidden rounded-full"
         style={{
@@ -97,17 +97,17 @@ function Orb({ state, level }: { state: VoiceState; level: number }) {
           left: "50%",
           transform: "translate(-50%, -50%)",
           opacity: active ? 1 : 0.5,
-          boxShadow: `0 0 40px 8px ${glowCyan}0.45), inset 0 0 30px rgba(255,255,255,0.22)`,
+          boxShadow: `0 0 36px 6px ${glow}0.4), inset 0 0 30px rgba(255,255,255,0.22)`,
         }}
       >
-        {/* 3. emissive body — near-white center → bright cyan → soft cyan edge */}
+        {/* emissive body — white-blue center → 天空蓝 → soft light-blue edge */}
         <div
           className="absolute inset-0"
           style={{
             background: `radial-gradient(circle at 45% 40%, ${bodyCenter} 0%, ${bodyMid} 42%, ${bodyEdge} 100%)`,
           }}
         />
-        {/* 2. pink wisp — rotating elongated ellipse (iridescent tint) */}
+        {/* light-blue wisp — rotating elongated ellipse for subtle motion */}
         <div className="absolute inset-0 grid place-items-center">
           <div
             className={active ? "animate-orb-wisp-a" : ""}
@@ -115,12 +115,12 @@ function Orb({ state, level }: { state: VoiceState; level: number }) {
               width: "118%",
               height: "55%",
               borderRadius: "9999px",
-              background: `linear-gradient(90deg, transparent 0%, ${pink} 50%, transparent 100%)`,
+              background: `linear-gradient(90deg, transparent 0%, ${wisp} 50%, transparent 100%)`,
               filter: "blur(13px)",
             }}
           />
         </div>
-        {/* 4. white swoosh — counter-rotating bright brushstroke */}
+        {/* white swoosh — counter-rotating bright brushstroke */}
         <div className="absolute inset-0 grid place-items-center">
           <div
             className={active ? "animate-orb-wisp-b" : ""}
@@ -129,13 +129,13 @@ function Orb({ state, level }: { state: VoiceState; level: number }) {
               height: "42%",
               borderRadius: "9999px",
               background:
-                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.95) 50%, transparent 100%)",
+                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.92) 50%, transparent 100%)",
               filter: "blur(8px)",
               mixBlendMode: "screen",
             }}
           />
         </div>
-        {/* 5. glass sheen — small bright spot upper-left */}
+        {/* glass sheen — small bright spot upper-left */}
         <div
           className="absolute inset-0"
           style={{

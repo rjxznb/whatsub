@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+
+// openaiCompatible.ts fetches via @tauri-apps/plugin-http (Rust-side, to bypass
+// the WebView CSP/CORS); mock it. vi.hoisted survives vi.mock's top-of-file hoist.
+const { mockFetch } = vi.hoisted(() => ({ mockFetch: vi.fn() }));
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mockFetch }));
+
 import {
   createOpenAICompatibleProvider,
   formatHistory,
@@ -11,7 +17,7 @@ import type { AgentEvent } from "../../agent/types";
 import type { Message } from "../../types/agent";
 
 beforeEach(() => {
-  vi.restoreAllMocks();
+  mockFetch.mockReset();
 });
 
 function makeStream(chunks: string[]): ReadableStream<Uint8Array> {
@@ -31,7 +37,7 @@ describe("openaiCompatible provider", () => {
       `data: {"choices":[{"delta":{"content":"lo"}}]}\n\n` +
       `data: [DONE]\n\n`;
 
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    mockFetch.mockResolvedValue(
       new Response(makeStream([sseLines]), { status: 200 })
     );
 
@@ -48,7 +54,7 @@ describe("openaiCompatible provider", () => {
   });
 
   it("throws on non-2xx", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("bad", { status: 401 }));
+    mockFetch.mockResolvedValue(new Response("bad", { status: 401 }));
     const provider = createOpenAICompatibleProvider({
       ...DEFAULT_SETTINGS,
       openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },

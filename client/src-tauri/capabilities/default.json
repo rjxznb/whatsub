@@ -19,9 +19,17 @@
     "dialog:allow-ask",
     {
       "identifier": "http:default",
+      "comment": "LLM providers are reached via plugin-http (Rust) to bypass the WebView CSP/CORS. Custom OpenAI-compatible baseURLs are user-configurable, so any https host must be allowed; the explicit hosts are the built-in presets.",
       "allow": [
         { "url": "https://api.anthropic.com/*" },
-        { "url": "https://whatsub.eversay.cc/*" }
+        { "url": "https://api.deepseek.com/*" },
+        { "url": "https://api.openai.com/*" },
+        { "url": "https://generativelanguage.googleapis.com/*" },
+        { "url": "https://api.moonshot.cn/*" },
+        { "url": "https://open.bigmodel.cn/*" },
+        { "url": "https://dashscope.aliyuncs.com/*" },
+        { "url": "https://whatsub.eversay.cc/*" },
+        { "url": "https://*/*" }
       ]
     },
     "updater:default",

@@ -12,6 +12,12 @@ import type {
   Message,
   ToolMessage,
 } from "../../types/agent";
+// Use the Rust-side fetch (plugin-http) instead of the WebView fetch: the
+// packaged app's CSP `connect-src` doesn't (and can't, for user-configured
+// baseURLs) whitelist arbitrary LLM hosts, so a WebView fetch to e.g.
+// api.deepseek.com is blocked with a bare "Failed to fetch". Routing through
+// Rust bypasses both the CSP and CORS (same as the Claude provider).
+import { fetch } from "@tauri-apps/plugin-http";
 
 export function createOpenAICompatibleProvider(
   settings: Settings,

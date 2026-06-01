@@ -7,6 +7,9 @@ import type {
 import type { Settings } from "../../types/settings";
 import type { AgentEvent } from "../../agent/types";
 import type { Message, ToolMessage } from "../../types/agent";
+// Rust-side fetch (plugin-http) — bypasses the WebView CSP/CORS so the packaged
+// app can reach generativelanguage.googleapis.com (same as the Claude provider).
+import { fetch } from "@tauri-apps/plugin-http";
 
 export function createGeminiProvider(settings: Settings): Provider & AgentProvider {
   const cfg = settings.gemini;

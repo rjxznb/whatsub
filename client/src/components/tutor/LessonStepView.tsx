@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX, RotateCcw, Play, Pause, X } from "lucide-react";
+import { Volume2, VolumeX, RotateCcw, Play, Pause, X, Loader2 } from "lucide-react";
 import type { LessonRuntime } from "../../tutor/lessonRuntime";
 import {
   ttsSpeak,
@@ -41,6 +41,9 @@ interface Props {
   /** Exit the lesson (same as Esc). Progress is persisted, so reopening shows
    *  the resume banner. Optional for tests. */
   onExit?: () => void;
+  /** True while an LLM step (explanation / question / feedback) is generating —
+   *  shows a spinner on the action button + disables it. */
+  busy?: boolean;
 }
 
 /** Renders the current step of the lesson runtime. The tutor "speaks" its
@@ -56,7 +59,15 @@ export function LessonStepView({
   onSubmitAnswer,
   onStopVideo,
   onExit,
+  busy,
 }: Props) {
+  // Spinner shown inside the action button while the tutor generates the next
+  // step's content (LLM call). Keeps the lesson from looking frozen.
+  const spinner = (
+    <span className="inline-flex items-center gap-1.5">
+      <Loader2 size={14} className="animate-spin" /> 生成中…
+    </span>
+  );
   const [draft, setDraft] = useState("");
   const [muted, setMuted] = useState(() => !isTtsEnabled());
   const [speaking, setSpeaking] = useState(false);
@@ -312,13 +323,23 @@ export function LessonStepView({
             先听这一句，试着理解它在说什么。
           </p>
           <div className="flex gap-2 justify-end">
-            <button type="button" onClick={onReplayCue} className={BTN_SUBTLE}>
+            <button
+              type="button"
+              onClick={onReplayCue}
+              disabled={busy}
+              className={BTN_SUBTLE}
+            >
               <span className="inline-flex items-center gap-1.5">
                 <Play size={13} /> 重听原句
               </span>
             </button>
-            <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
-              我准备好了
+            <button
+              type="button"
+              onClick={onContinue}
+              disabled={busy}
+              className={BTN_PRIMARY}
+            >
+              {busy ? spinner : "我准备好了"}
             </button>
           </div>
         </div>
@@ -335,8 +356,13 @@ export function LessonStepView({
           )}
           {currentExplainText && (
             <div className="flex justify-end">
-              <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
-                下一步
+              <button
+                type="button"
+                onClick={onContinue}
+                disabled={busy}
+                className={BTN_PRIMARY}
+              >
+                {busy ? spinner : "下一步"}
               </button>
             </div>
           )}
@@ -365,10 +391,10 @@ export function LessonStepView({
                 setDraft("");
                 onSubmitAnswer(answer);
               }}
-              disabled={draft.trim().length === 0}
+              disabled={draft.trim().length === 0 || busy}
               className={BTN_PRIMARY}
             >
-              提交答案
+              {busy ? spinner : "提交答案"}
             </button>
           </div>
         </div>

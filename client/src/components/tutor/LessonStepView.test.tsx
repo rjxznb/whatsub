@@ -108,6 +108,23 @@ describe("LessonStepView", () => {
     expect(screen.getByText("Sonia（女）")).toBeTruthy();
   });
 
+  it("busy: shows the generating spinner + disables the action button", () => {
+    render(
+      <LessonStepView
+        runtime={makeRuntime({ currentStep: 1 })}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onReplayCue={vi.fn()}
+        onSubmitAnswer={vi.fn()}
+        busy
+      />,
+    );
+    expect(screen.getByText("生成中…")).toBeTruthy();
+    // the primary action is disabled while generating
+    const btn = screen.getByText("生成中…").closest("button");
+    expect(btn?.disabled).toBe(true);
+  });
+
   it("calls onExit when the exit button is clicked", () => {
     const onExit = vi.fn();
     render(

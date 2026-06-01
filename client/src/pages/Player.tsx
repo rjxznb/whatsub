@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, GraduationCap, FileOutput, RefreshCw } from "lucide-react";
+import { ArrowLeft, GraduationCap, FileOutput, RefreshCw, Loader2 } from "lucide-react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
@@ -1092,6 +1092,16 @@ export function Player() {
           }
           onClose={() => setShowExportVideo(false)}
         />
+      )}
+
+      {/* 精讲: loading overlay while the lesson plan is generated (LLM call). */}
+      {tutorPreparing && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-900 px-9 py-7 shadow-2xl animate-agent-popover-in">
+            <Loader2 className="h-7 w-7 animate-spin text-blue-400" />
+            <div className="text-sm text-zinc-300">正在生成精讲计划…</div>
+          </div>
+        </div>
       )}
     </div>
   );

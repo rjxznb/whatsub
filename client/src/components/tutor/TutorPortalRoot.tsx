@@ -76,6 +76,9 @@ export function TutorPortalRoot() {
   const remRuntimeRef = useRef<RemediationRuntime | null>(null);
   const [, forceRender] = useState(0);
   const tick = () => forceRender((v) => v + 1);
+  // True while a lesson step's LLM call (explain / question / feedback) is in
+  // flight — drives the spinner on the lesson card's action button.
+  const [lessonBusy, setLessonBusy] = useState(false);
   const [rpReport, setRpReport] = useState<ForensicReport | null>(null);
 
   // Reset all imperative runtime refs when the overlay closes (mode → "none").
@@ -146,6 +149,7 @@ export function TutorPortalRoot() {
       <LessonOverlay open onClose={close}>
         <LessonStepView
           runtime={r}
+          busy={lessonBusy}
           onExit={close}
           onStopVideo={() => usePlayerState.getState().pauseHandler?.()}
           onReplayCue={() => {
@@ -168,16 +172,31 @@ export function TutorPortalRoot() {
             tick();
           }}
           onSubmitAnswer={async (ans) => {
-            await r.submitAnswer(ans);
+            setLessonBusy(true); // 批改中…
+            try {
+              await r.submitAnswer(ans);
+            } finally {
+              setLessonBusy(false);
+            }
             tick();
           }}
           onContinue={async () => {
             switch (r.state.currentStep) {
               case 1:
-                await r.advanceToExplain();
+                setLessonBusy(true); // generating the explanation
+                try {
+                  await r.advanceToExplain();
+                } finally {
+                  setLessonBusy(false);
+                }
                 break;
               case 2:
-                await r.advanceToQuestion();
+                setLessonBusy(true); // generating the question
+                try {
+                  await r.advanceToQuestion();
+                } finally {
+                  setLessonBusy(false);
+                }
                 break;
               case 5: {
                 if (r.hasNextAnchor()) {

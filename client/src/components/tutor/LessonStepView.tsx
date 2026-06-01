@@ -139,11 +139,15 @@ export function LessonStepView({
             >
               <span
                 className={
-                  "h-1.5 w-1.5 rounded-full " +
+                  "h-1.5 w-1.5 rounded-full shrink-0 " +
                   (ttsEngine === "edge" ? "bg-emerald-400" : "bg-amber-400")
                 }
               />
-              {ttsEngine === "edge" ? "在线神经音" : "本地音"}
+              <span className="max-w-[220px] truncate">
+                {ttsEngine === "edge"
+                  ? "在线神经音"
+                  : `本地音 · ${ttsReason}`}
+              </span>
             </span>
           )}
           {!muted && (

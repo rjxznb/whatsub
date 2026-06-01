@@ -217,7 +217,10 @@ export async function ttsSpeak(
   }
   if (handled || _cancelled) return;
   // Edge failed → local Web Speech fallback. Record why so the UI can show it.
-  useTtsStatus.getState().set("local", _lastEdgeError || "edge-tts 不可用");
+  const reason = _lastEdgeError || "edge-tts 不可用";
+  useTtsStatus.getState().set("local", reason);
+  // eslint-disable-next-line no-console
+  console.warn("[tts] edge-tts failed → local Web Speech fallback. reason:", reason);
   await webSpeechSpeak(clean, opts);
 }
 

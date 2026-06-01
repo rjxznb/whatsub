@@ -7,8 +7,10 @@ import {
   ttsPause,
   ttsResume,
   ttsSetRate,
-  getTtsVoice,
-  setTtsVoice,
+  getTtsVoiceZh,
+  getTtsVoiceEn,
+  setTtsVoiceZh,
+  setTtsVoiceEn,
   isTtsEnabled,
   setTtsEnabled,
   getTtsRate,
@@ -56,7 +58,8 @@ export function LessonStepView({
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [rate, setRate] = useState(() => getTtsRate());
-  const [voice, setVoice] = useState(() => getTtsVoice());
+  const [voiceZh, setVoiceZh] = useState(() => getTtsVoiceZh());
+  const [voiceEn, setVoiceEn] = useState(() => getTtsVoiceEn());
 
   const {
     currentStep,
@@ -166,40 +169,15 @@ export function LessonStepView({
 
   return (
     <div className={`${TUTOR_CARD} w-full max-w-[640px] p-7`}>
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-baseline gap-3 min-w-0">
           <span className={TUTOR_EYEBROW}>
             教学点 {currentAnchorIdx + 1} / {totalAnchors}
           </span>
           <span className="text-sm text-zinc-400 truncate">{anchor?.topic}</span>
         </div>
-        {/* Voice controls: accent picker + rate slider + pause/resume + replay + mute. */}
+        {/* Transport: rate slider + pause/resume + replay + mute. */}
         <div className="flex items-center gap-2 shrink-0">
-          {!muted && (
-            <select
-              value={voice}
-              onChange={(e) => {
-                const v = e.target.value;
-                setVoice(v);
-                setTtsVoice(v);
-                replaySpoken(); // re-read the current line in the new accent
-              }}
-              title="朗读口音"
-              aria-label="朗读口音"
-              className="max-w-[128px] bg-zinc-800/80 text-zinc-200 text-[11px] rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
-            >
-              <option value="">自动（按内容）</option>
-              {EDGE_VOICE_GROUPS.map((g) => (
-                <optgroup key={g.group} label={g.group}>
-                  {g.voices.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          )}
           {!muted && (
             <div className="flex items-center gap-1.5" title="语速">
               <input
@@ -255,6 +233,58 @@ export function LessonStepView({
           </button>
         </div>
       </div>
+
+      {/* Voice combo: one Chinese + one English voice. Mixed lines read each
+          language's runs in its own voice (a lone English voice skips Chinese). */}
+      {!muted && (
+        <div className="flex items-center gap-2 mb-5 text-[11px]">
+          <span className="text-zinc-500 shrink-0">朗读音色</span>
+          <select
+            value={voiceZh}
+            onChange={(e) => {
+              const v = e.target.value;
+              setVoiceZh(v);
+              setTtsVoiceZh(v);
+              replaySpoken();
+            }}
+            title="中文朗读音色"
+            aria-label="中文语音"
+            className="min-w-0 flex-1 bg-zinc-800/80 text-zinc-200 rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
+          >
+            {EDGE_VOICE_GROUPS.filter((g) => g.lang === "zh").map((g) => (
+              <optgroup key={g.group} label={g.group}>
+                {g.voices.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          <select
+            value={voiceEn}
+            onChange={(e) => {
+              const v = e.target.value;
+              setVoiceEn(v);
+              setTtsVoiceEn(v);
+              replaySpoken();
+            }}
+            title="英文朗读音色"
+            aria-label="英文语音"
+            className="min-w-0 flex-1 bg-zinc-800/80 text-zinc-200 rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
+          >
+            {EDGE_VOICE_GROUPS.filter((g) => g.lang === "en").map((g) => (
+              <optgroup key={g.group} label={g.group}>
+                {g.voices.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      )}
 
       {currentStep === 1 && (
         <div className="space-y-5">

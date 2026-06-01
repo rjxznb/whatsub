@@ -181,28 +181,59 @@ export function pickEdgeVoice(text: string): string {
   return latin > cjk ? EDGE_VOICE_EN : EDGE_VOICE_ZH;
 }
 
-// ── Voice preference (persisted) ─────────────────────────────────────────
-// "" = auto (pickEdgeVoice by dominant script); otherwise a specific edge-tts
-// voice id the user chose in the lesson accent dropdown.
-const TTS_VOICE_KEY = "tutor.ttsVoice";
+// ── Voice combo preference (persisted) ───────────────────────────────────
+// The user picks ONE Chinese voice + ONE English voice; mixed lines are read
+// with the combo (Chinese runs in the zh voice, English runs in the en voice).
+// A missing/invalid stored id falls back to the language's default voice.
+const TTS_VOICE_ZH_KEY = "tutor.ttsVoiceZh";
+const TTS_VOICE_EN_KEY = "tutor.ttsVoiceEn";
 
-/** The user's chosen edge-tts voice, or "" for auto. Falls back to "" if the
- *  stored id is no longer in the catalog. */
-export function getTtsVoice(): string {
+function readVoice(key: string, prefix: "zh-" | "en-", fallback: string): string {
   try {
-    const v = localStorage.getItem(TTS_VOICE_KEY) ?? "";
-    return v && EDGE_VOICE_IDS.has(v) ? v : "";
+    const v = localStorage.getItem(key) ?? "";
+    return v && v.startsWith(prefix) && EDGE_VOICE_IDS.has(v) ? v : fallback;
   } catch {
-    return "";
+    return fallback;
   }
 }
 
-export function setTtsVoice(id: string): void {
+/** Chosen Chinese voice id (resolved — defaults to 晓晓). */
+export function getTtsVoiceZh(): string {
+  return readVoice(TTS_VOICE_ZH_KEY, "zh-", EDGE_VOICE_ZH);
+}
+
+/** Chosen English voice id (resolved — defaults to Aria). */
+export function getTtsVoiceEn(): string {
+  return readVoice(TTS_VOICE_EN_KEY, "en-", EDGE_VOICE_EN);
+}
+
+export function setTtsVoiceZh(id: string): void {
   try {
-    localStorage.setItem(TTS_VOICE_KEY, id);
+    localStorage.setItem(TTS_VOICE_ZH_KEY, id);
   } catch {
     /* ignore */
   }
+}
+
+export function setTtsVoiceEn(id: string): void {
+  try {
+    localStorage.setItem(TTS_VOICE_EN_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Concatenate MP3 byte buffers into one (edge-tts CBR mp3 segments concatenate
+ *  into a playable stream — lets one <audio> play a multi-voice line). */
+function concatArrayBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
+  const total = buffers.reduce((n, b) => n + b.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const b of buffers) {
+    out.set(new Uint8Array(b), offset);
+    offset += b.byteLength;
+  }
+  return out.buffer;
 }
 
 async function edgeTtsSpeak(
@@ -213,26 +244,33 @@ async function edgeTtsSpeak(
   _currentAbort = ac;
   const rate = opts.rate ?? getTtsRate();
 
-  // ONE request, ONE continuous MP3 — a single voice reads the whole line
-  // (incl. embedded English) so there's no pause at language switches (separate
-  // per-segment clips each had padding silence → long gaps). The voice is the
-  // one matching the dominant script: 晓晓 for Chinese-dominant coaching, Aria
-  // for English-dominant.
+  // Read each language's runs in its OWN chosen voice: split the line into
+  // zh / en runs and synthesize each at NORMAL speed with the matching voice,
+  // then concatenate the MP3s into one clip. A pure-Chinese line is a single
+  // run (one request); only mixed lines split. This is what lets the user pick
+  // a Chinese voice + an English voice and hear the whole passage in the combo
+  // — a lone English voice can't pronounce Chinese and SKIPS it.
   //
-  // Synthesize at NORMAL speed (rate 1) and apply the user's speed client-side
-  // via audio.playbackRate below. Decoupling speed from synthesis is what lets
-  // the user pause/resume and drag the speed slider LIVE at the current
-  // position — baking the rate into the SSML would force a re-synth from the
-  // start on every change.
-  // The user's chosen accent overrides the automatic per-content pick.
-  const voice = getTtsVoice() || pickEdgeVoice(clean);
+  // Speed is NOT baked into the SSML (synthesize at rate 1) — it's applied
+  // client-side via audio.playbackRate below, so the user can pause/resume and
+  // drag the speed slider LIVE at the current position instead of re-synthing.
+  const zhVoice = getTtsVoiceZh();
+  const enVoice = getTtsVoiceEn();
+  const segs = splitByLang(clean);
+  const runs = segs.length ? segs : [{ text: clean, lang: "zh" as const }];
+
   let mp3: ArrayBuffer;
   try {
-    mp3 = await edgeSynthesize(clean, {
-      voice,
-      rate: 1,
-      signal: ac.signal,
-    });
+    const parts = await Promise.all(
+      runs.map((r) =>
+        edgeSynthesize(r.text, {
+          voice: r.lang === "zh" ? zhVoice : enVoice,
+          rate: 1,
+          signal: ac.signal,
+        }),
+      ),
+    );
+    mp3 = concatArrayBuffers(parts);
   } catch (e) {
     _lastEdgeError = e instanceof Error ? e.message : String(e);
     if (_currentAbort === ac) _currentAbort = null;
@@ -241,6 +279,11 @@ async function edgeTtsSpeak(
   if (_cancelled || ac.signal.aborted) {
     opts.onEnd?.();
     return true;
+  }
+  if (mp3.byteLength === 0) {
+    _lastEdgeError = "edge-tts: no audio";
+    if (_currentAbort === ac) _currentAbort = null;
+    return false;
   }
 
   const url = URL.createObjectURL(new Blob([mp3], { type: "audio/mpeg" }));

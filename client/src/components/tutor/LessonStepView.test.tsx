@@ -89,7 +89,7 @@ describe("LessonStepView", () => {
     expect(screen.queryByText(/\*\*/)).toBeNull();
   });
 
-  it("shows the accent picker with an 自动 default option", () => {
+  it("shows a Chinese + English voice picker defaulting to 晓晓 + Aria", () => {
     render(
       <LessonStepView
         runtime={makeRuntime({ currentStep: 2, currentExplainText: "讲解中" })}
@@ -99,10 +99,12 @@ describe("LessonStepView", () => {
         onSubmitAnswer={vi.fn()}
       />,
     );
-    const picker = screen.getByLabelText("朗读口音") as HTMLSelectElement;
-    expect(picker).toBeTruthy();
-    expect(screen.getByText("自动（按内容）")).toBeTruthy();
-    // a representative accent option is present
+    const zh = screen.getByLabelText("中文语音") as HTMLSelectElement;
+    const en = screen.getByLabelText("英文语音") as HTMLSelectElement;
+    expect(zh.value).toBe("zh-CN-XiaoxiaoNeural");
+    expect(en.value).toBe("en-US-AriaNeural");
+    // representative options from each language
+    expect(screen.getByText("云希（男）")).toBeTruthy();
     expect(screen.getByText("Sonia（女）")).toBeTruthy();
   });
 

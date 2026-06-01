@@ -22,16 +22,19 @@ import { invoke } from "@tauri-apps/api/core";
 export const EDGE_VOICE_ZH = "zh-CN-XiaoxiaoNeural"; // 晓晓 — warm female
 export const EDGE_VOICE_EN = "en-US-AriaNeural"; // Aria — natural female
 
-/** Curated edge-tts voices for the lesson accent picker, grouped by accent.
- *  Not the full ~300-voice catalog — these are the accents that matter for an
- *  English learner (US / UK / AU / CA / IN / IE) plus Chinese voices for the
- *  Chinese coaching. Picking one overrides the automatic per-content choice. */
+/** Curated edge-tts voices for the lesson accent picker, grouped by accent and
+ *  tagged with the language they read. Not the full ~300-voice catalog — these
+ *  are the accents that matter for an English learner (US / UK / AU / CA / IN /
+ *  IE) plus Chinese voices for the Chinese coaching. The user picks ONE Chinese
+ *  voice + ONE English voice; each language's runs are read in its voice. */
 export const EDGE_VOICE_GROUPS: {
   group: string;
+  lang: "zh" | "en";
   voices: { id: string; label: string }[];
 }[] = [
   {
     group: "美式英语",
+    lang: "en",
     voices: [
       { id: "en-US-AriaNeural", label: "Aria（女）" },
       { id: "en-US-JennyNeural", label: "Jenny（女）" },
@@ -43,6 +46,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "英式英语",
+    lang: "en",
     voices: [
       { id: "en-GB-SoniaNeural", label: "Sonia（女）" },
       { id: "en-GB-LibbyNeural", label: "Libby（女）" },
@@ -52,6 +56,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "澳洲英语",
+    lang: "en",
     voices: [
       { id: "en-AU-NatashaNeural", label: "Natasha（女）" },
       { id: "en-AU-WilliamMultilingualNeural", label: "William（男）" },
@@ -59,6 +64,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "加拿大英语",
+    lang: "en",
     voices: [
       { id: "en-CA-ClaraNeural", label: "Clara（女）" },
       { id: "en-CA-LiamNeural", label: "Liam（男）" },
@@ -66,6 +72,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "印度英语",
+    lang: "en",
     voices: [
       { id: "en-IN-NeerjaNeural", label: "Neerja（女）" },
       { id: "en-IN-PrabhatNeural", label: "Prabhat（男）" },
@@ -73,6 +80,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "爱尔兰英语",
+    lang: "en",
     voices: [
       { id: "en-IE-EmilyNeural", label: "Emily（女）" },
       { id: "en-IE-ConnorNeural", label: "Connor（男）" },
@@ -80,6 +88,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "中文 · 普通话",
+    lang: "zh",
     voices: [
       { id: "zh-CN-XiaoxiaoNeural", label: "晓晓（女）" },
       { id: "zh-CN-XiaoyiNeural", label: "晓伊（女）" },
@@ -90,6 +99,7 @@ export const EDGE_VOICE_GROUPS: {
   },
   {
     group: "中文 · 台湾 / 粤语",
+    lang: "zh",
     voices: [
       { id: "zh-TW-HsiaoChenNeural", label: "曉臻 · 台湾（女）" },
       { id: "zh-TW-YunJheNeural", label: "雲哲 · 台湾（男）" },

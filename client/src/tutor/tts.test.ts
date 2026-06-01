@@ -11,8 +11,10 @@ import {
   ttsPause,
   ttsResume,
   getTtsRate,
-  getTtsVoice,
-  setTtsVoice,
+  getTtsVoiceZh,
+  getTtsVoiceEn,
+  setTtsVoiceZh,
+  setTtsVoiceEn,
   TTS_RATE_MAX,
   TTS_RATE_MIN,
 } from "./tts";
@@ -125,15 +127,20 @@ describe("tts rate + pause controls", () => {
     }).not.toThrow();
   });
 
-  it("voice preference defaults to auto and persists a valid catalog id", () => {
-    expect(getTtsVoice()).toBe("");
-    setTtsVoice("en-GB-SoniaNeural");
-    expect(getTtsVoice()).toBe("en-GB-SoniaNeural");
+  it("voice combo defaults to 晓晓 + Aria and persists valid catalog ids", () => {
+    expect(getTtsVoiceZh()).toBe(EDGE_VOICE_ZH);
+    expect(getTtsVoiceEn()).toBe(EDGE_VOICE_EN);
+    setTtsVoiceZh("zh-CN-YunxiNeural");
+    setTtsVoiceEn("en-GB-SoniaNeural");
+    expect(getTtsVoiceZh()).toBe("zh-CN-YunxiNeural");
+    expect(getTtsVoiceEn()).toBe("en-GB-SoniaNeural");
   });
 
-  it("ignores an unknown voice id (falls back to auto)", () => {
-    setTtsVoice("not-a-real-voice");
-    expect(getTtsVoice()).toBe("");
+  it("rejects a wrong-language or unknown voice id (falls back to default)", () => {
+    setTtsVoiceZh("en-GB-SoniaNeural"); // English id in the Chinese slot
+    expect(getTtsVoiceZh()).toBe(EDGE_VOICE_ZH);
+    setTtsVoiceEn("not-a-real-voice");
+    expect(getTtsVoiceEn()).toBe(EDGE_VOICE_EN);
   });
 });
 

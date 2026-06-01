@@ -10,6 +10,7 @@
 // runs use a Chinese voice and English runs an English voice.
 
 import { edgeSynthesize, EDGE_VOICE_MULTI } from "./edgeTts";
+import { useTtsStatus } from "./ttsStatus";
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
 
@@ -130,6 +131,8 @@ export function splitByLang(
 let _currentAudio: HTMLAudioElement | null = null;
 let _currentAbort: AbortController | null = null;
 let _cancelled = false;
+// Why edge-tts last failed (surfaced as the local-fallback reason).
+let _lastEdgeError = "";
 
 /** Primary path: synthesize each language run via Edge neural TTS and play the
  *  MP3s in order. Returns true if it handled playback (firing onStart/onEnd as
@@ -154,7 +157,8 @@ async function edgeTtsSpeak(
       rate,
       signal: ac.signal,
     });
-  } catch {
+  } catch (e) {
+    _lastEdgeError = e instanceof Error ? e.message : String(e);
     if (_currentAbort === ac) _currentAbort = null;
     return false; // → fall back to Web Speech
   }
@@ -168,14 +172,16 @@ async function edgeTtsSpeak(
   _currentAudio = audio;
   try {
     await audio.play(); // resolves once playback begins; throws if blocked
-  } catch {
+  } catch (e) {
     // Autoplay blocked before any sound — fall back to Web Speech (not
     // subject to the autoplay policy).
+    _lastEdgeError = "音频自动播放被拦截: " + (e instanceof Error ? e.message : String(e));
     URL.revokeObjectURL(url);
     _currentAudio = null;
     if (_currentAbort === ac) _currentAbort = null;
     return false;
   }
+  useTtsStatus.getState().set("edge");
   opts.onStart?.();
   await new Promise<void>((res) => {
     audio.onended = () => res();
@@ -210,6 +216,8 @@ export async function ttsSpeak(
     handled = false;
   }
   if (handled || _cancelled) return;
+  // Edge failed → local Web Speech fallback. Record why so the UI can show it.
+  useTtsStatus.getState().set("local", _lastEdgeError || "edge-tts 不可用");
   await webSpeechSpeak(clean, opts);
 }
 

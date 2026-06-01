@@ -11,6 +11,7 @@ import {
   TTS_RATE_MIN,
   TTS_RATE_MAX,
 } from "../../tutor/tts";
+import { useTtsStatus } from "../../tutor/ttsStatus";
 import {
   TUTOR_CARD,
   TUTOR_EYEBROW,
@@ -45,6 +46,8 @@ export function LessonStepView({
   const [muted, setMuted] = useState(() => !isTtsEnabled());
   const [speaking, setSpeaking] = useState(false);
   const [rate, setRate] = useState(() => getTtsRate());
+  const ttsEngine = useTtsStatus((s) => s.engine);
+  const ttsReason = useTtsStatus((s) => s.reason);
 
   const {
     currentStep,
@@ -118,8 +121,31 @@ export function LessonStepView({
           </span>
           <span className="text-sm text-zinc-400 truncate">{anchor?.topic}</span>
         </div>
-        {/* Voice controls: rate slider (dev tuning) + replay + mute toggle. */}
+        {/* Voice controls: engine indicator + rate slider + replay + mute. */}
         <div className="flex items-center gap-2 shrink-0">
+          {!muted && ttsEngine !== "idle" && (
+            <span
+              title={
+                ttsEngine === "edge"
+                  ? "在线神经音 (edge-tts · 晓晓多语言)"
+                  : `本地系统语音（edge-tts 未启用）\n原因: ${ttsReason}`
+              }
+              className={
+                "flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full " +
+                (ttsEngine === "edge"
+                  ? "bg-emerald-500/15 text-emerald-300"
+                  : "bg-amber-500/15 text-amber-300")
+              }
+            >
+              <span
+                className={
+                  "h-1.5 w-1.5 rounded-full " +
+                  (ttsEngine === "edge" ? "bg-emerald-400" : "bg-amber-400")
+                }
+              />
+              {ttsEngine === "edge" ? "在线神经音" : "本地音"}
+            </span>
+          )}
           {!muted && (
             <div className="flex items-center gap-1.5" title="语速">
               <input

@@ -237,52 +237,58 @@ export function LessonStepView({
       {/* Voice combo: one Chinese + one English voice. Mixed lines read each
           language's runs in its own voice (a lone English voice skips Chinese). */}
       {!muted && (
-        <div className="flex items-center gap-2 mb-5 text-[11px]">
+        <div className="flex items-center gap-3 mb-5 text-[11px]">
           <span className="text-zinc-500 shrink-0">朗读音色</span>
-          <select
-            value={voiceZh}
-            onChange={(e) => {
-              const v = e.target.value;
-              setVoiceZh(v);
-              setTtsVoiceZh(v);
-              replaySpoken();
-            }}
-            title="中文朗读音色"
-            aria-label="中文语音"
-            className="min-w-0 flex-1 bg-zinc-800/80 text-zinc-200 rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
-          >
-            {EDGE_VOICE_GROUPS.filter((g) => g.lang === "zh").map((g) => (
-              <optgroup key={g.group} label={g.group}>
-                {g.voices.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-          <select
-            value={voiceEn}
-            onChange={(e) => {
-              const v = e.target.value;
-              setVoiceEn(v);
-              setTtsVoiceEn(v);
-              replaySpoken();
-            }}
-            title="英文朗读音色"
-            aria-label="英文语音"
-            className="min-w-0 flex-1 bg-zinc-800/80 text-zinc-200 rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
-          >
-            {EDGE_VOICE_GROUPS.filter((g) => g.lang === "en").map((g) => (
-              <optgroup key={g.group} label={g.group}>
-                {g.voices.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          <label className="flex items-center gap-1.5 min-w-0 flex-1">
+            <span className="text-zinc-400 shrink-0">中文</span>
+            <select
+              value={voiceZh}
+              onChange={(e) => {
+                const v = e.target.value;
+                setVoiceZh(v);
+                setTtsVoiceZh(v);
+                replaySpoken();
+              }}
+              title="中文朗读音色"
+              aria-label="中文语音"
+              className="min-w-0 flex-1 bg-zinc-800/80 text-zinc-200 rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
+            >
+              {EDGE_VOICE_GROUPS.filter((g) => g.lang === "zh").map((g) => (
+                <optgroup key={g.group} label={g.group}>
+                  {g.voices.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 min-w-0 flex-1">
+            <span className="text-zinc-400 shrink-0">英文</span>
+            <select
+              value={voiceEn}
+              onChange={(e) => {
+                const v = e.target.value;
+                setVoiceEn(v);
+                setTtsVoiceEn(v);
+                replaySpoken();
+              }}
+              title="英文朗读音色"
+              aria-label="英文语音"
+              className="min-w-0 flex-1 bg-zinc-800/80 text-zinc-200 rounded-md px-1.5 py-1 border border-zinc-700/70 focus:outline-none focus:border-blue-500/60 cursor-pointer"
+            >
+              {EDGE_VOICE_GROUPS.filter((g) => g.lang === "en").map((g) => (
+                <optgroup key={g.group} label={g.group}>
+                  {g.voices.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
         </div>
       )}
 

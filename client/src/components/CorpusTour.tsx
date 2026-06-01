@@ -3,9 +3,8 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-const PLUGIN_DOWNLOAD_URL = "https://whatsub.eversay.cc/download/plugin";
-// "了解更多功能" target — the plugin's feature/landing page where the user
-// can watch full walkthroughs. Adjust if the public URL changes.
+// The plugin's website — install instructions + feature walkthroughs. Both
+// the "下载插件" and "了解更多功能" buttons go here. Adjust if the URL changes.
 const PLUGIN_WEBSITE_URL = "https://whatsub.eversay.cc/plugin";
 
 interface Slide {
@@ -56,12 +55,7 @@ export function CorpusTour({ onDismiss }: Props) {
   const last = SLIDES.length - 1;
   const go = (next: number) => setPage(Math.max(0, Math.min(last, next)));
 
-  function download() {
-    openUrl(PLUGIN_DOWNLOAD_URL).catch((err) =>
-      console.error("open plugin download failed", err)
-    );
-  }
-  function openWebsite() {
+  function openPluginSite() {
     openUrl(PLUGIN_WEBSITE_URL).catch((err) =>
       console.error("open plugin website failed", err)
     );
@@ -177,28 +171,14 @@ export function CorpusTour({ onDismiss }: Props) {
           </button>
         </div>
 
-        {/* Actions */}
-        <div className="px-6 py-5 flex items-center gap-2">
+        {/* Action — single CTA to the plugin website (✕ / backdrop dismiss). */}
+        <div className="px-6 py-5">
           <button
             type="button"
-            onClick={download}
-            className="flex-1 px-4 py-2 bg-amber-400/15 border border-amber-400/50 text-amber-100 rounded-lg hover:bg-amber-400/25 transition-colors text-sm font-medium"
+            onClick={openPluginSite}
+            className="w-full px-4 py-2 bg-amber-400/15 border border-amber-400/50 text-amber-100 rounded-lg hover:bg-amber-400/25 transition-colors text-sm font-medium"
           >
             下载插件
-          </button>
-          <button
-            type="button"
-            onClick={openWebsite}
-            className="flex-1 px-4 py-2 bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-lg hover:bg-zinc-700 transition-colors text-sm"
-          >
-            了解更多功能 →
-          </button>
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="px-4 py-2 text-zinc-400 hover:text-zinc-200 transition-colors text-sm"
-          >
-            知道了
           </button>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { notify } from "../store/appDialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
 import { useSettings } from "../store/settings";
@@ -522,7 +523,7 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
               setShowErrorDialog(false);
               setPendingLogin({ key: act.siteKey, label: act.siteLabel });
             } catch (e) {
-              alert(`登录窗口启动失败：${e}`);
+              void notify(`登录窗口启动失败：${e}`);
             }
           };
           return (

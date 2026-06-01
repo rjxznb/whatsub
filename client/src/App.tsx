@@ -13,6 +13,7 @@ import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { AgentRoot } from "./components/agent/AgentRoot";
 import { TutorPortalRoot } from "./components/tutor/TutorPortalRoot";
 import { VoiceMode } from "./components/voice/VoiceMode";
+import { AppDialog } from "./components/AppDialog";
 import { useVoiceMode } from "./store/voiceMode";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
@@ -140,6 +141,7 @@ function App() {
         </LicenseSessionGate>
       </LicenseGate>
       <UpdateChecker />
+      <AppDialog />
     </>
   );
 }

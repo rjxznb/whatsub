@@ -71,23 +71,14 @@ export async function confirmViaUI(
   tier: "MID" | "HIGH",
 ): Promise<ConfirmDecision> {
   if (tier === "HIGH") {
-    // window.confirm is unreliable in Tauri v2 webview — use plugin-dialog.
-    const { confirm } = await import("@tauri-apps/plugin-dialog");
-    try {
-      const ok = await confirm(
-        `AI 助手要执行 ${toolDef.id}\n\n${summarizeArgsForDisplay(toolDef.id, args)}`,
-        {
-          title: "需要确认",
-          okLabel: "执行",
-          cancelLabel: "取消",
-          kind: "warning",
-        },
-      );
-      return ok ? "yes" : "no_user_clicked";
-    } catch (e) {
-      console.warn("[agentConfirms] HIGH confirm failed:", e);
-      return "no_user_clicked";
-    }
+    // App-styled modal confirm (the native webview confirm is unreliable in
+    // Tauri v2 and doesn't match the app — see store/appDialog.ts).
+    const { confirmDialog } = await import("./appDialog");
+    const ok = await confirmDialog(
+      `AI 助手要执行 ${toolDef.id}\n\n${summarizeArgsForDisplay(toolDef.id, args)}`,
+      { title: "需要确认", okText: "执行", danger: true },
+    );
+    return ok ? "yes" : "no_user_clicked";
   }
   // MID: push to store and await user click via InlineConfirmCard.
   return new Promise((resolve) => {

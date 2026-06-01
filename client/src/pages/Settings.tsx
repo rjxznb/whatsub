@@ -4,7 +4,7 @@ import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, Che
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { confirm as tauriConfirm, message as tauriMessage } from "@tauri-apps/plugin-dialog";
+import { notify, confirmDialog } from "../store/appDialog";
 import { exportLearnerProfile, resetLearnerProfile } from "../tutor/learnerProfile";
 import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
@@ -1004,11 +1004,10 @@ function ClearAgentHistorySection() {
 
   async function handleClear() {
     try {
-      const ok = await tauriConfirm("确认清空所有 AI 助手历史？此操作不可撤销。", {
+      const ok = await confirmDialog("确认清空所有 AI 助手历史？此操作不可撤销。", {
         title: "清空 AI 助手历史",
-        okLabel: "清空",
-        cancelLabel: "取消",
-        kind: "warning",
+        okText: "清空",
+        danger: true,
       });
       if (ok) {
         setClearing(true);
@@ -1450,25 +1449,25 @@ function TutorSection() {
     setExporting(true);
     try {
       const path = await exportLearnerProfile();
-      await tauriMessage(`学习档案已导出到\n${path}`);
+      await notify(`学习档案已导出到\n${path}`);
     } catch (e) {
-      await tauriMessage(`导出失败：${String(e)}`);
+      await notify(`导出失败：${String(e)}`);
     } finally {
       setExporting(false);
     }
   }
 
   async function handleReset() {
-    const ok = await tauriConfirm(
+    const ok = await confirmDialog(
       "确认清空学习档案？所有错误事件 + 薄弱 pattern 都会删除，无法撤销。",
-      { title: "重置学习档案", okLabel: "清空", cancelLabel: "取消", kind: "warning" },
+      { title: "重置学习档案", okText: "清空", danger: true },
     );
     if (!ok) return;
     setResetting(true);
     try {
       await resetLearnerProfile();
     } catch (e) {
-      await tauriMessage(`重置失败：${String(e)}`);
+      await notify(`重置失败：${String(e)}`);
     } finally {
       setResetting(false);
     }

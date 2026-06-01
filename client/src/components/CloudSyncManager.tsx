@@ -4,7 +4,7 @@ import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry 
 import { libraryQuota, type Quota } from "../lib/api/quota";
 import { useLibrary } from "../store/library";
 import { useMaterializing } from "../store/materializing";
-import { message } from "@tauri-apps/plugin-dialog";
+import { notify } from "../store/appDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
@@ -84,7 +84,7 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
       await onChanged();
       void loadQuota();
     } catch (err) {
-      await message(friendlySyncError(String(err)));
+      await notify(friendlySyncError(String(err)));
     } finally {
       setBusyIds(prev => {
         const next = new Set(prev);

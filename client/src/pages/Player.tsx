@@ -35,7 +35,7 @@ import { useTutorRuntime } from "../store/tutorRuntime";
 import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
 import { LessonResumeBanner } from "../components/tutor/LessonResumeBanner";
-import { message as tauriMessage } from "@tauri-apps/plugin-dialog";
+import { notify, confirmDialog } from "../store/appDialog";
 
 type Tab = "subtitles" | "keyPhrases";
 
@@ -420,10 +420,11 @@ export function Player() {
   // Foreground 重新解析: re-run whisper + LLM in this view. Leaving the page
   // stops it — the unmount cleanup kills the whisper/ffmpeg child (via
   // cancel_import) and aborts the LLM stream (saving partial as paused).
-  const onReanalyzeForeground = () => {
+  const onReanalyzeForeground = async () => {
     if (!videoId || reanalyzeBusy) return;
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       "重新解析会用 whisper 重新转写、并重新调用大模型分析，覆盖当前的字幕与翻译。\n\n在本页前台进行——若中途离开本页，转写/解析会被停止。确定继续？",
+      { title: "重新解析", okText: "继续", danger: true },
     );
     if (!ok) return;
     void onRetranscribe();
@@ -434,10 +435,11 @@ export function Player() {
   // backgroundAnalyses (not this component), so it survives navigation and
   // flips the library status to ready when done. Progress shows in the
   // bottom-right 「后台任务」 widget.
-  const onReanalyzeBackground = () => {
+  const onReanalyzeBackground = async () => {
     if (!videoId || reanalyzeBusy) return;
-    const ok = window.confirm(
+    const ok = await confirmDialog(
       "重新解析会用 whisper 重新转写、并重新调用大模型分析，覆盖当前的字幕与翻译。\n\n将在后台进行（你可以离开此页面，进度见右下角「后台任务」）。确定继续？",
+      { title: "重新解析", okText: "继续" },
     );
     if (!ok) return;
     const e = library.videos.find((v) => v.id === videoId);
@@ -777,7 +779,7 @@ export function Player() {
     try {
       await invoke("write_text_file", { path, content });
     } catch (e) {
-      alert(`导出失败：${e}`);
+      void notify(`导出失败：${e}`);
     }
   }
 
@@ -797,7 +799,7 @@ export function Player() {
         content: subtitlesToSrt(subs, "zh"),
       });
     } catch (e) {
-      alert(`导出失败：${e}`);
+      void notify(`导出失败：${e}`);
     }
   }
 
@@ -863,10 +865,10 @@ export function Player() {
                   plan,
                 });
               } else {
-                await tauriMessage("生成精讲计划失败，请检查 LLM 配置后重试。");
+                await notify("生成精讲计划失败，请检查 LLM 配置后重试。");
               }
             } catch (e) {
-              await tauriMessage(`精讲计划生成出错：${String(e)}`);
+              await notify(`精讲计划生成出错：${String(e)}`);
             } finally {
               setTutorPreparing(false);
             }

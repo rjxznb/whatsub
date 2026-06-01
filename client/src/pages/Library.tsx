@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { notify } from "../store/appDialog";
 import { motion } from "framer-motion";
 import { ChevronsLeft, ChevronsRight, Cloud } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -274,7 +275,7 @@ export function Library() {
       {
         label: "在文件夹中显示",
         onClick: () => {
-          reveal(entry.id).catch((e) => alert(`打开文件夹失败：${e}`));
+          reveal(entry.id).catch((e) => void notify(`打开文件夹失败：${e}`));
         },
       },
       {
@@ -287,7 +288,7 @@ export function Library() {
           } else {
             // Unsynced video: single confirm, then delete.
             if (!confirm(`确定删除「${entry.title}」？\n这会同时删除视频文件和分析结果，不可恢复。`)) return;
-            remove(entry.id).catch((e) => alert(`删除失败：${e}`));
+            remove(entry.id).catch((e) => void notify(`删除失败：${e}`));
           }
         },
       },
@@ -844,7 +845,7 @@ export function Library() {
         <RenameDialog
           initialTitle={renaming.title}
           onConfirm={(newTitle) => {
-            rename(renaming.id, newTitle).catch((e) => alert(`重命名失败：${e}`));
+            rename(renaming.id, newTitle).catch((e) => void notify(`重命名失败：${e}`));
           }}
           onClose={() => setRenaming(null)}
         />
@@ -892,7 +893,7 @@ export function Library() {
                   try {
                     await remove(deleteCascade.entry.id);
                   } catch (e) {
-                    alert(`删除失败：${e}`);
+                    void notify(`删除失败：${e}`);
                   } finally {
                     setDeleteCascadeBusy(false);
                     setDeleteCascade(null);
@@ -909,7 +910,7 @@ export function Library() {
                   try {
                     await remove(deleteCascade.entry.id);
                   } catch (e) {
-                    alert(`删除失败：${e}`);
+                    void notify(`删除失败：${e}`);
                   } finally {
                     setDeleteCascadeBusy(false);
                     setDeleteCascade(null);

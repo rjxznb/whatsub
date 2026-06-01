@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, MoreHorizontal, X, ChevronDown, Mic } from "lucide-react";
-import { confirm as tauriConfirm } from "@tauri-apps/plugin-dialog";
+import { confirmDialog } from "../../store/appDialog";
 import { useAgent } from "../../store/agent";
 import { useVoiceMode } from "../../store/voiceMode";
 
@@ -255,17 +255,11 @@ export function ConversationHeader({ onClose }: Props) {
             <MenuItem
               tone="danger"
               onClick={async () => {
-                // Tauri v2 webview's native window.confirm is unreliable
-                // (CLAUDE-PITFALLS.md). Use plugin-dialog's confirm instead.
-                try {
-                  const ok = await tauriConfirm(
-                    "确认清空所有 AI 助手历史？此操作不可撤销。",
-                  );
-                  if (ok) useAgent.getState().clearAll();
-                } catch {
-                  // Dialog plugin can throw in non-Tauri contexts (e.g. tests).
-                  // In that case do nothing — safer than wiping silently.
-                }
+                const ok = await confirmDialog(
+                  "确认清空所有 AI 助手历史？此操作不可撤销。",
+                  { title: "清空历史", okText: "清空", danger: true },
+                );
+                if (ok) useAgent.getState().clearAll();
                 setMenuOpen(false);
               }}
             >

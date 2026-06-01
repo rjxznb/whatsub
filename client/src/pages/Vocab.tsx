@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { notify } from "../store/appDialog";
 import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check } from "lucide-react";
 import { NoteBubble } from "../components/NoteBubble";
 import { NoteBadge } from "../components/NoteBadge";
@@ -172,7 +173,7 @@ export function Vocab() {
     try {
       await invoke("write_text_file", { path, content: entriesToCsv(entries) });
     } catch (e) {
-      alert(`导出失败：${e}`);
+      void notify(`导出失败：${e}`);
     }
   }
 

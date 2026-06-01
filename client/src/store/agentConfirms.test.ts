@@ -4,15 +4,13 @@ import {
   confirmViaUI,
   summarizeArgsForDisplay,
 } from "./agentConfirms";
+import { useAppDialog } from "./appDialog";
 import type { PendingConfirm } from "./agentConfirms";
 import type { ToolDef } from "../agent/types";
 
-// Module-level mock for HIGH-risk path. Tests can override the return value
-// via `mockResolvedValueOnce` per case.
-const confirmMock = vi.fn().mockResolvedValue(true);
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  confirm: (...args: unknown[]) => confirmMock(...args),
-}));
+// HIGH-risk confirms now go through the app dialog store (appDialog), resolved
+// in tests via useAppDialog.resolveTop().
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 const fakeTool: ToolDef = {
   id: "test_tool",
@@ -37,8 +35,7 @@ function pending(opts: Partial<PendingConfirm> = {}): PendingConfirm {
 
 beforeEach(() => {
   useAgentConfirms.setState({ pending: [] });
-  confirmMock.mockReset();
-  confirmMock.mockResolvedValue(true);
+  useAppDialog.setState({ queue: [] });
 });
 
 describe("useAgentConfirms store", () => {
@@ -107,25 +104,21 @@ describe("confirmViaUI", () => {
     await expect(promise).resolves.toBe("no_panel_closed");
   });
 
-  it("HIGH: calls plugin-dialog confirm; returns 'yes' when user clicks OK", async () => {
-    confirmMock.mockResolvedValueOnce(true);
-    const result = await confirmViaUI(fakeTool, { foo: 1 }, "HIGH");
-    expect(result).toBe("yes");
-    expect(confirmMock).toHaveBeenCalledTimes(1);
-    // Does NOT push to the store (HIGH path is modal-only).
+  it("HIGH: app dialog confirm → 'yes' when user clicks OK", async () => {
+    const promise = confirmViaUI(fakeTool, { foo: 1 }, "HIGH");
+    await tick(); // let the dynamic import + enqueue happen
+    expect(useAppDialog.getState().queue).toHaveLength(1);
+    useAppDialog.getState().resolveTop(true);
+    await expect(promise).resolves.toBe("yes");
+    // Uses the app dialog store, NOT the inline agentConfirms store.
     expect(useAgentConfirms.getState().pending).toHaveLength(0);
   });
 
-  it("HIGH: returns 'no_user_clicked' when user cancels the system dialog", async () => {
-    confirmMock.mockResolvedValueOnce(false);
-    const result = await confirmViaUI(fakeTool, {}, "HIGH");
-    expect(result).toBe("no_user_clicked");
-  });
-
-  it("HIGH: returns 'no_user_clicked' when the dialog itself throws", async () => {
-    confirmMock.mockRejectedValueOnce(new Error("dialog plugin failed"));
-    const result = await confirmViaUI(fakeTool, {}, "HIGH");
-    expect(result).toBe("no_user_clicked");
+  it("HIGH: → 'no_user_clicked' when the user cancels", async () => {
+    const promise = confirmViaUI(fakeTool, {}, "HIGH");
+    await tick();
+    useAppDialog.getState().resolveTop(false);
+    await expect(promise).resolves.toBe("no_user_clicked");
   });
 });
 

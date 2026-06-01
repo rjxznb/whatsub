@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import type { LessonState } from "../../tutor/types";
 import { loadLessonState, clearLessonState } from "../../tutor/lessonState";
 
@@ -60,9 +61,11 @@ export function LessonResumeBanner({ videoId, onResume }: Props) {
       <button
         type="button"
         onClick={() => setDismissed(true)}
-        className="px-2 py-1 text-sm text-blue-300 hover:text-blue-100"
+        title="关掉"
+        aria-label="关掉"
+        className="grid place-items-center h-7 w-7 rounded text-blue-300 hover:text-blue-100 hover:bg-white/5 transition-colors"
       >
-        关掉
+        <X size={16} />
       </button>
     </div>
   );

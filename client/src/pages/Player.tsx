@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, GraduationCap, FileOutput, RefreshCw, Loader2 } from "lucide-react";
+import { ArrowLeft, FileOutput, RefreshCw, Loader2 } from "lucide-react";
+import { LessonIcon } from "../components/LessonIcon";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
@@ -876,7 +877,7 @@ export function Player() {
           title={analysis.subtitles.length === 0 ? "字幕分析完成后可开始精讲" : "精讲这个视频"}
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
         >
-          <GraduationCap className={`h-[18px] w-[18px] ${tutorPreparing ? "animate-pulse" : ""}`} />
+          <LessonIcon className={`h-[18px] w-[18px] ${tutorPreparing ? "animate-pulse" : ""}`} />
         </button>
         <button
           type="button"

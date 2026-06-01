@@ -70,6 +70,18 @@ describe("ChatBar — mode rendering", () => {
     expect(screen.getByTestId("input-box")).toBeTruthy();
   });
 
+  it("panel mode: renders the input-resize divider + window resize handle", () => {
+    render(<ChatBar {...defaults({ mode: "panel" })} />);
+    expect(screen.getByLabelText("调整输入框高度")).toBeTruthy();
+    expect(screen.getByLabelText("调整窗口大小")).toBeTruthy();
+  });
+
+  it("bar mode: no divider / resize handle", () => {
+    render(<ChatBar {...defaults({ mode: "bar" })} />);
+    expect(screen.queryByLabelText("调整输入框高度")).toBeNull();
+    expect(screen.queryByLabelText("调整窗口大小")).toBeNull();
+  });
+
   it("aria-expanded reflects mode (true only for panel)", () => {
     const { rerender, container } = render(
       <ChatBar {...defaults({ mode: "icon" })} />,

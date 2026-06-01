@@ -245,6 +245,7 @@ export function AgentRoot() {
       streaming={streamingMsgId != null}
       noLlm={noLlm}
       initialValue={suggestionToPrefill}
+      panelMode={mode === "panel"}
       onSend={handleSend}
       onStop={handleStop}
     />

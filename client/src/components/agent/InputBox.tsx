@@ -73,6 +73,11 @@ interface Props {
   noLlm?: boolean;
   /** Pre-fill the textarea (used by EmptyState suggestion clicks). */
   initialValue?: string;
+  /** In the panel, the input row has a user-resized fixed height (ChatBar's
+   *  divider). The textarea then FILLS that row (scrolls internally) instead of
+   *  auto-growing — so the manual height is respected. Bar mode keeps the
+   *  auto-resize behavior. */
+  panelMode?: boolean;
   onSend: (text: string) => void;
   onStop: () => void;
 }
@@ -96,6 +101,7 @@ export function InputBox({
   streaming,
   noLlm,
   initialValue,
+  panelMode,
   onSend,
   onStop,
 }: Props) {
@@ -151,6 +157,13 @@ export function InputBox({
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    // Panel mode: the input row is a fixed, user-resized height (ChatBar's
+    // divider drag) — the textarea fills it and scrolls internally, so we don't
+    // auto-resize.
+    if (panelMode) {
+      el.style.height = "100%";
+      return;
+    }
     if (text.length === 0) {
       el.style.height = "36px";
       return;
@@ -159,7 +172,7 @@ export function InputBox({
     const natural = el.scrollHeight;
     const isMultiLine = text.includes("\n") || natural > 40;
     el.style.height = (isMultiLine ? Math.min(natural, 96) : 36) + "px";
-  }, [text]);
+  }, [text, panelMode]);
 
   const canSend = !streaming && !noLlm && text.trim().length > 0;
 
@@ -252,8 +265,10 @@ export function InputBox({
     // Without this, typing inside panel mode could shrink the bottom input
     // box to just the textarea's scrollHeight.
     <div
-      className="flex items-end gap-2 px-2 py-1.5"
-      style={{ minHeight: 48 }}
+      className={
+        "flex items-end gap-2 px-2 py-1.5 " + (panelMode ? "h-full" : "")
+      }
+      style={panelMode ? undefined : { minHeight: 48 }}
     >
       <textarea
         ref={textareaRef}
@@ -265,10 +280,14 @@ export function InputBox({
         placeholder={placeholder}
         disabled={noLlm}
         rows={1}
-        // Explicit initial height = 36 so the very first paint matches the
-        // post-useLayoutEffect steady state (no first-frame flash at UA
-        // default size before the resize logic runs).
-        style={{ height: 36, minHeight: 36, maxHeight: 96 }}
+        // Bar mode: explicit initial height = 36 so the first paint matches the
+        // post-useLayoutEffect steady state (no UA-default flash). Panel mode:
+        // fill the user-sized input row and scroll internally.
+        style={
+          panelMode
+            ? { height: "100%" }
+            : { height: 36, minHeight: 36, maxHeight: 96 }
+        }
         className="flex-1 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-1.5 leading-tight focus:outline-none disabled:opacity-50"
         aria-label="输入消息"
       />

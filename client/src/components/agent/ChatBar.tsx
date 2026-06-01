@@ -27,6 +27,16 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import whatsubIcon from "../../assets/whatsub-icon.png";
+import {
+  useAgentPanel,
+  clampNum,
+  PANEL_MIN_W,
+  PANEL_MAX_W,
+  PANEL_MIN_H,
+  PANEL_MAX_H,
+  INPUT_MIN_H,
+  INPUT_MAX_H,
+} from "../../store/agentPanel";
 
 export type ChatBarMode = "icon" | "bar" | "panel";
 
@@ -132,11 +142,6 @@ function clampToViewport(p: Position, w: number, h: number): Position {
   };
 }
 
-/** Panel height: 60vh capped at 600px. */
-function panelHeightPx(): number {
-  return Math.min(viewportH() * 0.6, 600);
-}
-
 export function ChatBar({
   mode,
   onModeChange,
@@ -153,6 +158,15 @@ export function ChatBar({
   const [barPos, setBarPos] = useState<Position>(() =>
     loadPos(BAR_POS_KEY, defaultBarPos, BAR_W, BAR_H),
   );
+
+  // User-adjustable panel geometry (corner resize) + input-row height (divider
+  // drag). Only used in panel mode; bar/icon use their fixed sizes.
+  const panelW = useAgentPanel((s) => s.width);
+  const panelH = useAgentPanel((s) => s.height);
+  const inputHeight = useAgentPanel((s) => s.inputHeight);
+  // Disables the size CSS-transition while actively resizing so the panel
+  // tracks the cursor 1:1 (same reason `dragging` disables it for moves).
+  const [resizing, setResizing] = useState(false);
 
   // Re-clamp on viewport resize so a previously-fine position doesn't end up
   // off-screen after the user resizes the Tauri window.
@@ -288,12 +302,11 @@ export function ChatBar({
         //     → barPos.y ≥ h - BAR_H
         //   panel bottom = barPos.y + BAR_H ≤ viewportH
         //     → barPos.y ≤ viewportH - BAR_H
-        // Using BAR_W for horizontal (bar and panel share width).
-        const panelH = panelHeightPx();
+        // Panel uses its (resizable) width/height from the store.
         const yMin = Math.max(0, panelH - BAR_H);
         const yMax = Math.max(yMin, viewportH() - BAR_H);
         clamped = {
-          x: Math.max(0, Math.min(viewportW() - BAR_W, next.x)),
+          x: Math.max(0, Math.min(viewportW() - panelW, next.x)),
           y: Math.max(yMin, Math.min(yMax, next.y)),
         };
       }
@@ -330,6 +343,57 @@ export function ChatBar({
       }
     };
 
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  // Resize the panel from its top-right corner. Width grows right (from
+  // barPos.x), height grows up (bottom is anchored at barPos.y + BAR_H), so the
+  // upper bounds keep top ≥ 0 and right ≤ viewport. stopPropagation prevents the
+  // container's move-drag from also starting.
+  const onResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = panelW;
+    const startH = panelH;
+    setResizing(true);
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      const maxW = Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, viewportW() - barPos.x));
+      const maxH = Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, barPos.y + BAR_H));
+      useAgentPanel
+        .getState()
+        .setSize(clampNum(startW + dx, PANEL_MIN_W, maxW), clampNum(startH - dy, PANEL_MIN_H, maxH));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setResizing(false);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  // Resize the input row by dragging the divider: UP grows the input (and
+  // shrinks the conversation body above), DOWN shrinks it. Capped so the input
+  // can't crowd out the body.
+  const onDividerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startH = inputHeight;
+    const onMove = (ev: MouseEvent) => {
+      const dy = ev.clientY - startY;
+      const maxH = Math.max(INPUT_MIN_H, Math.min(INPUT_MAX_H, panelH - 160));
+      useAgentPanel.getState().setInputHeight(clampNum(startH - dy, INPUT_MIN_H, maxH));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   };
@@ -375,7 +439,7 @@ export function ChatBar({
 
   // ── bar / panel ────────────────────────────────────────────────────
   const expanded = mode === "panel";
-  const h = expanded ? panelHeightPx() : BAR_H;
+  const h = expanded ? panelH : BAR_H;
   // Panel grows UPWARD from the bar's bottom edge: align bottom = barPos.y + BAR_H.
   const realTop = expanded ? Math.max(0, barPos.y + BAR_H - h) : barPos.y;
 
@@ -401,13 +465,13 @@ export function ChatBar({
   //   3. else (bar steady): use barPos + min-height
   const renderTop = stretchFrom ? stretchFrom.y : realTop;
   const renderLeft = stretchFrom ? stretchFrom.x : barPos.x;
-  const renderWidth = stretchFrom ? stretchFrom.w : BAR_W;
+  const renderWidth = stretchFrom ? stretchFrom.w : expanded ? panelW : BAR_W;
   const isPanel = expanded && !stretchFrom;
   const sizingStyle: React.CSSProperties = isPanel
     ? { height: h }                                 // panel: explicit
     : { minHeight: stretchFrom?.h ?? BAR_H };       // bar / stretch: min-height
 
-  const transitionCss = dragging
+  const transitionCss = dragging || resizing
     ? "none"
     : `top ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), left ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), width ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), height ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1), min-height ${STRETCH_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
 
@@ -435,10 +499,22 @@ export function ChatBar({
               {body}
             </div>
             {inlineConfirms}
+            {/* Divider between the conversation and the input — also the input
+                resize handle (drag up/down to change the input row height). */}
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="调整输入框高度"
+              onMouseDown={onDividerMouseDown}
+              className="group shrink-0 h-2 flex items-center justify-center border-t border-zinc-800 hover:border-zinc-600 cursor-ns-resize"
+            >
+              <span className="h-0.5 w-8 rounded-full bg-zinc-700 group-hover:bg-zinc-500 transition-colors" />
+            </div>
           </>
         )}
         <div
           className="shrink-0 cursor-default"
+          style={expanded ? { height: inputHeight } : undefined}
           onFocusCapture={() => {
             // Clicking into the textarea (or any focusable child of inputBox)
             // is the most natural "I want to chat" gesture from the bar —
@@ -449,6 +525,18 @@ export function ChatBar({
           {inputBox}
         </div>
       </div>
+      {/* Top-right corner handle to resize the whole panel (panel only; hidden
+          during the icon→panel stretch so it doesn't flash mid-animation). */}
+      {isPanel && (
+        <div
+          onMouseDown={onResizeMouseDown}
+          title="拖动调整窗口大小"
+          aria-label="调整窗口大小"
+          className="group absolute top-0 right-0 h-4 w-4 z-10 flex items-start justify-end p-[3px] cursor-nesw-resize"
+        >
+          <span className="block h-2 w-2 rounded-tr-sm border-t-2 border-r-2 border-zinc-600 group-hover:border-zinc-400 transition-colors" />
+        </div>
+      )}
     </div>
   );
 }

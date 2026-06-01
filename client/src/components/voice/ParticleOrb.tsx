@@ -1,24 +1,19 @@
 // src/components/voice/ParticleOrb.tsx
 //
-// three.js particle orb for voice mode. ~5000 points that MORPH between shapes
-// driven by the conversation state, with bloom self-emission:
+// three.js particle orb for voice mode. ~5000 points that ALWAYS form a sphere
+// (no shape-morphing), rendered with additive blending on a fully TRANSPARENT
+// canvas — no post-processing bloom (that blew the orb out to solid white and
+// broke the canvas alpha, leaving a visible dark square). Volume drives the
+// outward spike + a mild size pulse; the body keeps a constant size.
 //
-//   idle / listening   → sphere (spikes outward with YOUR mic level)
-//   thinking           → rotating ring (torus)
-//   speaking           → spectrum waveform ring (driven by the AI voice's FFT)
-//   after a reply       → briefly forms a ✓, then dissolves back to a sphere
-//
-// The body keeps a constant size; volume drives spikes + emissive (bloom). All
-// WebGL setup is guarded so the component is a harmless empty div where WebGL
-// isn't available (tests).
+// `level` = mic RMS (0..1) while the user speaks; during the AI reply the orb
+// reacts to the TTS amplitude instead. WebGL setup is guarded so the component
+// is a harmless empty div where WebGL isn't available (tests).
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import type { VoiceState } from "../../voice/types";
-import { getTtsLevel, getTtsBands } from "../../tutor/tts";
+import { getTtsLevel } from "../../tutor/tts";
 
 interface Props {
   state: VoiceState;
@@ -28,10 +23,7 @@ interface Props {
 }
 
 const N = 5000;
-const BANDS = 16;
-const FLOURISH_MS = 950;
 
-// ── shape target generators ───────────────────────────────────────────────────
 function sphereShape(): Float32Array {
   const a = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) {
@@ -41,58 +33,6 @@ function sphereShape(): Float32Array {
     a[i * 3] = Math.cos(phi) * r;
     a[i * 3 + 1] = y;
     a[i * 3 + 2] = Math.sin(phi) * r;
-  }
-  return a;
-}
-function ringShape(): Float32Array {
-  const a = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) {
-    const ang = (i / N) * Math.PI * 2;
-    const r = 1.15 + (((i * 7919) % 100) / 100 - 0.5) * 0.04;
-    a[i * 3] = Math.cos(ang) * r;
-    a[i * 3 + 1] = Math.sin(ang) * r;
-    a[i * 3 + 2] = (((i * 104729) % 100) / 100 - 0.5) * 0.05;
-  }
-  return a;
-}
-function torusShape(): Float32Array {
-  const a = new Float32Array(N * 3);
-  const R = 0.92,
-    rr = 0.32;
-  for (let i = 0; i < N; i++) {
-    const u = (i / N) * Math.PI * 2 * 9;
-    const v = i * 2.399963;
-    a[i * 3] = (R + rr * Math.cos(v)) * Math.cos(u);
-    a[i * 3 + 1] = rr * Math.sin(v);
-    a[i * 3 + 2] = (R + rr * Math.cos(v)) * Math.sin(u);
-  }
-  return a;
-}
-function checkShape(): Float32Array {
-  // ✓ in the XY plane: short down-stroke then long up-stroke.
-  const p1 = [-0.62, 0.05];
-  const p2 = [-0.18, -0.42];
-  const p3 = [0.66, 0.52];
-  const l1 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-  const l2 = Math.hypot(p3[0] - p2[0], p3[1] - p2[1]);
-  const n1 = Math.floor((N * l1) / (l1 + l2));
-  const a = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) {
-    let x: number, y: number;
-    if (i < n1) {
-      const t = i / n1;
-      x = p1[0] + (p2[0] - p1[0]) * t;
-      y = p1[1] + (p2[1] - p1[1]) * t;
-    } else {
-      const t = (i - n1) / (N - n1);
-      x = p2[0] + (p3[0] - p2[0]) * t;
-      y = p2[1] + (p3[1] - p2[1]) * t;
-    }
-    const jx = (((i * 7919) % 100) / 100 - 0.5) * 0.06;
-    const jy = (((i * 104729) % 100) / 100 - 0.5) * 0.06;
-    a[i * 3] = x + jx;
-    a[i * 3 + 1] = y + jy;
-    a[i * 3 + 2] = (((i * 1299709) % 100) / 100 - 0.5) * 0.05;
   }
   return a;
 }
@@ -116,46 +56,25 @@ const VERT =
   NOISE +
   `
 uniform float uTime,uAudio,uDisplace,uSpike,uPointSize;
-uniform int uMode;            // 0 sphere/torus spike · 1 ring spectrum · 3 static (✓)
-uniform float uBands[${BANDS}];
 varying float vB;
 void main(){
   vec3 base=position;
+  vec3 dir=normalize(base);
   float n=snoise(base*1.4+uTime*0.3);
-  vec3 p=base;
-  if(uMode==1){
-    float ang=atan(base.y,base.x);
-    float u=ang*0.1591549+0.5;                 // 0..1 around the ring
-    int bi=int(mod(floor(u*float(${BANDS})),float(${BANDS})));
-    float band=uBands[bi];
-    vec3 dir=normalize(vec3(base.x,base.y,0.0001));
-    p+=dir*(band*0.6 + uAudio*0.12 + n*uDisplace*0.3);
-    p.z+=n*0.05;
-  } else if(uMode==3){
-    p+=normalize(base+vec3(0.001))*n*0.012;     // ✓: nearly static, tiny shimmer
-  } else {
-    vec3 dir=normalize(base);
-    p+=dir*(uDisplace*n + uAudio*uSpike*abs(n)); // spike outward with volume
-  }
+  vec3 p=base+dir*(uDisplace*n + uAudio*uSpike*abs(n)); // spike outward with volume
   vB=0.5+0.5*n;
   vec4 mv=modelViewMatrix*vec4(p,1.0);
-  gl_PointSize=clamp(uPointSize*(1.0+uAudio*0.9)*(3.0/-mv.z),1.0,11.0);
+  gl_PointSize=clamp(uPointSize*(1.0+uAudio*0.5)*(4.2/-mv.z),1.0,8.0);
   gl_Position=projectionMatrix*mv;
 }`;
 
 const FRAG = `
-uniform vec3 uC1,uC2; uniform float uAudio; varying float vB;
+uniform vec3 uC1,uC2; varying float vB;
 void main(){
   vec2 c=gl_PointCoord-0.5; float d=length(c); if(d>0.5) discard;
-  float a=smoothstep(0.5,0.0,d);
-  gl_FragColor=vec4(mix(uC1,uC2,vB)*(1.0+uAudio*1.3), a);  // brighter when loud → bloom
+  float a=smoothstep(0.5,0.0,d)*0.6;   // soft round dot, modest alpha (not blown out)
+  gl_FragColor=vec4(mix(uC1,uC2,vB), a);
 }`;
-
-function modeFor(shape: string): number {
-  if (shape === "ring") return 1;
-  if (shape === "check") return 3;
-  return 0;
-}
 
 export function ParticleOrb({ state, level, size = 300 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -170,9 +89,10 @@ export function ParticleOrb({ state, level, size = 300 }: Props) {
 
     let renderer: THREE.WebGLRenderer;
     try {
+      // alpha:true + clearAlpha 0 → fully transparent canvas (no dark square).
       renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     } catch {
-      return; // no WebGL (e.g. tests) — render nothing
+      return; // no WebGL (e.g. tests)
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(size, size, false);
@@ -183,29 +103,19 @@ export function ParticleOrb({ state, level, size = 300 }: Props) {
 
     const scene = new THREE.Scene();
     const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-    cam.position.z = 3.2;
-
-    const shapes: Record<string, Float32Array> = {
-      sphere: sphereShape(),
-      ring: ringShape(),
-      torus: torusShape(),
-      check: checkShape(),
-    };
-    const cur = shapes.sphere.slice();
+    cam.position.z = 4.2; // far enough that the sphere + spikes leave a margin
 
     const uniforms = {
       uTime: { value: 0 },
       uAudio: { value: 0 },
-      uDisplace: { value: 0.1 },
-      uSpike: { value: 0.55 },
-      uPointSize: { value: 5.2 },
-      uMode: { value: 0 },
-      uBands: { value: new Float32Array(BANDS) },
-      uC1: { value: new THREE.Color(0x4d9eff) },
-      uC2: { value: new THREE.Color(0xffffff) },
+      uDisplace: { value: 0.08 },
+      uSpike: { value: 0.45 },
+      uPointSize: { value: 5.0 },
+      uC1: { value: new THREE.Color(0x3f8fe0) }, // sky blue
+      uC2: { value: new THREE.Color(0xcfe6ff) }, // soft light blue (not pure white)
     };
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(cur, 3));
+    geo.setAttribute("position", new THREE.BufferAttribute(sphereShape(), 3));
     const mat = new THREE.ShaderMaterial({
       uniforms,
       vertexShader: VERT,
@@ -217,62 +127,29 @@ export function ParticleOrb({ state, level, size = 300 }: Props) {
     const points = new THREE.Points(geo, mat);
     scene.add(points);
 
-    const composer = new EffectComposer(renderer);
-    composer.setSize(size, size);
-    composer.addPass(new RenderPass(scene, cam));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(size, size), 0.9, 0.6, 0.0);
-    composer.addPass(bloom);
-
-    const bandsBuf = new Float32Array(BANDS);
-    let prev: VoiceState = "idle";
-    let flourishUntil = 0;
     let amp = 0;
     let raf = 0;
     const start = performance.now();
 
     const frame = () => {
-      const now = performance.now();
-      const t = (now - start) / 1000;
+      const t = (performance.now() - start) / 1000;
       const st = stateRef.current;
-      if (prev === "speaking" && st !== "speaking") flourishUntil = now + FLOURISH_MS;
-      prev = st;
-
-      let shape: string;
-      if (now < flourishUntil) shape = "check";
-      else if (st === "thinking") shape = "torus";
-      else if (st === "speaking") shape = "ring";
-      else shape = "sphere";
-
-      const target = shapes[shape];
-      const ms = shape === "check" ? 0.13 : 0.07;
-      for (let i = 0; i < cur.length; i++) cur[i] += (target[i] - cur[i]) * ms;
-      geo.attributes.position.needsUpdate = true;
-
       let raw = 0;
       if (st === "speaking") raw = getTtsLevel();
       else if (st === "listening") raw = Math.min(1, Math.max(0, levelRef.current));
-      else if (st === "thinking" || st === "transcribing") raw = 0.16;
+      else if (st === "thinking" || st === "transcribing") raw = 0.14;
       amp += (raw - amp) * (raw > amp ? 0.35 : 0.12);
-
-      if (shape === "ring") getTtsBands(BANDS, bandsBuf);
-      else bandsBuf.fill(0);
-      const ub = uniforms.uBands.value;
-      for (let i = 0; i < BANDS; i++) ub[i] += (bandsBuf[i] - ub[i]) * 0.4;
 
       uniforms.uTime.value = t;
       uniforms.uAudio.value = amp;
-      uniforms.uMode.value = modeFor(shape);
-      points.rotation.y = shape === "torus" ? t * 0.9 : t * 0.12;
-      bloom.strength = 0.85 + amp * 1.4;
-      bloom.radius = 0.55 + amp * 0.25;
-      composer.render();
+      points.rotation.y = t * 0.14;
+      renderer.render(scene, cam);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
 
     return () => {
       cancelAnimationFrame(raf);
-      composer.dispose();
       geo.dispose();
       mat.dispose();
       renderer.dispose();

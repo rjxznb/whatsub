@@ -13,7 +13,6 @@ import {
   TTS_RATE_MIN,
   TTS_RATE_MAX,
 } from "../../tutor/tts";
-import { useTtsStatus } from "../../tutor/ttsStatus";
 import { MarkdownText } from "../agent/markdown";
 import {
   TUTOR_CARD,
@@ -54,8 +53,6 @@ export function LessonStepView({
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
   const [rate, setRate] = useState(() => getTtsRate());
-  const ttsEngine = useTtsStatus((s) => s.engine);
-  const ttsReason = useTtsStatus((s) => s.reason);
 
   const {
     currentStep,
@@ -172,35 +169,8 @@ export function LessonStepView({
           </span>
           <span className="text-sm text-zinc-400 truncate">{anchor?.topic}</span>
         </div>
-        {/* Voice controls: engine indicator + rate slider + replay + mute. */}
+        {/* Voice controls: rate slider + pause/resume + replay + mute. */}
         <div className="flex items-center gap-2 shrink-0">
-          {!muted && ttsEngine !== "idle" && (
-            <span
-              title={
-                ttsEngine === "edge"
-                  ? "在线神经音 (edge-tts · 晓晓多语言)"
-                  : `本地系统语音（edge-tts 未启用）\n原因: ${ttsReason}`
-              }
-              className={
-                "flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full " +
-                (ttsEngine === "edge"
-                  ? "bg-emerald-500/15 text-emerald-300"
-                  : "bg-amber-500/15 text-amber-300")
-              }
-            >
-              <span
-                className={
-                  "h-1.5 w-1.5 rounded-full shrink-0 " +
-                  (ttsEngine === "edge" ? "bg-emerald-400" : "bg-amber-400")
-                }
-              />
-              <span className="max-w-[220px] truncate">
-                {ttsEngine === "edge"
-                  ? "在线神经音"
-                  : `本地音 · ${ttsReason}`}
-              </span>
-            </span>
-          )}
           {!muted && (
             <div className="flex items-center gap-1.5" title="语速">
               <input
@@ -262,7 +232,7 @@ export function LessonStepView({
           <p className="text-[15px] text-zinc-300 leading-relaxed">
             先听这一句，试着理解它在说什么。
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-2 justify-end">
             <button type="button" onClick={onReplayCue} className={BTN_SUBTLE}>
               <span className="inline-flex items-center gap-1.5">
                 <Play size={13} /> 重听原句
@@ -285,9 +255,11 @@ export function LessonStepView({
             <div className="text-[15px] text-zinc-600">老师正在讲解…</div>
           )}
           {currentExplainText && (
-            <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
-              下一步
-            </button>
+            <div className="flex justify-end">
+              <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
+                下一步
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -305,19 +277,21 @@ export function LessonStepView({
             rows={3}
             className={TUTOR_TEXTAREA}
           />
-          <button
-            type="button"
-            onClick={() => {
-              if (draft.trim().length === 0) return;
-              const answer = draft;
-              setDraft("");
-              onSubmitAnswer(answer);
-            }}
-            disabled={draft.trim().length === 0}
-            className={BTN_PRIMARY}
-          >
-            提交答案
-          </button>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                if (draft.trim().length === 0) return;
+                const answer = draft;
+                setDraft("");
+                onSubmitAnswer(answer);
+              }}
+              disabled={draft.trim().length === 0}
+              className={BTN_PRIMARY}
+            >
+              提交答案
+            </button>
+          </div>
         </div>
       )}
 
@@ -350,7 +324,7 @@ export function LessonStepView({
               </div>
             </div>
           )}
-          <div className="flex gap-2">
+          <div className="flex gap-2 justify-end">
             {canRetry && (
               <button type="button" onClick={onRetry} className={BTN_SUBTLE}>
                 再试一次

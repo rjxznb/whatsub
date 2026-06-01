@@ -30,6 +30,15 @@ function mergeWithDefaults(raw: Partial<Settings> | null | undefined): Settings 
   if (raw.vendorId === undefined) {
     merged.vendorId = inferVendorId(merged.llmProvider, merged.openaiCompatible.baseUrl);
   }
+  // Migrate DeepSeek's deprecated model aliases (deepseek-chat / -reasoner,
+  // retired 2026-07-24) to the V4 general-chat model so existing installs keep
+  // working. Only touches those exact ids on the DeepSeek endpoint.
+  if (merged.openaiCompatible.baseUrl.includes("api.deepseek.com")) {
+    const m = merged.openaiCompatible.model;
+    if (m === "deepseek-chat" || m === "deepseek-reasoner") {
+      merged.openaiCompatible.model = "deepseek-v4-flash";
+    }
+  }
   return merged;
 }
 

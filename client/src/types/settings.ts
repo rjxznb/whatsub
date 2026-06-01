@@ -96,7 +96,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   llmProvider: "openai-compatible",
   vendorId: "deepseek",
-  openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "", model: "deepseek-chat" },
+  openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "", model: "deepseek-v4-flash" },
   claude: { apiKey: "", model: "claude-sonnet-4-6" },
   gemini: { apiKey: "", model: "gemini-2.5-pro" },
   whisperModel: "small",

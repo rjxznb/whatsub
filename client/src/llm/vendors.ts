@@ -2,7 +2,7 @@ import type { LlmProvider } from "../types/settings";
 
 /** A vendor preset bundles protocol + baseUrl + suggested models so the user
  *  picks "DeepSeek" instead of having to know it's OpenAI-compatible at
- *  https://api.deepseek.com/v1 with model `deepseek-chat`. */
+ *  https://api.deepseek.com/v1 with model `deepseek-v4-flash`. */
 export interface VendorPreset {
   id: string;
   /** Display name shown in the dropdown. */
@@ -27,7 +27,9 @@ export const VENDORS: VendorPreset[] = [
     name: "DeepSeek",
     protocol: "openai-compatible",
     baseUrl: "https://api.deepseek.com/v1",
-    models: ["deepseek-chat", "deepseek-reasoner"],
+    // deepseek-chat / deepseek-reasoner are deprecated (retired 2026-07-24) →
+    // V4: deepseek-v4-flash (general chat) + deepseek-v4-pro.
+    models: ["deepseek-v4-flash", "deepseek-v4-pro"],
     keyConsoleUrl: "https://platform.deepseek.com/api_keys",
     note: "国内直连，速度快，一个月差不多两块钱 💰",
   },

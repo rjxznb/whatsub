@@ -161,6 +161,83 @@ let _cancelled = false;
 // Why edge-tts last failed (surfaced as the local-fallback reason).
 let _lastEdgeError = "";
 
+// ── TTS audio analysis (opt-in) ──────────────────────────────────────────
+// The voice-mode orb visualizes the AI's spoken reply (amplitude + spectrum).
+// Routing the <audio> through a Web Audio AnalyserNode is OPT-IN (voice mode
+// turns it on while open) so it never touches the 精讲 lesson playback path.
+let _ttsAnalyseEnabled = false;
+let _ttsAudioCtx: AudioContext | null = null;
+let _ttsAnalyser: AnalyserNode | null = null;
+let _ttsTimeBuf: Uint8Array | null = null;
+let _ttsFreqBuf: Uint8Array | null = null;
+
+/** Enable/disable routing TTS playback through an analyser (voice mode only). */
+export function setTtsAnalyse(on: boolean): void {
+  _ttsAnalyseEnabled = on;
+}
+
+function attachTtsAnalyser(audio: HTMLAudioElement): void {
+  try {
+    const Ctx: typeof AudioContext | undefined =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return;
+    if (!_ttsAudioCtx) _ttsAudioCtx = new Ctx();
+    void _ttsAudioCtx.resume().catch(() => {});
+    const src = _ttsAudioCtx.createMediaElementSource(audio);
+    const an = _ttsAudioCtx.createAnalyser();
+    an.fftSize = 256;
+    an.smoothingTimeConstant = 0.72;
+    src.connect(an);
+    an.connect(_ttsAudioCtx.destination);
+    _ttsAnalyser = an;
+  } catch {
+    // Web Audio unavailable / element already sourced — play normally; the orb
+    // just won't get a real spectrum (falls back to its idle motion).
+    _ttsAnalyser = null;
+  }
+}
+
+/** Current TTS amplitude (0..1) — RMS of the playing reply, 0 when silent. */
+export function getTtsLevel(): number {
+  const an = _ttsAnalyser;
+  if (!an) return 0;
+  if (!_ttsTimeBuf || _ttsTimeBuf.length !== an.fftSize)
+    _ttsTimeBuf = new Uint8Array(an.fftSize);
+  an.getByteTimeDomainData(_ttsTimeBuf);
+  let sum = 0;
+  for (let i = 0; i < _ttsTimeBuf.length; i++) {
+    const v = (_ttsTimeBuf[i] - 128) / 128;
+    sum += v * v;
+  }
+  return Math.min(1, Math.sqrt(sum / _ttsTimeBuf.length) * 3.4);
+}
+
+/** Downsampled TTS frequency spectrum into `n` bands (0..1 each) for the
+ *  waveform ring. Uses the lower ~70% of bins (where voice energy lives). */
+export function getTtsBands(n: number, out?: Float32Array): Float32Array {
+  const res = out && out.length === n ? out : new Float32Array(n);
+  const an = _ttsAnalyser;
+  if (!an) {
+    res.fill(0);
+    return res;
+  }
+  const bins = an.frequencyBinCount;
+  if (!_ttsFreqBuf || _ttsFreqBuf.length !== bins)
+    _ttsFreqBuf = new Uint8Array(bins);
+  an.getByteFrequencyData(_ttsFreqBuf);
+  const used = Math.floor(bins * 0.7);
+  for (let i = 0; i < n; i++) {
+    const s = Math.floor((i / n) * used);
+    const e = Math.max(s + 1, Math.floor(((i + 1) / n) * used));
+    let m = 0;
+    for (let j = s; j < e; j++) m = Math.max(m, _ttsFreqBuf[j]);
+    res[i] = m / 255;
+  }
+  return res;
+}
+
 /** Primary path: synthesize each language run via Edge neural TTS and play the
  *  MP3s in order. Returns true if it handled playback (firing onStart/onEnd as
  *  needed), or false if it could not even start (synth failed / autoplay
@@ -291,6 +368,7 @@ async function edgeTtsSpeak(
   audio.preservesPitch = true; // keep natural pitch when sped up / slowed down
   audio.playbackRate = rate;
   _currentAudio = audio;
+  if (_ttsAnalyseEnabled) attachTtsAnalyser(audio); // voice-mode orb spectrum
   try {
     await audio.play(); // resolves once playback begins; throws if blocked
   } catch (e) {

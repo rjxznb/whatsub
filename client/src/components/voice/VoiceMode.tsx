@@ -11,7 +11,7 @@
  * started ref.
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useVoiceMode } from "../../store/voiceMode";
@@ -19,6 +19,13 @@ import { useSettings } from "../../store/settings";
 import { usePlayerState } from "../../store/playerState";
 import { VoiceConversation } from "../../voice/voiceConversation";
 import type { VoiceState } from "../../voice/types";
+import { setTtsAnalyse } from "../../tutor/tts";
+
+// Lazy so the three.js bundle is a separate chunk, loaded only when voice mode
+// first opens (keeps the main app bundle lean).
+const ParticleOrb = lazy(() =>
+  import("./ParticleOrb").then((m) => ({ default: m.ParticleOrb })),
+);
 
 const IDLE_DISMISS_MS = 6000; // silence this long (while listening) → close
 const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
@@ -26,128 +33,9 @@ const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
 // full 0..1 range for the orb (the orb grows up to +75%). Above this RMS = max.
 const RMS_FULL_SCALE = 0.13;
 
-// ── Orb ───────────────────────────────────────────────────────────────────────
-
-/** Light-blue Siri-style orb: a fixed-size sky-blue emissive body (white-blue
- *  center → 天空蓝) with a white swoosh + light-blue wisp + glass sheen. The
- *  BODY size stays constant; the volume only drives how far the soft light-blue
- *  glow RADIATES outward (scale + brightness). */
-function Orb({ state, level }: { state: VoiceState; level: number }) {
-  const active = state !== "error";
-
-  // The mic reports level only ~4×/sec, so we ease toward it at 60fps and write
-  // straight to the GLOW node (no per-frame re-render): the glow scales +
-  // brightens with volume, the body never moves. Fast attack, slower release;
-  // a subtle idle breath keeps it alive when quiet. `level` is 0..1 already.
-  const glowRef = useRef<HTMLDivElement>(null);
-  const targetRef = useRef(0);
-  targetRef.current = active ? Math.min(1, Math.max(0, level)) : 0;
-  const dispRef = useRef(0);
-  useEffect(() => {
-    let raf = 0;
-    const tick = (ts: number) => {
-      const t = targetRef.current;
-      const d = dispRef.current;
-      const k = t > d ? 0.35 : 0.12; // fast attack, slower release
-      const next = d + (t - d) * k;
-      dispRef.current = next;
-      const g = glowRef.current;
-      if (g) {
-        const breath = 1 + Math.sin(ts / 1500) * 0.05; // gentle idle pulse
-        const radiate = 1 + next * 1.0; // glow expands up to ~+100% on loud voice
-        g.style.transform = `scale(${(breath * radiate).toFixed(4)})`;
-        g.style.opacity = (0.4 + next * 0.55).toFixed(3); // brighter when louder
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const SIZE = 120;
-  const HALO = SIZE * 1.9;
-
-  // Light-blue palette. Body = 天空蓝 (sky blue); glow + wisp = lighter blue.
-  const bodyCenter = "rgba(232,245,255,1)"; // near-white blue highlight
-  const bodyMid = "rgba(125,200,255,1)"; // 天空蓝
-  const bodyEdge = "rgba(99,165,250,0.92)"; // soft light-blue edge
-  const wisp = "rgba(196,226,255,0.85)"; // light-blue tint wisp
-  const glow = "rgba(140,196,255,"; // 浅蓝 radiating glow
-
-  return (
-    <div className="relative pointer-events-none" style={{ width: HALO, height: HALO }}>
-      {/* outer glow — light blue; the rAF loop owns its transform + opacity */}
-      <div
-        ref={glowRef}
-        className="absolute inset-0"
-        style={{
-          borderRadius: "9999px",
-          background: `radial-gradient(circle, ${glow}0.85) 0%, ${glow}0.3) 45%, transparent 72%)`,
-          filter: "blur(24px)",
-        }}
-      />
-
-      {/* orb circle: fixed-size sky-blue body + wisps + swoosh + sheen */}
-      <div
-        className="absolute overflow-hidden rounded-full"
-        style={{
-          width: SIZE,
-          height: SIZE,
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          opacity: active ? 1 : 0.5,
-          boxShadow: `0 0 36px 6px ${glow}0.4), inset 0 0 30px rgba(255,255,255,0.22)`,
-        }}
-      >
-        {/* emissive body — white-blue center → 天空蓝 → soft light-blue edge */}
-        <div
-          className="absolute inset-0"
-          style={{
-            background: `radial-gradient(circle at 45% 40%, ${bodyCenter} 0%, ${bodyMid} 42%, ${bodyEdge} 100%)`,
-          }}
-        />
-        {/* light-blue wisp — rotating elongated ellipse for subtle motion */}
-        <div className="absolute inset-0 grid place-items-center">
-          <div
-            className={active ? "animate-orb-wisp-a" : ""}
-            style={{
-              width: "118%",
-              height: "55%",
-              borderRadius: "9999px",
-              background: `linear-gradient(90deg, transparent 0%, ${wisp} 50%, transparent 100%)`,
-              filter: "blur(13px)",
-            }}
-          />
-        </div>
-        {/* white swoosh — counter-rotating bright brushstroke */}
-        <div className="absolute inset-0 grid place-items-center">
-          <div
-            className={active ? "animate-orb-wisp-b" : ""}
-            style={{
-              width: "110%",
-              height: "42%",
-              borderRadius: "9999px",
-              background:
-                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.92) 50%, transparent 100%)",
-              filter: "blur(8px)",
-              mixBlendMode: "screen",
-            }}
-          />
-        </div>
-        {/* glass sheen — small bright spot upper-left */}
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(circle at 33% 27%, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.18) 18%, transparent 44%)",
-            mixBlendMode: "screen",
-          }}
-        />
-      </div>
-    </div>
-  );
-}
+// The orb is now a three.js particle system (ParticleOrb) that morphs by
+// conversation state. RMS_FULL_SCALE above still normalizes the mic level fed
+// to it as the listening signal.
 
 function statusHint(state: VoiceState, errorMsg: string): string {
   switch (state) {
@@ -252,10 +140,14 @@ function VoiceModeInner() {
   }, [closeVoice, resumeVideo]);
 
   // Mount: pause the player video (if any), then start the conversation once.
+  // Enable TTS audio analysis so the orb can visualize the AI reply's spectrum
+  // (opt-in — off again on close so it never touches the 精讲 lesson playback).
   useEffect(() => {
+    setTtsAnalyse(true);
     wasPlayingRef.current = usePlayerState.getState().pauseHandler?.() ?? false;
     startConversation();
     return () => {
+      setTtsAnalyse(false);
       convRef.current?.stop();
       convRef.current = null;
       startedRef.current = false;
@@ -382,7 +274,9 @@ function VoiceModeInner() {
             </div>
           )}
 
-          <Orb state={voiceState} level={level} />
+          <Suspense fallback={null}>
+            <ParticleOrb state={voiceState} level={level} />
+          </Suspense>
 
           {hint && (
             <div

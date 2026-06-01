@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   stripForSpeech,
   splitByLang,
+  pickEdgeVoice,
   ttsSupported,
   isTtsEnabled,
   setTtsEnabled,
   ttsSpeak,
 } from "./tts";
+import { EDGE_VOICE_ZH, EDGE_VOICE_EN } from "./edgeTts";
 
 describe("splitByLang", () => {
   it("keeps pure Chinese as one zh run", () => {
@@ -34,6 +36,21 @@ describe("splitByLang", () => {
     const segs = splitByLang("第 3 个");
     expect(segs).toHaveLength(1);
     expect(segs[0].lang).toBe("zh");
+  });
+});
+
+describe("pickEdgeVoice", () => {
+  it("uses the Chinese voice for zh-dominant text", () => {
+    expect(pickEdgeVoice("我们来学这个短语 I am here")).toBe(EDGE_VOICE_ZH);
+  });
+
+  it("uses the English voice for en-dominant text", () => {
+    expect(pickEdgeVoice("I am here for the conference 好")).toBe(EDGE_VOICE_EN);
+  });
+
+  it("breaks ties toward Chinese", () => {
+    // 2 CJK (你好) vs 2 Latin (ok) — an exact tie goes to Chinese.
+    expect(pickEdgeVoice("你好 ok")).toBe(EDGE_VOICE_ZH);
   });
 });
 

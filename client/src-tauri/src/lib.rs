@@ -110,6 +110,7 @@ pub fn run() {
             commands::lesson_state::lesson_state_save,
             commands::lesson_state::lesson_state_clear,
             commands::voice::voice_transcribe,
+            commands::edge_tts::edge_tts_synthesize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

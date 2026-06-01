@@ -61,12 +61,13 @@ whoami = "1.5"
 cookie = "0.18"
 # URL parsing for navigation listeners + cookie-domain matching.
 url = "2"
-# WebSocket client for talking Chrome DevTools Protocol to the
-# user's system browser (launched with --remote-debugging-port).
-# default-features=false skips the TLS backend feature flags — we
-# only ever connect to ws://localhost:<port> (no TLS), so the
-# rustls / native-tls deps would just bloat the binary.
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect"] }
+# WebSocket client for two consumers:
+#   1. Chrome DevTools Protocol over ws://localhost:<port> (system-browser login)
+#   2. Edge neural TTS over wss://speech.platform.bing.com (commands/edge_tts.rs)
+# (2) needs TLS, so we enable the native-tls feature — it reuses the native-tls
+# crate reqwest already pulls in (schannel on Windows / Secure Transport on
+# macOS), so it adds no new system TLS stack.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "native-tls"] }
 # CancellationToken for the per-import cancel signal. Threaded through
 # run_sidecar so that ✕ in the UI translates to killing yt-dlp / ffmpeg /
 # whisper child processes mid-flight instead of letting them finish

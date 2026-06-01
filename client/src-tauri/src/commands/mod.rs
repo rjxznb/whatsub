@@ -16,3 +16,4 @@ pub mod lesson_state;
 pub mod youtube_search;
 pub mod import_queue_http;
 pub mod voice;
+pub mod edge_tts;

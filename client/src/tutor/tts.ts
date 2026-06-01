@@ -9,7 +9,7 @@
 // is unreachable (offline / blocked). Text is split by language so Chinese
 // runs use a Chinese voice and English runs an English voice.
 
-import { edgeSynthesize, EDGE_VOICE_MULTI } from "./edgeTts";
+import { edgeSynthesize, EDGE_VOICE_ZH, EDGE_VOICE_EN } from "./edgeTts";
 import { useTtsStatus } from "./ttsStatus";
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
@@ -139,6 +139,21 @@ let _lastEdgeError = "";
  *  needed), or false if it could not even start (synth failed / autoplay
  *  blocked on the first clip) so the caller can fall back to Web Speech. Never
  *  fires onStart/onEnd when it returns false. */
+/** Pick the Edge voice by the text's dominant script: the zh-native 晓晓 voice
+ *  for Chinese-dominant text (the tutor coaches in Chinese), Aria for
+ *  English-dominant. Reading the whole line with one voice keeps it gap-free;
+ *  each voice handles the other language's occasional words acceptably. Ties go
+ *  to Chinese (the common case for 精讲). Exported for testing. */
+export function pickEdgeVoice(text: string): string {
+  let cjk = 0;
+  let latin = 0;
+  for (const ch of text) {
+    if (/[㐀-鿿豈-﫿]/.test(ch)) cjk++;
+    else if (/[a-zA-Z]/.test(ch)) latin++;
+  }
+  return latin > cjk ? EDGE_VOICE_EN : EDGE_VOICE_ZH;
+}
+
 async function edgeTtsSpeak(
   clean: string,
   opts: SpeakOptions,
@@ -147,13 +162,15 @@ async function edgeTtsSpeak(
   _currentAbort = ac;
   const rate = opts.rate ?? getTtsRate();
 
-  // ONE request, ONE continuous MP3 via a multilingual voice — it reads mixed
-  // zh+en in a single utterance, so there's no pause at language switches
-  // (separate per-segment clips each had padding silence → long gaps).
+  // ONE request, ONE continuous MP3 — a single voice reads the whole line
+  // (incl. embedded English) so there's no pause at language switches (separate
+  // per-segment clips each had padding silence → long gaps). The voice is the
+  // one matching the dominant script: 晓晓 for Chinese-dominant coaching, Aria
+  // for English-dominant.
   let mp3: ArrayBuffer;
   try {
     mp3 = await edgeSynthesize(clean, {
-      voice: EDGE_VOICE_MULTI,
+      voice: pickEdgeVoice(clean),
       rate,
       signal: ac.signal,
     });

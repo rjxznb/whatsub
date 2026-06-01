@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX, RotateCcw, Play } from "lucide-react";
+import { Volume2, VolumeX, RotateCcw, Play, Pause } from "lucide-react";
 import type { LessonRuntime } from "../../tutor/lessonRuntime";
 import {
   ttsSpeak,
   ttsCancel,
+  ttsPause,
+  ttsResume,
+  ttsSetRate,
   isTtsEnabled,
   setTtsEnabled,
   getTtsRate,
-  setTtsRate,
   TTS_RATE_MIN,
   TTS_RATE_MAX,
 } from "../../tutor/tts";
@@ -50,6 +52,7 @@ export function LessonStepView({
   const [draft, setDraft] = useState("");
   const [muted, setMuted] = useState(() => !isTtsEnabled());
   const [speaking, setSpeaking] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [rate, setRate] = useState(() => getTtsRate());
   const ttsEngine = useTtsStatus((s) => s.engine);
   const ttsReason = useTtsStatus((s) => s.reason);
@@ -84,17 +87,25 @@ export function LessonStepView({
     if (muted || !spokenLine) {
       ttsCancel();
       setSpeaking(false);
+      setPaused(false);
       return;
     }
     if (lastSpokenRef.current === spokenLine) return; // don't re-read on unrelated re-renders
     lastSpokenRef.current = spokenLine;
     void ttsSpeak(spokenLine, {
-      onStart: () => setSpeaking(true),
-      onEnd: () => setSpeaking(false),
+      onStart: () => {
+        setSpeaking(true);
+        setPaused(false);
+      },
+      onEnd: () => {
+        setSpeaking(false);
+        setPaused(false);
+      },
     });
     return () => {
       ttsCancel();
       setSpeaking(false);
+      setPaused(false);
     };
   }, [spokenLine, muted]);
 
@@ -119,9 +130,26 @@ export function LessonStepView({
     if (!spokenLine) return;
     lastSpokenRef.current = ""; // allow re-speak of the same line
     void ttsSpeak(spokenLine, {
-      onStart: () => setSpeaking(true),
-      onEnd: () => setSpeaking(false),
+      onStart: () => {
+        setSpeaking(true);
+        setPaused(false);
+      },
+      onEnd: () => {
+        setSpeaking(false);
+        setPaused(false);
+      },
     });
+  };
+
+  // Pause / resume the CURRENT utterance in place (not a restart).
+  const togglePauseResume = () => {
+    if (paused) {
+      ttsResume();
+      setPaused(false);
+    } else {
+      ttsPause();
+      setPaused(true);
+    }
   };
 
   const toggleMute = () => {
@@ -131,6 +159,7 @@ export function LessonStepView({
     if (next) {
       ttsCancel();
       setSpeaking(false);
+      setPaused(false);
     }
   };
 
@@ -183,9 +212,8 @@ export function LessonStepView({
                 onChange={(e) => {
                   const v = Number(e.target.value);
                   setRate(v);
-                  setTtsRate(v);
+                  ttsSetRate(v); // live: retunes the playing audio in place
                 }}
-                onPointerUp={() => replaySpoken()}
                 className="w-20 accent-blue-500 cursor-pointer"
                 aria-label="语速"
               />
@@ -194,6 +222,20 @@ export function LessonStepView({
               </span>
             </div>
           )}
+          {!muted && speaking ? (
+            <button
+              type="button"
+              onClick={togglePauseResume}
+              title={paused ? "继续" : "暂停"}
+              className={ICON_BTN}
+            >
+              {paused ? (
+                <Play size={15} className="text-blue-400" />
+              ) : (
+                <Pause size={15} className="text-blue-400" />
+              )}
+            </button>
+          ) : null}
           {!muted && spokenLine ? (
             <button
               type="button"
@@ -201,7 +243,7 @@ export function LessonStepView({
               title="重读"
               className={ICON_BTN}
             >
-              <RotateCcw size={15} className={speaking ? "text-blue-400" : ""} />
+              <RotateCcw size={15} className={speaking && !paused ? "text-blue-400" : ""} />
             </button>
           ) : null}
           <button

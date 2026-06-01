@@ -189,11 +189,17 @@ async function edgeTtsSpeak(
   // per-segment clips each had padding silence → long gaps). The voice is the
   // one matching the dominant script: 晓晓 for Chinese-dominant coaching, Aria
   // for English-dominant.
+  //
+  // Synthesize at NORMAL speed (rate 1) and apply the user's speed client-side
+  // via audio.playbackRate below. Decoupling speed from synthesis is what lets
+  // the user pause/resume and drag the speed slider LIVE at the current
+  // position — baking the rate into the SSML would force a re-synth from the
+  // start on every change.
   let mp3: ArrayBuffer;
   try {
     mp3 = await edgeSynthesize(clean, {
       voice: pickEdgeVoice(clean),
-      rate,
+      rate: 1,
       signal: ac.signal,
     });
   } catch (e) {
@@ -208,6 +214,8 @@ async function edgeTtsSpeak(
 
   const url = URL.createObjectURL(new Blob([mp3], { type: "audio/mpeg" }));
   const audio = new Audio(url);
+  audio.preservesPitch = true; // keep natural pitch when sped up / slowed down
+  audio.playbackRate = rate;
   _currentAudio = audio;
   try {
     await audio.play(); // resolves once playback begins; throws if blocked
@@ -364,6 +372,52 @@ export function ttsCancel(): void {
       /* ignore */
     }
   }
+}
+
+/** Pause in-flight speech, keeping the position so ttsResume() continues from
+ *  the same spot (NOT a restart). Edge path pauses the <audio> element; Web
+ *  Speech pauses the synth queue. No-op if nothing is playing. */
+export function ttsPause(): void {
+  if (_currentAudio && !_currentAudio.paused) {
+    try {
+      _currentAudio.pause();
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  if (ttsSupported()) {
+    try {
+      window.speechSynthesis.pause();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Resume speech paused via ttsPause(). No-op if nothing is paused. */
+export function ttsResume(): void {
+  if (_currentAudio && _currentAudio.paused) {
+    void _currentAudio.play().catch(() => {});
+    return;
+  }
+  if (ttsSupported()) {
+    try {
+      window.speechSynthesis.resume();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Set the speaking rate: persist it AND apply LIVE to any in-flight edge
+ *  playback (audio.playbackRate) so dragging the slider changes speed at the
+ *  current position instead of restarting. Web Speech can't retune a running
+ *  utterance — the next line picks up the new rate. */
+export function ttsSetRate(rate: number): void {
+  const clamped = Math.min(TTS_RATE_MAX, Math.max(TTS_RATE_MIN, rate));
+  setTtsRate(clamped); // persist
+  if (_currentAudio) _currentAudio.playbackRate = clamped;
 }
 
 // ── Rate preference (persisted) ──────────────────────────────────────────

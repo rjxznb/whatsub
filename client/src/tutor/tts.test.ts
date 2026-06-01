@@ -7,6 +7,12 @@ import {
   isTtsEnabled,
   setTtsEnabled,
   ttsSpeak,
+  ttsSetRate,
+  ttsPause,
+  ttsResume,
+  getTtsRate,
+  TTS_RATE_MAX,
+  TTS_RATE_MIN,
 } from "./tts";
 import { EDGE_VOICE_ZH, EDGE_VOICE_EN } from "./edgeTts";
 
@@ -93,6 +99,28 @@ describe("tts mute preference", () => {
     expect(isTtsEnabled()).toBe(false);
     setTtsEnabled(true);
     expect(isTtsEnabled()).toBe(true);
+  });
+});
+
+describe("tts rate + pause controls", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("ttsSetRate persists a clamped rate", () => {
+    ttsSetRate(99); // above max
+    expect(getTtsRate()).toBe(TTS_RATE_MAX);
+    ttsSetRate(0.1); // below min
+    expect(getTtsRate()).toBe(TTS_RATE_MIN);
+    ttsSetRate(1.2);
+    expect(getTtsRate()).toBeCloseTo(1.2);
+  });
+
+  it("ttsPause / ttsResume are safe no-ops when nothing is playing", () => {
+    expect(() => {
+      ttsPause();
+      ttsResume();
+    }).not.toThrow();
   });
 });
 

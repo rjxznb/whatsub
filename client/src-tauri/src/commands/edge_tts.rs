@@ -66,7 +66,9 @@ fn generate_sec_ms_gec(now_unix_secs: u64) -> String {
 }
 
 /// Build the SSML for one voice + text. `rate_pct` is the +N% speed delta Edge
-/// expects (0 = normal speed).
+/// expects (0 = normal speed). NOTE: the free Edge readaloud endpoint ignores
+/// SSML `<break>` (it returns "no audio" if you include one) — so pauses are
+/// produced upstream via punctuation in tts.ts::stripForSpeech, not here.
 fn build_ssml(text: &str, voice: &str, rate_pct: i32) -> String {
     let sign = if rate_pct >= 0 { "+" } else { "" };
     format!(

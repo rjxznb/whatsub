@@ -12,6 +12,7 @@ import {
   TTS_RATE_MAX,
 } from "../../tutor/tts";
 import { useTtsStatus } from "../../tutor/ttsStatus";
+import { MarkdownText } from "../agent/markdown";
 import {
   TUTOR_CARD,
   TUTOR_EYEBROW,
@@ -28,6 +29,9 @@ interface Props {
   onRetry: () => void;
   onReplayCue: () => void;
   onSubmitAnswer: (answer: string) => void;
+  /** Stop the video (pause). Called when leaving the "listen" step so the cue
+   *  audio doesn't talk over the tutor's TTS. Optional for tests. */
+  onStopVideo?: () => void;
 }
 
 /** Renders the current step of the lesson runtime. The tutor "speaks" its
@@ -41,6 +45,7 @@ export function LessonStepView({
   onRetry,
   onReplayCue,
   onSubmitAnswer,
+  onStopVideo,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [muted, setMuted] = useState(() => !isTtsEnabled());
@@ -92,6 +97,23 @@ export function LessonStepView({
       setSpeaking(false);
     };
   }, [spokenLine, muted]);
+
+  // Drive the video to match the step. Step 1 (listen) auto-plays this anchor's
+  // original cue once — so entering 精讲 immediately plays the sentence instead
+  // of sitting paused until the user clicks 重听原句. Any later step stops the
+  // video so the cue doesn't keep playing under the tutor's TTS. Keyed on
+  // step+anchor so it fires exactly once per transition.
+  const videoStepRef = useRef<string>("");
+  useEffect(() => {
+    const key = `${currentAnchorIdx}:${currentStep === 1 ? "listen" : "coach"}`;
+    if (videoStepRef.current === key) return;
+    videoStepRef.current = key;
+    if (currentStep === 1) onReplayCue();
+    else onStopVideo?.();
+    // onReplayCue / onStopVideo are stable side-effects; we intentionally only
+    // re-run on a real step/anchor transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, currentAnchorIdx]);
 
   const replaySpoken = () => {
     if (!spokenLine) return;
@@ -213,11 +235,13 @@ export function LessonStepView({
 
       {currentStep === 2 && (
         <div className="space-y-5">
-          <div className="text-[15px] text-zinc-200 leading-7 whitespace-pre-wrap">
-            {currentExplainText || (
-              <span className="text-zinc-600">老师正在讲解…</span>
-            )}
-          </div>
+          {currentExplainText ? (
+            <div className="text-[15px] text-zinc-200 leading-7">
+              <MarkdownText text={currentExplainText} />
+            </div>
+          ) : (
+            <div className="text-[15px] text-zinc-600">老师正在讲解…</div>
+          )}
           {currentExplainText && (
             <button type="button" onClick={onContinue} className={BTN_PRIMARY}>
               下一步
@@ -229,9 +253,9 @@ export function LessonStepView({
       {currentStep === 3 && currentQuestion && (
         <div className="space-y-4">
           <div className={TUTOR_EYEBROW}>提问</div>
-          <p className="text-[15px] text-zinc-100 leading-relaxed">
-            {currentQuestion.question}
-          </p>
+          <div className="text-[15px] text-zinc-100 leading-relaxed">
+            <MarkdownText text={currentQuestion.question} />
+          </div>
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -273,8 +297,8 @@ export function LessonStepView({
                 ? "≈ 基本正确"
                 : "✗ 还差一点"}
           </div>
-          <div className="text-[15px] text-zinc-200 leading-7 whitespace-pre-wrap">
-            {currentFeedback.feedback}
+          <div className="text-[15px] text-zinc-200 leading-7">
+            <MarkdownText text={currentFeedback.feedback} />
           </div>
           {answerRevealed && currentQuestion && (
             <div className={`${TUTOR_INSET} p-3`}>

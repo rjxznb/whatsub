@@ -659,27 +659,38 @@ export function Player() {
     usePlayerState.getState().setSeekHandler((sec) => {
       if (videoRef.current) videoRef.current.currentTime = sec;
     });
-    // Play a single cue's range, then auto-pause. Used by 精讲 重听原句 to
+    // Play a single cue's range, then auto-pause. Used by 精讲 step 1 to
     // replay one sentence's audio while the lesson overlay covers the video.
+    // `rangeStopCleanup` removes the in-flight stop listener so a later
+    // pause/replay can't leave a stale listener that pauses the next cue early.
+    let rangeStopCleanup: (() => void) | null = null;
     usePlayerState.getState().setPlayRangeHandler((start, end) => {
       const v = videoRef.current;
       if (!v) return;
+      rangeStopCleanup?.();
       v.currentTime = start;
       const stopAt = end > start ? end : start + 5;
       const onTime = () => {
         if (v.currentTime >= stopAt) {
           v.pause();
-          v.removeEventListener("timeupdate", onTime);
+          rangeStopCleanup?.();
         }
       };
+      rangeStopCleanup = () => {
+        v.removeEventListener("timeupdate", onTime);
+        rangeStopCleanup = null;
+      };
       v.addEventListener("timeupdate", onTime);
-      void v.play().catch(() => v.removeEventListener("timeupdate", onTime));
+      void v.play().catch(() => rangeStopCleanup?.());
     });
     // Pause / resume — voice mode pauses the video during the AI conversation
-    // and resumes it on close.
+    // and resumes it on close; 精讲 pauses when leaving the "listen" step so the
+    // cue doesn't talk over the tutor's TTS. Pausing also cancels any in-flight
+    // range playback.
     usePlayerState.getState().setPauseHandler(() => {
       const v = videoRef.current;
       if (!v) return false;
+      rangeStopCleanup?.();
       const wasPlaying = !v.paused;
       v.pause();
       return wasPlaying;
@@ -830,6 +841,10 @@ export function Player() {
           disabled={tutorPreparing || analysis.subtitles.length === 0}
           onClick={async () => {
             if (!videoId) return;
+            // Pause the video the moment 精讲 starts — it shouldn't keep
+            // playing behind the lesson overlay (during plan generation, the
+            // pre-class screen, and the tutor's spoken steps).
+            usePlayerState.getState().pauseHandler?.();
             setTutorPreparing(true);
             try {
               const currentSettings = useSettings.getState().settings;

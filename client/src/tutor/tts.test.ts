@@ -61,8 +61,17 @@ describe("stripForSpeech", () => {
     expect(stripForSpeech("`code` here")).toBe("code here");
   });
 
-  it("collapses whitespace and trims", () => {
-    expect(stripForSpeech("  a\n\n  b  ")).toBe("a b");
+  it("collapses spaces/tabs within a line and trims", () => {
+    expect(stripForSpeech("a   b\tc")).toBe("a b c");
+  });
+
+  it("turns paragraph breaks into a spoken pause via punctuation", () => {
+    // 'a' gains a full stop so the voice breathes; 'b' (last) stays bare.
+    expect(stripForSpeech("  a\n\n  b  ")).toBe("a。 b");
+  });
+
+  it("doesn't double up punctuation when a line already ends with it", () => {
+    expect(stripForSpeech("第一段。\n第二段")).toBe("第一段。 第二段");
   });
 
   it("strips code fences entirely", () => {

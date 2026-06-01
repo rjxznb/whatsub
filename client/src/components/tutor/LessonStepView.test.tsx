@@ -41,6 +41,54 @@ describe("LessonStepView", () => {
     expect(screen.getByText(/老师正在讲解/)).toBeTruthy();
   });
 
+  it("auto-plays the original cue when the listen step (1) appears", () => {
+    const onReplayCue = vi.fn();
+    render(
+      <LessonStepView
+        runtime={makeRuntime({ currentStep: 1 })}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onReplayCue={onReplayCue}
+        onSubmitAnswer={vi.fn()}
+        onStopVideo={vi.fn()}
+      />,
+    );
+    expect(onReplayCue).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the video when a coaching step (2) appears", () => {
+    const onStopVideo = vi.fn();
+    render(
+      <LessonStepView
+        runtime={makeRuntime({ currentStep: 2, currentExplainText: "讲解中" })}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onReplayCue={vi.fn()}
+        onSubmitAnswer={vi.fn()}
+        onStopVideo={onStopVideo}
+      />,
+    );
+    expect(onStopVideo).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders markdown bold in the explanation (no literal **)", () => {
+    render(
+      <LessonStepView
+        runtime={makeRuntime({
+          currentStep: 2,
+          currentExplainText: "这是 **closeout game**",
+        })}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onReplayCue={vi.fn()}
+        onSubmitAnswer={vi.fn()}
+      />,
+    );
+    // bold rendered as <strong>, raw ** stripped
+    expect(screen.getByText("closeout game")).toBeTruthy();
+    expect(screen.queryByText(/\*\*/)).toBeNull();
+  });
+
   it("step 5 correct verdict shows ✓ 答对了", () => {
     render(
       <LessonStepView

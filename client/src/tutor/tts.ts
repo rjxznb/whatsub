@@ -60,17 +60,39 @@ function pickVoice(
   );
 }
 
+/** Trailing sentence/clause punctuation (zh + en) the neural voices pause on. */
+const TERMINAL_PUNCT = /[。.!?！？…，,、;；:：]$/;
+
 /** Strip markdown / formatting noise so the voice doesn't read "asterisk
- *  asterisk word" etc. Keeps the actual words + punctuation. */
+ *  asterisk word" etc., and turn line / paragraph breaks into a spoken pause.
+ *
+ *  Pause handling: the free Edge readaloud endpoint ignores SSML `<break>`, and
+ *  neural voices read a bare newline as a plain space (no breath) — so the only
+ *  way to get "段落感" at "换行换段" is punctuation. We append a full stop to any
+ *  line that doesn't already end with sentence/clause punctuation, then join
+ *  with a space, so the voice pauses between paragraphs. */
 export function stripForSpeech(text: string): string {
-  return text
+  const stripped = text
     .replace(/```[\s\S]*?```/g, " ") // code fences
     .replace(/`([^`]*)`/g, "$1") // inline code
     .replace(/\*\*([^*]+)\*\*/g, "$1") // bold
     .replace(/\*([^*]+)\*/g, "$1") // italic
     .replace(/_([^_]+)_/g, "$1") // underscore emphasis
     .replace(/[#>|]/g, " ") // headings / quotes / table pipes
-    .replace(/\s+/g, " ")
+    .replace(/[^\S\n]+/g, " "); // collapse spaces/tabs, keep newlines for now
+
+  const lines = stripped
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  return lines
+    .map((line, i) =>
+      // last line needs no trailing pause; earlier lines get a full stop so the
+      // voice breathes at the break (unless they already end with punctuation)
+      i === lines.length - 1 || TERMINAL_PUNCT.test(line) ? line : line + "。",
+    )
+    .join(" ")
     .trim();
 }
 

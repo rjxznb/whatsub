@@ -25,57 +25,107 @@ const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
 
 // ── Orb ───────────────────────────────────────────────────────────────────────
 
+/** Siri-style iridescent orb — a layered port of the iOS VoiceOrbView:
+ *  a bright cyan/white emissive body with soft pink wisp ellipses and a white
+ *  swoosh brushstroke, all blurred (no hard conic seams). The whole orb scales
+ *  with mic level (the size IS the listening signal). A warm palette shift is
+ *  used only while transcribing. */
 function Orb({ state, level }: { state: VoiceState; level: number }) {
   const clamped = Math.min(1, Math.max(0, level));
-  // The orb visibly GROWS as the user speaks.
-  const scale = 1 + clamped * 0.5;
-  const glowScale = 1 + clamped * 1.0;
-  const dimmed = state === "error" || state === "idle";
+  // The orb visibly GROWS as the user speaks — the size is the signal.
+  const scale = 1 + clamped * 0.55;
+  const active = state !== "error";
+  const warm = state === "transcribing";
+
+  const SIZE = 120;
+  const HALO = SIZE * 1.8;
+
+  // Palette (sky-cyan/pink normally; warm amber while transcribing).
+  const bodyCenter = "rgba(245,252,255,1)";
+  const bodyMid = warm ? "rgba(255,206,112,1)" : "rgba(96,188,255,1)";
+  const bodyEdge = warm ? "rgba(238,168,68,0.9)" : "rgba(62,150,236,0.9)";
+  const pink = warm ? "rgba(255,170,72,0.92)" : "rgba(248,150,214,0.92)";
+  const glowCyan = warm ? "rgba(255,200,90," : "rgba(96,188,255,";
+  const glowPink = warm ? "rgba(255,150,60," : "rgba(248,150,214,";
+  const glowAlpha = 0.5 + clamped * 0.3;
 
   return (
-    <div className="relative" style={{ width: 116, height: 116 }}>
-      {/* soft outer glow — reacts most to mic level */}
+    <div
+      className="relative pointer-events-none"
+      style={{
+        width: HALO,
+        height: HALO,
+        transform: `scale(${scale})`,
+        transition: "transform 90ms ease-out",
+      }}
+    >
+      {/* 1. soft outer glow — cyan→pink halo, blurred, gently breathing */}
       <div
-        className="absolute inset-0 rounded-full pointer-events-none"
+        className={active ? "absolute inset-0 animate-orb-glow-breathe" : "absolute inset-0"}
         style={{
-          transform: `scale(${glowScale})`,
-          transition: "transform 90ms ease-out",
-          background:
-            "radial-gradient(circle, rgba(129,140,248,0.40) 0%, rgba(56,189,248,0.14) 55%, transparent 72%)",
-          filter: "blur(6px)",
+          borderRadius: "9999px",
+          background: `radial-gradient(circle, ${glowCyan}${glowAlpha}) 0%, ${glowPink}0.28) 45%, transparent 70%)`,
+          filter: "blur(26px)",
         }}
       />
-      {/* level scale on the wrapper; the iridescent layer spins inside it. */}
+
+      {/* orb circle: body + wisps + swoosh + highlight, clipped to a circle */}
       <div
-        className="absolute inset-0"
-        style={{ transform: `scale(${scale})`, transition: "transform 90ms ease-out" }}
+        className="absolute overflow-hidden rounded-full"
+        style={{
+          width: SIZE,
+          height: SIZE,
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          opacity: active ? 1 : 0.5,
+          boxShadow: `0 0 40px 8px ${glowCyan}0.45), inset 0 0 30px rgba(255,255,255,0.22)`,
+        }}
       >
-        {/* iridescent glassy sphere — slowly swirling conic gradient */}
+        {/* 3. emissive body — near-white center → bright cyan → soft cyan edge */}
         <div
-          className={dimmed ? "" : "animate-voice-spin"}
+          className="absolute inset-0"
           style={{
-            position: "absolute",
-            inset: 0,
-            borderRadius: "9999px",
-            opacity: dimmed ? 0.4 : 1,
-            background: dimmed
-              ? "radial-gradient(circle at 40% 35%, #a1a1aa 0%, #3f3f46 100%)"
-              : "conic-gradient(from 0deg, #22d3ee, #3b82f6, #8b5cf6, #ec4899, #f472b6, #38bdf8, #22d3ee)",
-            boxShadow: dimmed
-              ? "none"
-              : "0 0 48px 10px rgba(99,102,241,0.45), 0 0 90px 18px rgba(56,189,248,0.18), inset 0 0 28px rgba(255,255,255,0.28)",
+            background: `radial-gradient(circle at 45% 40%, ${bodyCenter} 0%, ${bodyMid} 42%, ${bodyEdge} 100%)`,
           }}
         />
-        {/* static glassy highlight (fixed light source — doesn't spin) */}
-        {!dimmed && (
+        {/* 2. pink wisp — rotating elongated ellipse (iridescent tint) */}
+        <div className="absolute inset-0 grid place-items-center">
           <div
-            className="absolute inset-0 rounded-full pointer-events-none"
+            className={active ? "animate-orb-wisp-a" : ""}
             style={{
-              background:
-                "radial-gradient(circle at 35% 28%, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.2) 20%, transparent 46%)",
+              width: "118%",
+              height: "55%",
+              borderRadius: "9999px",
+              background: `linear-gradient(90deg, transparent 0%, ${pink} 50%, transparent 100%)`,
+              filter: "blur(13px)",
             }}
           />
-        )}
+        </div>
+        {/* 4. white swoosh — counter-rotating bright brushstroke */}
+        <div className="absolute inset-0 grid place-items-center">
+          <div
+            className={active ? "animate-orb-wisp-b" : ""}
+            style={{
+              width: "110%",
+              height: "42%",
+              borderRadius: "9999px",
+              background:
+                "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.95) 50%, transparent 100%)",
+              filter: "blur(8px)",
+              mixBlendMode: "screen",
+            }}
+          />
+        </div>
+        {/* 5. glass sheen — small bright spot upper-left */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "radial-gradient(circle at 33% 27%, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.18) 18%, transparent 44%)",
+            mixBlendMode: "screen",
+          }}
+        />
       </div>
     </div>
   );

@@ -443,3 +443,25 @@ body::-webkit-scrollbar-corner,
   animation: voice-ripple 0.9s ease-in-out infinite;
 }
 
+/* ── Siri-style iridescent orb (ported from the iOS VoiceOrbView) ─────────────
+   A bright cyan/white emissive body with soft pink "wisp" ellipses and a white
+   "swoosh" brushstroke, all heavily blurred — NOT a hard conic gradient (that
+   showed visible color seams). Two ellipses rotate at different speeds + the
+   counter direction so the iridescence drifts. The level-driven overall scale
+   is applied inline so it reacts to real-time mic RMS. */
+@keyframes orb-wisp-a {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes orb-wisp-b {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(-360deg); }
+}
+@keyframes orb-glow-breathe {
+  0%, 100% { transform: scale(0.95); opacity: 0.85; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+.animate-orb-wisp-a { animation: orb-wisp-a 9s linear infinite; }
+.animate-orb-wisp-b { animation: orb-wisp-b 7s linear infinite; }
+.animate-orb-glow-breathe { animation: orb-glow-breathe 4.5s ease-in-out infinite; }
+

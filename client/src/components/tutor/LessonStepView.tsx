@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX, RotateCcw, Play, Pause } from "lucide-react";
+import { Volume2, VolumeX, RotateCcw, Play, Pause, X } from "lucide-react";
 import type { LessonRuntime } from "../../tutor/lessonRuntime";
 import {
   ttsSpeak,
@@ -38,6 +38,9 @@ interface Props {
   /** Stop the video (pause). Called when leaving the "listen" step so the cue
    *  audio doesn't talk over the tutor's TTS. Optional for tests. */
   onStopVideo?: () => void;
+  /** Exit the lesson (same as Esc). Progress is persisted, so reopening shows
+   *  the resume banner. Optional for tests. */
+  onExit?: () => void;
 }
 
 /** Renders the current step of the lesson runtime. The tutor "speaks" its
@@ -52,6 +55,7 @@ export function LessonStepView({
   onReplayCue,
   onSubmitAnswer,
   onStopVideo,
+  onExit,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [muted, setMuted] = useState(() => !isTtsEnabled());
@@ -230,6 +234,16 @@ export function LessonStepView({
             className={ICON_BTN}
           >
             {muted ? <VolumeX size={16} /> : <Volume2 size={16} className={speaking ? "text-blue-400" : ""} />}
+          </button>
+          <span className="w-px h-4 bg-zinc-700/60 mx-0.5" aria-hidden />
+          <button
+            type="button"
+            onClick={onExit}
+            title="退出精讲 (Esc)"
+            aria-label="退出精讲"
+            className={`${ICON_BTN} hover:text-rose-400`}
+          >
+            <X size={16} />
           </button>
         </div>
       </div>

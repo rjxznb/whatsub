@@ -108,6 +108,22 @@ describe("LessonStepView", () => {
     expect(screen.getByText("Sonia（女）")).toBeTruthy();
   });
 
+  it("calls onExit when the exit button is clicked", () => {
+    const onExit = vi.fn();
+    render(
+      <LessonStepView
+        runtime={makeRuntime()}
+        onContinue={vi.fn()}
+        onRetry={vi.fn()}
+        onReplayCue={vi.fn()}
+        onSubmitAnswer={vi.fn()}
+        onExit={onExit}
+      />,
+    );
+    screen.getByLabelText("退出精讲").click();
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
   it("step 5 correct verdict shows ✓ 答对了", () => {
     render(
       <LessonStepView

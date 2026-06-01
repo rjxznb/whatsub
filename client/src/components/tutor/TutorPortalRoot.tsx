@@ -146,6 +146,7 @@ export function TutorPortalRoot() {
       <LessonOverlay open onClose={close}>
         <LessonStepView
           runtime={r}
+          onExit={close}
           onStopVideo={() => usePlayerState.getState().pauseHandler?.()}
           onReplayCue={() => {
             // Replay just this anchor's cue audio (the original English) —

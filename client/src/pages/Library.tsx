@@ -517,7 +517,7 @@ export function Library() {
               setImportInitial({});
             }
           }}
-          className="px-3 py-1.5 bg-blue-500 text-black text-sm rounded font-medium"
+          className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 transition-colors text-black text-sm rounded font-medium"
         >
           + Import
         </button>
@@ -541,7 +541,7 @@ export function Library() {
         >
           <Link
             to="/vocab"
-            className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm whitespace-nowrap"
+            className="px-3 py-1.5 rounded text-amber-300 hover:text-amber-200 hover:bg-white/5 transition-colors text-sm whitespace-nowrap"
             title="本地词汇本（划字幕收藏的短语）"
           >
             ⭐ 词汇本
@@ -549,7 +549,7 @@ export function Library() {
           {CORPUS_NAV_ENABLED && (
             <Link
               to="/corpus"
-              className="px-3 py-1.5 text-amber-300 hover:text-amber-200 text-sm whitespace-nowrap"
+              className="px-3 py-1.5 rounded text-amber-300 hover:text-amber-200 hover:bg-white/5 transition-colors text-sm whitespace-nowrap"
               title="公共语料库（云端）"
             >
               📚 语料库
@@ -563,7 +563,11 @@ export function Library() {
             <Cloud className="h-4 w-4" />
             云同步详情
           </button>
-          <Link to="/settings" className="px-2 py-1.5 text-zinc-300 hover:text-zinc-100">
+          <Link
+            to="/settings"
+            className="px-2 py-1.5 rounded text-zinc-300 hover:text-zinc-100 hover:bg-white/5 transition-colors"
+            title="设置"
+          >
             ⚙
           </Link>
         </div>

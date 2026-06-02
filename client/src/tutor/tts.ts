@@ -15,6 +15,7 @@ import {
   EDGE_VOICE_EN,
   EDGE_VOICE_IDS,
 } from "./edgeTts";
+import { encodeWav16 } from "../voice/wav";
 import { useTtsStatus } from "./ttsStatus";
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
@@ -313,6 +314,73 @@ function concatArrayBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
   return out.buffer;
 }
 
+// ── Gapless concat for mixed-language lines ──────────────────────────────────
+// Every Edge MP3 run is padded with ~0.3–0.5s of silence at its head AND tail.
+// Concatenating runs raw stacks two paddings at each zh↔en boundary → a long
+// dead gap mid-sentence. For mixed lines we decode each run to PCM, trim that
+// silence, splice the runs with ONE small uniform gap, and re-encode to a single
+// WAV so the line plays continuously. Single-run lines have no boundary and skip
+// this entirely (keep the fast direct-MP3 path).
+let _decodeCtx: AudioContext | null = null;
+function getDecodeCtx(): AudioContext | null {
+  try {
+    const Ctx: typeof AudioContext | undefined =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return null;
+    if (!_decodeCtx) _decodeCtx = new Ctx();
+    return _decodeCtx;
+  } catch {
+    return null;
+  }
+}
+
+/** First/last sample indices above a silence threshold, padded slightly so the
+ *  speech onset/offset isn't clipped. */
+function voiceBounds(ch: Float32Array, sampleRate: number): [number, number] {
+  const thresh = 0.006;
+  let start = 0;
+  let end = ch.length;
+  while (start < end && Math.abs(ch[start]) < thresh) start++;
+  while (end > start && Math.abs(ch[end - 1]) < thresh) end--;
+  const pad = Math.floor(sampleRate * 0.012); // ~12ms guard so onsets aren't clipped
+  return [Math.max(0, start - pad), Math.min(ch.length, end + pad)];
+}
+
+/** Decode each MP3 run, trim head/tail silence, splice with a small uniform gap,
+ *  and re-encode to one WAV. Returns null when Web Audio can't decode (no
+ *  AudioContext / decode error) so the caller falls back to a raw MP3 concat. */
+async function concatRunsGapless(parts: ArrayBuffer[]): Promise<Uint8Array | null> {
+  const ctx = getDecodeCtx();
+  if (!ctx) return null;
+  let buffers: AudioBuffer[];
+  try {
+    // decodeAudioData detaches its argument — pass a copy so `parts` stays
+    // usable for the raw-concat fallback.
+    buffers = await Promise.all(parts.map((p) => ctx.decodeAudioData(p.slice(0))));
+  } catch {
+    return null;
+  }
+  const sr = ctx.sampleRate;
+  const gap = Math.floor(sr * 0.06); // ~60ms breath between runs (not dead air)
+  const trimmed = buffers.map((b) => {
+    const ch = b.getChannelData(0);
+    const [s, e] = voiceBounds(ch, sr);
+    return ch.subarray(s, e);
+  });
+  const total =
+    trimmed.reduce((n, t) => n + t.length, 0) +
+    gap * Math.max(0, trimmed.length - 1);
+  const merged = new Float32Array(total);
+  let off = 0;
+  trimmed.forEach((t, i) => {
+    merged.set(t, off);
+    off += t.length + (i < trimmed.length - 1 ? gap : 0);
+  });
+  return encodeWav16(merged, sr);
+}
+
 async function edgeTtsSpeak(
   clean: string,
   opts: SpeakOptions,
@@ -336,7 +404,8 @@ async function edgeTtsSpeak(
   const segs = splitByLang(clean);
   const runs = segs.length ? segs : [{ text: clean, lang: "zh" as const }];
 
-  let mp3: ArrayBuffer;
+  let clip: ArrayBuffer | Uint8Array;
+  let mime = "audio/mpeg";
   try {
     const parts = await Promise.all(
       runs.map((r) =>
@@ -347,7 +416,19 @@ async function edgeTtsSpeak(
         }),
       ),
     );
-    mp3 = concatArrayBuffers(parts);
+    // Mixed lines: decode + trim the per-run silence padding so zh↔en plays
+    // gaplessly. Falls back to a raw MP3 concat if Web Audio can't decode.
+    if (runs.length > 1) {
+      const wav = await concatRunsGapless(parts);
+      if (wav) {
+        clip = wav;
+        mime = "audio/wav";
+      } else {
+        clip = concatArrayBuffers(parts);
+      }
+    } else {
+      clip = concatArrayBuffers(parts);
+    }
   } catch (e) {
     _lastEdgeError = e instanceof Error ? e.message : String(e);
     if (_currentAbort === ac) _currentAbort = null;
@@ -357,13 +438,13 @@ async function edgeTtsSpeak(
     opts.onEnd?.();
     return true;
   }
-  if (mp3.byteLength === 0) {
+  if (clip.byteLength === 0) {
     _lastEdgeError = "edge-tts: no audio";
     if (_currentAbort === ac) _currentAbort = null;
     return false;
   }
 
-  const url = URL.createObjectURL(new Blob([mp3], { type: "audio/mpeg" }));
+  const url = URL.createObjectURL(new Blob([clip], { type: mime }));
   const audio = new Audio(url);
   audio.preservesPitch = true; // keep natural pitch when sped up / slowed down
   audio.playbackRate = rate;

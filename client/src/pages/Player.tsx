@@ -18,6 +18,7 @@ import { useTauriEvent } from "../hooks/useTauriEvent";
 import { useVideoSync } from "../hooks/useVideoSync";
 import { VideoPlayer } from "../components/VideoPlayer";
 import { SubtitleList } from "../components/SubtitleList";
+import { AutoScrollIcon } from "../components/AutoScrollIcon";
 import { KeyPhraseList } from "../components/KeyPhraseList";
 import { ProgressBanner } from "../components/ProgressBanner";
 import { parseSrt } from "../llm/parseSrt";
@@ -1000,7 +1001,10 @@ export function Player() {
                       : "border-zinc-700 text-zinc-400 hover:bg-zinc-800")
                   }
                 >
-                  📍 自动跳转：{autoScrollSubtitle ? "开" : "关"}
+                  <span className="inline-flex items-center gap-1">
+                    <AutoScrollIcon className="h-3 w-3" />
+                    自动跳转：{autoScrollSubtitle ? "开" : "关"}
+                  </span>
                 </button>
                 <button
                   type="button"

@@ -659,21 +659,10 @@ export function ChatBar({
               {body}
             </div>
             {inlineConfirms}
-            {/* Divider between the conversation and the input — also the input
-                resize handle (drag up/down to change the input row height). */}
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label="调整输入框高度"
-              onMouseDown={onDividerMouseDown}
-              className="group shrink-0 h-2 flex items-center justify-center border-t border-zinc-800 hover:border-zinc-600 cursor-ns-resize"
-            >
-              <span className="h-0.5 w-8 rounded-full bg-zinc-700 group-hover:bg-zinc-500 transition-colors" />
-            </div>
           </>
         )}
         <div
-          className="shrink-0 cursor-default"
+          className="shrink-0 cursor-default relative"
           style={expanded ? { height: inputHeight } : undefined}
           onFocusCapture={() => {
             // Clicking into the textarea (or any focusable child of inputBox)
@@ -682,6 +671,20 @@ export function ChatBar({
             if (mode === "bar") onModeChange("panel");
           }}
         >
+          {/* Resize by dragging the input card's TOP EDGE directly (the old
+              separator line was removed). Invisible at rest; a faint pill hints
+              on hover. Panel only — bar mode has no resizable input height. */}
+          {expanded && (
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="拖动上沿调整输入框高度"
+              onMouseDown={onDividerMouseDown}
+              className="group absolute top-0 left-0 right-0 z-10 h-2.5 flex items-center justify-center cursor-ns-resize"
+            >
+              <span className="h-0.5 w-8 rounded-full bg-transparent group-hover:bg-zinc-600 transition-colors" />
+            </div>
+          )}
           {inputBox}
         </div>
       </div>

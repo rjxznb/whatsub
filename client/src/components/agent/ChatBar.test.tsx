@@ -84,15 +84,15 @@ describe("ChatBar — mode rendering", () => {
     expect(screen.getByTestId("input-box")).toBeTruthy();
   });
 
-  it("panel mode: renders the input-resize divider + window resize handle", () => {
+  it("panel mode: renders the input top-edge resize handle + window resize handle", () => {
     render(<ChatBar {...defaults({ mode: "panel" })} />);
-    expect(screen.getByLabelText("调整输入框高度")).toBeTruthy();
+    expect(screen.getByLabelText("拖动上沿调整输入框高度")).toBeTruthy();
     expect(screen.getByLabelText("调整窗口大小")).toBeTruthy();
   });
 
-  it("bar mode: no divider / resize handle", () => {
+  it("bar mode: no resize handles", () => {
     render(<ChatBar {...defaults({ mode: "bar" })} />);
-    expect(screen.queryByLabelText("调整输入框高度")).toBeNull();
+    expect(screen.queryByLabelText("拖动上沿调整输入框高度")).toBeNull();
     expect(screen.queryByLabelText("调整窗口大小")).toBeNull();
   });
 

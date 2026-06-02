@@ -297,7 +297,10 @@ export function ChatBar({
   // [role=menu] descendants short-circuit so they behave normally.
   const onContainerMouseDown = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest("button, textarea, input, select, [role=menu]")) return;
+    // `[data-no-drag]` = the conversation body: mousedown there is a
+    // text-selection gesture, not a panel-drag (drag the panel by its header).
+    if (target.closest("button, textarea, input, select, [role=menu], [data-no-drag]"))
+      return;
 
     const currentPos = mode === "icon" ? iconPos : barPos;
     dragRef.current = {
@@ -647,7 +650,12 @@ export function ChatBar({
         {expanded && (
           <>
             <div className="shrink-0 cursor-default">{header}</div>
-            <div className="flex-1 min-h-0 overflow-y-auto cursor-default">
+            {/* Conversation history: selectable text (overrides the panel's
+                select-none) and excluded from panel-drag via data-no-drag. */}
+            <div
+              data-no-drag
+              className="flex-1 min-h-0 overflow-y-auto cursor-auto select-text"
+            >
               {body}
             </div>
             {inlineConfirms}

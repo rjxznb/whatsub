@@ -14,6 +14,9 @@ importers:
       '@fontsource/charis-sil':
         specifier: ^5.2.7
         version: 5.2.7
+      '@fontsource/major-mono-display':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@google/genai':
         specifier: ^1.50.1
         version: 1.50.1
@@ -529,6 +532,9 @@ packages:
 
   '@fontsource/charis-sil@5.2.7':
     resolution: {integrity: sha512-qbaXZFD9f54j2ZFqe2+3MES2TeotlGuEHE5v8PlS+nsDPts7L9g87zlKogZdnuVyZV4XY0z306ejthJykweWLw==}
+
+  '@fontsource/major-mono-display@5.2.8':
+    resolution: {integrity: sha512-SnuZlOm1y9NT1sdXoAL8RXK3wuNHSmkHTReVmeRRTbBqbT5trIN46DPFoN5gzdf1nY9OYi7fknekEUG94dovKA==}
 
   '@google/genai@1.50.1':
     resolution: {integrity: sha512-YbkX7H9+1Pt8wOt7DDREy8XSoiL6fRDzZQRyaVBarFf8MR3zHGqVdvM4cLbDXqPhxqvegZShgfxb8kw9C7YhAQ==}
@@ -2621,6 +2627,8 @@ snapshots:
     optional: true
 
   '@fontsource/charis-sil@5.2.7': {}
+
+  '@fontsource/major-mono-display@5.2.8': {}
 
   '@google/genai@1.50.1':
     dependencies:

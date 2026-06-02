@@ -16,10 +16,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
-  font-size: 1.15rem;
-  font-weight: 300;
-  letter-spacing: 0.04em;
+  /* Major Mono Display — quirky dotted monospace wordmark (imported in App.css) */
+  font-family: "Major Mono Display", ui-monospace, monospace;
+  font-size: 1.1rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
   color: white;
   border-radius: 50%;
   background-color: transparent;

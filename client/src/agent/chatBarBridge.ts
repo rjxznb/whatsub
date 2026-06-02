@@ -23,3 +23,28 @@ export function openAgentPanel(): void {
     console.warn("[agent/chatBarBridge] openAgentPanel called before AgentRoot registered");
   }
 }
+
+// ── Chat voice dictation (Shift+V) ───────────────────────────────────────────
+// InputBox registers a starter on mount; Shift+V (App.tsx) opens the panel and
+// starts dictation. If the panel was closed (InputBox not mounted yet), the
+// request is queued and fired the moment InputBox registers.
+
+let _startDictation: (() => void) | null = null;
+let _pendingDictation = false;
+
+export function registerDictationStarter(fn: (() => void) | null): void {
+  _startDictation = fn;
+  if (fn && _pendingDictation) {
+    _pendingDictation = false;
+    fn();
+  }
+}
+
+export function requestChatDictation(): void {
+  openAgentPanel();
+  if (_startDictation) {
+    _startDictation();
+  } else {
+    _pendingDictation = true; // fire once InputBox mounts + registers
+  }
+}

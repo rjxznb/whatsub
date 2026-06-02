@@ -14,7 +14,7 @@ import { AgentRoot } from "./components/agent/AgentRoot";
 import { TutorPortalRoot } from "./components/tutor/TutorPortalRoot";
 import { VoiceMode } from "./components/voice/VoiceMode";
 import { AppDialog } from "./components/AppDialog";
-import { useVoiceMode } from "./store/voiceMode";
+import { requestChatDictation } from "./agent/chatBarBridge";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
@@ -78,8 +78,9 @@ function App() {
     void mountDownloadQueueListener();
   }, []);
 
-  // Global Shift+V → open the Siri-style voice overlay. Ignored while typing
-  // in an input/textarea so it doesn't hijack a literal "V".
+  // Global Shift+V → open the chat panel and start voice INPUT (dictation into
+  // the chat field). Ignored while typing in an input/textarea so it doesn't
+  // hijack a literal "V".
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.shiftKey || e.repeat) return;
@@ -94,7 +95,7 @@ function App() {
         return;
       }
       e.preventDefault();
-      useVoiceMode.getState().openVoice();
+      requestChatDictation();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

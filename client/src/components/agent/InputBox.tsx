@@ -3,6 +3,7 @@ import { Send, Square, Mic, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../store/agent";
 import { useLibrary } from "../../store/library";
 import { useVoiceDictation } from "../../voice/useVoiceDictation";
+import { registerDictationStarter } from "../../agent/chatBarBridge";
 import { useSlashCommands, type SlashCommand } from "../../store/slashCommands";
 import { expandSlash, isSlashTyping, filterCommands } from "../../agent/slash";
 import { atQueryAtEnd, composeWithRefs, type VideoRef } from "../../agent/mention";
@@ -413,6 +414,14 @@ export function InputBox({
     setText((d) => (d.trim() ? `${d.trim()} ${t}` : t));
     requestAnimationFrame(() => textareaRef.current?.focus());
   });
+  // Expose dictation to the global Shift+V shortcut via the bridge (a ref keeps
+  // the registered fn pointing at the current toggle without re-registering).
+  const dictationToggleRef = useRef(dictation.toggle);
+  dictationToggleRef.current = dictation.toggle;
+  useEffect(() => {
+    registerDictationStarter(() => dictationToggleRef.current());
+    return () => registerDictationStarter(null);
+  }, []);
 
   // Shared controls — arranged differently per mode below.
   const toolsBtn = (

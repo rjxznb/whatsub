@@ -460,7 +460,7 @@ export function InputBox({
         "h-9 w-9 shrink-0 grid place-items-center rounded-full border bg-transparent transition-colors " +
         (canSend
           ? "border-zinc-400 text-zinc-100 hover:border-white hover:text-white"
-          : "border-zinc-700 text-zinc-600 cursor-not-allowed")
+          : "border-zinc-700 text-zinc-600")
       }
     >
       <Send size={14} />

@@ -331,6 +331,23 @@ export function InputBox({
       open={toolsOpen}
       anchorEl={toolsBtnRef.current}
       onClose={() => setToolsOpen(false)}
+      onPick={(tplText, caret) => {
+        // Insert the tool's prompt template, drop the cursor where the user
+        // fills in their content, and focus so they can type immediately.
+        setText(tplText);
+        setHistoryIndex(null);
+        setSavedDraft("");
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          if (!el) return;
+          el.focus();
+          try {
+            el.setSelectionRange(caret, caret);
+          } catch {
+            /* setSelectionRange can throw on some states — ignore */
+          }
+        });
+      }}
     />
   );
 

@@ -18,39 +18,49 @@ interface Props {
   open: boolean;
   anchorEl: HTMLElement | null;
   onClose: () => void;
+  /** Insert a tool's prompt template into the input. `caret` is where the
+   *  cursor should land (the spot the user fills in). */
+  onPick: (text: string, caret: number) => void;
 }
 
 interface ToolInfo {
   label: string;
   desc: string;
+  /** Prompt template inserted on click. `CARET` marks where the cursor lands
+   *  (stripped before insert); omit it to drop the cursor at the end. */
+  tpl: string;
 }
 
-// Chinese display labels per tool. Membership/count come from the registry —
-// this map only prettifies. Keep keys aligned with the tool ids.
+// Invisible sentinel marking the caret position inside a template.
+const CARET = "";
+
+// Chinese display labels + click-to-insert prompt templates per tool.
+// Membership/count come from the registry — this map only prettifies + maps
+// each tool to a starting prompt. Keep keys aligned with the tool ids.
 const TOOL_INFO: Record<string, ToolInfo> = {
-  corpus_browse: { label: "查语料库", desc: "浏览公共 / 我的语料库短语" },
-  corpus_phrase_detail: { label: "短语详情", desc: "查某短语的释义 / 用法 / 标签" },
-  list_library: { label: "列视频库", desc: "列出本地库（可筛场景 / 状态）" },
-  list_vocab: { label: "列生词本", desc: "列出收藏的生词" },
-  youtube_search: { label: "搜 YouTube", desc: "搜视频（只搜不下）" },
-  recommend_review: { label: "推荐复习", desc: "按薄弱点定位到「视频 + 几分几秒」" },
-  query_learner_profile: { label: "读学习档案", desc: "水平 / 薄弱点 / 最近错误" },
-  open_video: { label: "打开视频", desc: "跳到播放页（可定位到秒）" },
-  open_page: { label: "跳转页面", desc: "库 / 生词本 / 语料库 / 设置" },
-  seek_to_time: { label: "定位时间", desc: "跳到某秒（仅播放页）" },
-  jump_to_cue: { label: "跳到字幕", desc: "跳到第 N 句（仅播放页）" },
-  start_lesson: { label: "开始精讲", desc: "生成计划逐句精讲（仅播放页）" },
-  start_roleplay: { label: "角色扮演", desc: "基于视频场景对练" },
-  start_remediation: { label: "专项练习", desc: "针对某薄弱 pattern 练 3 分钟" },
-  vocab_add: { label: "加生词", desc: "收藏一个 / 多个短语" },
-  vocab_remove: { label: "删生词", desc: "移除某条生词" },
-  vocab_update_note: { label: "改笔记", desc: "改某条生词的用法笔记" },
-  sync_to_cloud: { label: "同步到云", desc: "推到云端供 iOS 查看" },
-  materialize_from_cloud: { label: "下载到本地", desc: "把云端视频拉到本地" },
-  import_video: { label: "导入视频", desc: "从 URL 导入（YouTube / B站 等）" },
-  delete_video: { label: "删视频", desc: "删本地（可选同时删云端）" },
-  unsync_from_cloud: { label: "取消云同步", desc: "从云端下架（保留本地）" },
-  retranscribe_video: { label: "重新转写", desc: "用当前 whisper 重转字幕" },
+  corpus_browse: { label: "查语料库", desc: "浏览公共 / 我的语料库短语", tpl: `在语料库里找关于 ${CARET} 的短语` },
+  corpus_phrase_detail: { label: "短语详情", desc: "查某短语的释义 / 用法 / 标签", tpl: `查一下 "${CARET}" 这个短语的意思和用法` },
+  list_library: { label: "列视频库", desc: "列出本地库（可筛场景 / 状态）", tpl: `列出我视频库里${CARET}的视频` },
+  list_vocab: { label: "列生词本", desc: "列出收藏的生词", tpl: `看看我的生词本里有哪些词` },
+  youtube_search: { label: "搜 YouTube", desc: "搜视频（只搜不下）", tpl: `在 YouTube 上搜索：${CARET}` },
+  recommend_review: { label: "推荐复习", desc: "按薄弱点定位到「视频 + 几分几秒」", tpl: `我最近哪方面比较弱？给我推荐几处复习片段` },
+  query_learner_profile: { label: "读学习档案", desc: "水平 / 薄弱点 / 最近错误", tpl: `看看我的学习档案（水平和薄弱点）` },
+  open_video: { label: "打开视频", desc: "跳到播放页（可定位到秒）", tpl: `打开视频：${CARET}` },
+  open_page: { label: "跳转页面", desc: "库 / 生词本 / 语料库 / 设置", tpl: `去${CARET}页面` },
+  seek_to_time: { label: "定位时间", desc: "跳到某秒（仅播放页）", tpl: `跳到 ${CARET}` },
+  jump_to_cue: { label: "跳到字幕", desc: "跳到第 N 句（仅播放页）", tpl: `跳到第 ${CARET} 句字幕` },
+  start_lesson: { label: "开始精讲", desc: "生成计划逐句精讲（仅播放页）", tpl: `精讲这个视频` },
+  start_roleplay: { label: "角色扮演", desc: "基于视频场景对练", tpl: `用这个视频的场景跟我角色扮演` },
+  start_remediation: { label: "专项练习", desc: "针对某薄弱 pattern 练 3 分钟", tpl: `针对我的薄弱点来个 3 分钟专项练习` },
+  vocab_add: { label: "加生词", desc: "收藏一个 / 多个短语", tpl: `把 "${CARET}" 加到生词本` },
+  vocab_remove: { label: "删生词", desc: "移除某条生词", tpl: `从生词本删掉 "${CARET}"` },
+  vocab_update_note: { label: "改笔记", desc: "改某条生词的用法笔记", tpl: `把生词 "${CARET}" 的笔记改成：` },
+  sync_to_cloud: { label: "同步到云", desc: "推到云端供 iOS 查看", tpl: `把${CARET}这个视频同步到云端` },
+  materialize_from_cloud: { label: "下载到本地", desc: "把云端视频拉到本地", tpl: `把云端的 ${CARET} 下载到本地` },
+  import_video: { label: "导入视频", desc: "从 URL 导入（YouTube / B站 等）", tpl: `导入这个视频：${CARET}` },
+  delete_video: { label: "删视频", desc: "删本地（可选同时删云端）", tpl: `删除视频：${CARET}` },
+  unsync_from_cloud: { label: "取消云同步", desc: "从云端下架（保留本地）", tpl: `取消这个视频的云同步：${CARET}` },
+  retranscribe_video: { label: "重新转写", desc: "用当前 whisper 重转字幕", tpl: `重新转写视频：${CARET}` },
 };
 
 const GROUPS: Array<{ title: string; ids: string[] }> = [
@@ -83,7 +93,15 @@ function RiskBadge({ tier }: { tier: RiskTier }) {
   );
 }
 
-export function ToolsPopover({ open, anchorEl, onClose }: Props) {
+export function ToolsPopover({ open, anchorEl, onClose, onPick }: Props) {
+  // Insert a tool's template: strip the caret sentinel, report where the cursor
+  // should land, then close.
+  const pick = (tpl: string) => {
+    const i = tpl.indexOf(CARET);
+    const text = tpl.replace(CARET, "");
+    onPick(text, i >= 0 ? i : text.length);
+    onClose();
+  };
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
 
@@ -136,7 +154,7 @@ export function ToolsPopover({ open, anchorEl, onClose }: Props) {
       style={{ left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: "min(62vh, 460px)" }}
     >
       <div className="shrink-0 px-3 py-2 border-b border-zinc-800 text-[12px] text-zinc-400">
-        Agent 能用的工具 · 共 {TOOLS.length} 个
+        点一个把指令模板填到输入框 · 共 {TOOLS.length} 个
       </div>
       <div className="min-h-0 overflow-y-auto py-1">
         {groups.map((g) => (
@@ -145,8 +163,15 @@ export function ToolsPopover({ open, anchorEl, onClose }: Props) {
             {g.ids.map((id) => {
               const tool = getTool(id);
               const info = TOOL_INFO[id];
+              const tpl = info?.tpl ?? info?.label ?? id;
               return (
-                <div key={id} className="flex items-start gap-2 rounded px-2 py-1 hover:bg-white/5">
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => pick(tpl)}
+                  title="点击插入到输入框"
+                  className="flex w-full items-start gap-2 rounded px-2 py-1 text-left hover:bg-white/5 transition-colors"
+                >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center text-[13px] text-zinc-100">
                       <span className="truncate">{info?.label ?? id}</span>
@@ -156,7 +181,7 @@ export function ToolsPopover({ open, anchorEl, onClose }: Props) {
                       {info?.desc ?? tool?.description ?? ""}
                     </div>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

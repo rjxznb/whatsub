@@ -763,6 +763,7 @@ export function Library() {
       {importInitial && (
         <ImportModal
           initialFilePath={importInitial.filePath}
+          showSampleLink={tourStep !== null}
           onClose={() => setImportInitial(null)}
         />
       )}

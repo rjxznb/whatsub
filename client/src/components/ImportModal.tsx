@@ -37,6 +37,9 @@ interface Props {
   /** Pre-fill the local-file path; switches the modal to the "本地文件" tab.
    *  Used when a file is dropped onto the window. */
   initialFilePath?: string;
+  /** Show the "试试示例" sample-link hint. Only true during the onboarding tour
+   *  (first-time users) — hidden in normal use to keep the card clean. */
+  showSampleLink?: boolean;
 }
 
 type PipelineEventPayload =
@@ -118,7 +121,7 @@ function phaseDuration(phase: Phase, whisperModel: WhisperModelSize): string {
   }
 }
 
-export function ImportModal({ onClose, initialFilePath }: Props) {
+export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props) {
   const navigate = useNavigate();
   const { settings } = useSettings();
   const { reload } = useLibrary();
@@ -961,18 +964,20 @@ export function ImportModal({ onClose, initialFilePath }: Props) {
                   · 有英文 auto-captions,跑得通整条字幕流水线
                 Note: still needs 梯子 to actually fetch since it's on
                 youtube.com — checklist already covers that path. */}
-            <button
-              type="button"
-              data-tour="sample-link"
-              onClick={() => {
-                setUrlValue(SAMPLE_URL);
-                if (validationError) setValidationError(null);
-                urlInputRef.current?.focus();
-              }}
-              className="mt-1.5 text-[11px] text-blue-300 hover:text-blue-200 hover:underline transition-colors"
-            >
-              没有合适的链接?试试示例:Me at the zoo(YouTube 第一支视频,18 秒) →
-            </button>
+            {showSampleLink && (
+              <button
+                type="button"
+                data-tour="sample-link"
+                onClick={() => {
+                  setUrlValue(SAMPLE_URL);
+                  if (validationError) setValidationError(null);
+                  urlInputRef.current?.focus();
+                }}
+                className="mt-1.5 text-[11px] text-blue-300 hover:text-blue-200 hover:underline transition-colors"
+              >
+                没有合适的链接?试试示例:Me at the zoo(YouTube 第一支视频,18 秒) →
+              </button>
+            )}
             <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
               <span className="shrink-0">画质</span>
               <select

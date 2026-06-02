@@ -255,94 +255,110 @@ export function InputBox({
         ? "" // focused but empty: no placeholder, just the cursor
         : typedPlaceholder || "问点什么…";
 
-  return (
-    // px-2 horizontal + py-1.5 vertical padding gives the button a small
-    // breathing margin (6px above + below) inside the bar. items-end keeps
-    // the send button anchored to the bottom row when the textarea
-    // auto-grows for multi-line input.
-    //
-    // minHeight: 48 = BAR_H (50) - bar border (2). Guarantees the input box
-    // area never collapses below the "a" baseline the user sees on the
-    // first paint — important inside panel mode where the bar's own
-    // min-height: 50 isn't active (panel uses explicit height instead).
-    // Without this, typing inside panel mode could shrink the bottom input
-    // box to just the textarea's scrollHeight.
-    <div
+  // Shared controls — arranged differently per mode below.
+  const toolsBtn = (
+    <button
+      ref={toolsBtnRef}
+      type="button"
+      onClick={() => setToolsOpen((o) => !o)}
+      aria-label="查看所有工具"
+      title="Agent 能用的工具"
       className={
-        "flex items-end gap-2 px-2 py-1.5 " + (panelMode ? "h-full" : "")
+        "h-8 w-8 shrink-0 grid place-items-center rounded-full transition-colors " +
+        (toolsOpen
+          ? "bg-white/10 text-zinc-100"
+          : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
       }
-      style={panelMode ? undefined : { minHeight: 48 }}
     >
-      {/* Tools reference: click to see every tool the agent can use. */}
-      <button
-        ref={toolsBtnRef}
-        type="button"
-        onClick={() => setToolsOpen((o) => !o)}
-        aria-label="查看所有工具"
-        title="Agent 能用的工具"
-        className={
-          "h-9 w-9 shrink-0 grid place-items-center rounded-md transition-colors " +
-          (toolsOpen
-            ? "bg-white/10 text-zinc-100"
-            : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
-        }
-      >
-        <Wrench size={15} />
-      </button>
-      <ToolsPopover
-        open={toolsOpen}
-        anchorEl={toolsBtnRef.current}
-        onClose={() => setToolsOpen(false)}
-      />
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={handleChange}
-        onKeyDown={handleKey}
-        onFocus={() => setIsFocused(true)}
-        onBlur={() => setIsFocused(false)}
-        placeholder={placeholder}
-        disabled={noLlm}
-        rows={1}
-        // Bar mode: explicit initial height = 36 so the first paint matches the
-        // post-useLayoutEffect steady state (no UA-default flash). Panel mode:
-        // fill the user-sized input row and scroll internally.
-        style={
-          panelMode
-            ? { height: "100%" }
-            : { height: 36, minHeight: 36, maxHeight: 96 }
-        }
-        className="flex-1 resize-none rounded-md bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-2 py-1.5 leading-tight focus:outline-none disabled:opacity-50"
-        aria-label="输入消息"
-      />
-      {streaming ? (
-        <button
-          type="button"
-          onClick={onStop}
-          aria-label="停止"
-          className="h-9 w-9 shrink-0 grid place-items-center rounded-md bg-rose-500/80 hover:bg-rose-500 text-white"
-        >
-          <Square size={14} />
-        </button>
-      ) : (
-        // Disabled style uses explicit colors (NOT opacity reduction) so the
-        // button + icon stay legible on the bar's dark backdrop. Active state
-        // is bright white-on-dark so it pops as the obvious primary action.
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!canSend}
-          aria-label="发送"
-          className={
-            "h-9 w-9 shrink-0 grid place-items-center rounded-md transition-colors " +
-            (canSend
-              ? "bg-zinc-100 hover:bg-white text-zinc-900"
-              : "bg-zinc-700 text-zinc-400 cursor-not-allowed")
-          }
-        >
-          <Send size={14} />
-        </button>
-      )}
+      <Wrench size={15} />
+    </button>
+  );
+
+  const sendBtn = streaming ? (
+    <button
+      type="button"
+      onClick={onStop}
+      aria-label="停止"
+      className="h-9 w-9 shrink-0 grid place-items-center rounded-full bg-rose-500/80 hover:bg-rose-500 text-white transition-colors"
+    >
+      <Square size={14} />
+    </button>
+  ) : (
+    // Disabled style uses explicit colors (NOT opacity reduction) so the icon
+    // stays legible on the dark backdrop; active is bright white-on-dark.
+    <button
+      type="button"
+      onClick={submit}
+      disabled={!canSend}
+      aria-label="发送"
+      className={
+        "h-9 w-9 shrink-0 grid place-items-center rounded-full transition-colors " +
+        (canSend
+          ? "bg-zinc-100 hover:bg-white text-zinc-900"
+          : "bg-zinc-700 text-zinc-400 cursor-not-allowed")
+      }
+    >
+      <Send size={14} />
+    </button>
+  );
+
+  const textarea = (
+    <textarea
+      ref={textareaRef}
+      value={text}
+      onChange={handleChange}
+      onKeyDown={handleKey}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
+      placeholder={placeholder}
+      disabled={noLlm}
+      rows={1}
+      // Bar mode: explicit initial height = 36 so the first paint matches the
+      // post-useLayoutEffect steady state (no UA-default flash). Panel mode:
+      // fill the available space above the button row and scroll internally.
+      style={
+        panelMode
+          ? { height: "100%" }
+          : { height: 36, minHeight: 36, maxHeight: 96 }
+      }
+      className="w-full flex-1 resize-none bg-transparent text-[14px] text-zinc-100 placeholder-zinc-500 px-1 py-1 leading-snug focus:outline-none disabled:opacity-50"
+      aria-label="输入消息"
+    />
+  );
+
+  const popover = (
+    <ToolsPopover
+      open={toolsOpen}
+      anchorEl={toolsBtnRef.current}
+      onClose={() => setToolsOpen(false)}
+    />
+  );
+
+  // Panel mode: a self-contained rounded input CARD embedded in the chat
+  // surface — text on top, an action row (tools left, send right) below.
+  if (panelMode) {
+    return (
+      <div className="h-full p-2">
+        {popover}
+        <div className="flex h-full flex-col rounded-2xl border border-zinc-700/70 bg-zinc-800/40 px-3 pt-2.5 pb-2">
+          <div className="min-h-0 flex-1">{textarea}</div>
+          <div className="flex shrink-0 items-center justify-between pt-1.5">
+            {toolsBtn}
+            {sendBtn}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Bar mode: a single inline strip (the floating 600×50 bar). items-end keeps
+  // the send button anchored to the bottom row when the textarea grows.
+  return (
+    <div className="flex items-end gap-1.5 px-2 py-1.5" style={{ minHeight: 48 }}>
+      {toolsBtn}
+      {popover}
+      {textarea}
+      {sendBtn}
     </div>
   );
 }

@@ -17,12 +17,14 @@ export const PANEL_MIN_W = 380;
 export const PANEL_MAX_W = 900;
 export const PANEL_MIN_H = 300;
 export const PANEL_MAX_H = 860;
-export const INPUT_MIN_H = 48;
+// Panel input is now a stacked card (textarea on top + an action row below),
+// so it needs more vertical room than the old single-line strip.
+export const INPUT_MIN_H = 92;
 export const INPUT_MAX_H = 280;
 
 const DEFAULT_W = 600;
 const DEFAULT_H = 480; // ~60vh on a typical window; user can resize
-const DEFAULT_INPUT_H = 52; // single-line input row (≈ BAR_H)
+const DEFAULT_INPUT_H = 108; // textarea + action row in the input card
 
 export function clampNum(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));

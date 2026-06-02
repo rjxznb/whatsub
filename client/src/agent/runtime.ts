@@ -39,6 +39,7 @@ import type {
 import { getTool, listTools } from "./registry";
 import { ConfirmationGate } from "./gate";
 import { snapshot, render } from "./context";
+import { prepareWireHistory, modelContextBudget } from "./history";
 
 // Spec §7.1: identity block, plus a private-tutor responsibility section.
 const STATIC_SYSTEM_PROMPT = `你是 whatsub Agent —— whatsub 桌面 app 的内置 AI 私教。
@@ -163,9 +164,16 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
     if (opts.signal.aborted) return;
 
     const tools = listTools(opts.page);
+    // Reduce the history actually sent to the LLM (store keeps the full copy):
+    // fold past-turn large tool results + drop oldest messages if we'd blow the
+    // model's context budget. See agent/history.ts.
+    const wireHistory = prepareWireHistory(
+      workingHistory,
+      modelContextBudget(opts.model),
+    );
     const events = opts.provider.streamWithTools({
       systemPrompt,
-      history: workingHistory,
+      history: wireHistory,
       tools,
       signal: opts.signal,
     });

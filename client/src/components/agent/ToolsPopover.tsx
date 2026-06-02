@@ -129,6 +129,7 @@ export function ToolsPopover({ open, anchorEl, onClose }: Props) {
     <div
       ref={panelRef}
       data-no-drag
+      data-agent-popover
       role="dialog"
       aria-label="Agent 能用的工具"
       className="fixed z-[120] rounded-lg border border-zinc-700 bg-zinc-900/98 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col"

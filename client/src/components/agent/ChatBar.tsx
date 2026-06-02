@@ -284,6 +284,11 @@ export function ChatBar({
       const node = containerRef.current;
       if (!node) return;
       if (e.target instanceof Node && node.contains(e.target)) return;
+      // Popovers we own (e.g. the tools list) are portaled to <body> — OUTSIDE
+      // this container — so a click on them isn't `node.contains`. Treat them as
+      // inside, else clicking a popover row would collapse the panel.
+      if (e.target instanceof Element && e.target.closest("[data-agent-popover]"))
+        return;
       // Click-outside collapses straight to the icon (the resting state);
       // "bar" is no longer an intermediate stop.
       onModeChange("icon");

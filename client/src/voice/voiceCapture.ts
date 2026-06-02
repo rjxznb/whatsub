@@ -98,6 +98,11 @@ export async function startVoiceCapture(
   processor.connect(muteGain);
   muteGain.connect(ctx.destination);
 
+  // WebView2/Chromium may create the AudioContext suspended (autoplay policy);
+  // without resuming, onaudioprocess never fires → no levels, no utterances.
+  // Voice mode opens from a user gesture so this resolves immediately.
+  void ctx.resume().catch(() => {});
+
   // ── VAD + sample accumulator ──────────────────────────────────────────────
   const frameMs = (bufferSize / ctx.sampleRate) * 1000;
   const vad = new Vad({ ...vadConfig, frameMs });

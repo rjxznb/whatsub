@@ -29,9 +29,10 @@ const ParticleOrb = lazy(() =>
 
 const IDLE_DISMISS_MS = 6000; // silence this long (while listening) → close
 const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
-// Raw mic RMS rarely exceeds ~0.15 even when speaking loudly, so map it onto a
-// full 0..1 range for the orb (the orb grows up to +75%). Above this RMS = max.
-const RMS_FULL_SCALE = 0.13;
+// Raw mic RMS rarely exceeds ~0.1 even when speaking, so map it onto a full
+// 0..1 range for the orb. Lower = more sensitive (the orb reacts to normal,
+// not just loud, speech). Above this RMS = max.
+const RMS_FULL_SCALE = 0.07;
 
 // The orb is now a three.js particle system (ParticleOrb) that morphs by
 // conversation state. RMS_FULL_SCALE above still normalizes the mic level fed

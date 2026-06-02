@@ -64,16 +64,16 @@ void main(){
   vec3 p=base+dir*(uDisplace*n + uAudio*uSpike*abs(n)); // spike outward with volume
   vB=0.5+0.5*n;
   vec4 mv=modelViewMatrix*vec4(p,1.0);
-  gl_PointSize=clamp(uPointSize*(1.0+uAudio*0.5)*(4.2/-mv.z),1.0,8.0);
+  gl_PointSize=clamp(uPointSize*(1.0+uAudio*0.9)*(4.2/-mv.z),1.0,9.0); // points grow when you speak
   gl_Position=projectionMatrix*mv;
 }`;
 
 const FRAG = `
-uniform vec3 uC1,uC2; varying float vB;
+uniform vec3 uC1,uC2; uniform float uAudio; varying float vB;
 void main(){
   vec2 c=gl_PointCoord-0.5; float d=length(c); if(d>0.5) discard;
-  float a=smoothstep(0.5,0.0,d)*0.6;   // soft round dot, modest alpha (not blown out)
-  gl_FragColor=vec4(mix(uC1,uC2,vB), a);
+  float a=smoothstep(0.5,0.0,d)*0.6;   // soft round dot, modest alpha
+  gl_FragColor=vec4(mix(uC1,uC2,vB)*(1.0+uAudio*0.7), a); // brighter when you speak (no bloom → bounded)
 }`;
 
 export function ParticleOrb({ state, level, size = 300 }: Props) {
@@ -109,7 +109,7 @@ export function ParticleOrb({ state, level, size = 300 }: Props) {
       uTime: { value: 0 },
       uAudio: { value: 0 },
       uDisplace: { value: 0.08 },
-      uSpike: { value: 0.45 },
+      uSpike: { value: 0.6 },
       uPointSize: { value: 5.0 },
       uC1: { value: new THREE.Color(0x3f8fe0) }, // sky blue
       uC2: { value: new THREE.Color(0xcfe6ff) }, // soft light blue (not pure white)

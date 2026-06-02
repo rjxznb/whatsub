@@ -3,6 +3,7 @@ import type { RemediationRuntime } from "../../tutor/remediationRuntime";
 import { ERROR_PATTERN_LABELS } from "../../tutor/errorPatterns";
 import { LessonOverlay } from "./LessonOverlay";
 import { TUTOR_CARD, TUTOR_EYEBROW, TUTOR_TEXTAREA, BTN_PRIMARY } from "./styles";
+import { VoiceAnswerButton } from "./VoiceAnswerButton";
 
 interface Props {
   runtime: RemediationRuntime | null;
@@ -61,20 +62,26 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   rows={2}
+                  placeholder="作答…（也可点麦克风语音作答）"
                   className={`${TUTOR_TEXTAREA} mb-3`}
                 />
-                <button
-                  type="button"
-                  disabled={draft.trim().length === 0}
-                  onClick={() => {
-                    runtime.submitAnswer(draft);
-                    setVersion((v) => v + 1);
-                    setDraft("");
-                  }}
-                  className={BTN_PRIMARY}
-                >
-                  提交
-                </button>
+                <div className="flex items-center gap-2">
+                  <VoiceAnswerButton
+                    onText={(t) => setDraft((d) => (d.trim() ? `${d.trim()} ${t}` : t))}
+                  />
+                  <button
+                    type="button"
+                    disabled={draft.trim().length === 0}
+                    onClick={() => {
+                      runtime.submitAnswer(draft);
+                      setVersion((v) => v + 1);
+                      setDraft("");
+                    }}
+                    className={BTN_PRIMARY}
+                  >
+                    提交
+                  </button>
+                </div>
               </>
             )}
             {q.hint && (

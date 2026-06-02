@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RoleplayRuntime } from "../../tutor/roleplayRuntime";
 import { LessonOverlay } from "./LessonOverlay";
 import { TUTOR_CARD, TUTOR_EYEBROW, TUTOR_TEXTAREA, BTN_PRIMARY } from "./styles";
+import { VoiceAnswerButton } from "./VoiceAnswerButton";
 
 interface Props {
   runtime: RoleplayRuntime;
@@ -58,13 +59,17 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
         </div>
 
         {/* Input row */}
-        <div className="flex gap-2">
+        <div className="flex items-end gap-2">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
-            placeholder="用英文回复…"
+            placeholder="用英文回复…（也可点麦克风语音回复）"
             className={`flex-1 ${TUTOR_TEXTAREA}`}
+          />
+          <VoiceAnswerButton
+            disabled={runtime.state.loading}
+            onText={(t) => setDraft((d) => (d.trim() ? `${d.trim()} ${t}` : t))}
           />
           <button
             type="button"

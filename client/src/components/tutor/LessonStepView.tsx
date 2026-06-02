@@ -19,6 +19,7 @@ import {
 } from "../../tutor/tts";
 import { EDGE_VOICE_GROUPS } from "../../tutor/edgeTts";
 import { MarkdownText } from "../agent/markdown";
+import { VoiceAnswerButton } from "./VoiceAnswerButton";
 import {
   TUTOR_CARD,
   TUTOR_EYEBROW,
@@ -378,11 +379,15 @@ export function LessonStepView({
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="用英文作答…"
+            placeholder="用英文作答…（也可点麦克风语音作答）"
             rows={3}
             className={TUTOR_TEXTAREA}
           />
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-2">
+            <VoiceAnswerButton
+              disabled={busy}
+              onText={(t) => setDraft((d) => (d.trim() ? `${d.trim()} ${t}` : t))}
+            />
             <button
               type="button"
               onClick={() => {

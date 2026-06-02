@@ -336,18 +336,18 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
 
         <ul className="px-5 py-4 space-y-4 text-sm text-zinc-200">
           <li className="flex gap-3">
-            <Globe className="w-4 h-4 mt-0.5 shrink-0 text-blue-400" />
+            <Globe className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
             <div className="leading-relaxed">
               <span className="font-medium">下载 YouTube 等海外视频必须开启梯子</span>
             </div>
           </li>
 
           <li className="flex gap-3">
-            <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0 text-amber-400" />
+            <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
             <div className="leading-relaxed flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium">授权 whatsub 使用你的网站登录状态</span>
-                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-zinc-700/60 text-zinc-400">
                   强烈建议
                 </span>
               </div>

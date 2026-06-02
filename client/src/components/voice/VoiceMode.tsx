@@ -23,8 +23,8 @@ import { setTtsAnalyse } from "../../tutor/tts";
 
 // Lazy so the three.js bundle is a separate chunk, loaded only when voice mode
 // first opens (keeps the main app bundle lean).
-const ParticleOrb = lazy(() =>
-  import("./ParticleOrb").then((m) => ({ default: m.ParticleOrb })),
+const VoiceOrb = lazy(() =>
+  import("./VoiceOrb").then((m) => ({ default: m.VoiceOrb })),
 );
 
 const IDLE_DISMISS_MS = 6000; // silence this long (while listening) → close
@@ -34,9 +34,9 @@ const ACTIVITY_LEVEL = 0.03; // mic RMS above this counts as "user is talking"
 // not just loud, speech). Above this RMS = max.
 const RMS_FULL_SCALE = 0.07;
 
-// The orb is now a three.js particle system (ParticleOrb) that morphs by
-// conversation state. RMS_FULL_SCALE above still normalizes the mic level fed
-// to it as the listening signal.
+// The orb is a 2D liquid-glass circle (VoiceOrb) whose outer glow radiates with
+// volume. RMS_FULL_SCALE above normalizes the mic level fed to it as the
+// listening signal.
 
 function statusHint(state: VoiceState, errorMsg: string): string {
   switch (state) {
@@ -276,7 +276,7 @@ function VoiceModeInner() {
           )}
 
           <Suspense fallback={null}>
-            <ParticleOrb state={voiceState} level={level} />
+            <VoiceOrb state={voiceState} level={level} />
           </Suspense>
 
           {hint && (

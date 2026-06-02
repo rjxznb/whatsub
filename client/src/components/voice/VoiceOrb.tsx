@@ -1,14 +1,13 @@
-// src/components/voice/ParticleOrb.tsx
+// src/components/voice/VoiceOrb.tsx
 //
-// three.js particle orb for voice mode. ~5000 points that ALWAYS form a sphere
-// (no shape-morphing), rendered with additive blending on a fully TRANSPARENT
-// canvas — no post-processing bloom (that blew the orb out to solid white and
-// broke the canvas alpha, leaving a visible dark square). Volume drives the
-// outward spike + a mild size pulse; the body keeps a constant size.
+// Voice-mode orb: a flat 2D glass circle (NOT a 3D sphere) rendered as a
+// fragment shader on a transparent canvas. Liquid-glass material (soft top-left
+// sheen + bright rim) over a clean duotone "流光" gradient that drifts slowly.
+// Palette is a single, restrained slate-blue → near-white family (no rainbow).
 //
-// `level` = mic RMS (0..1) while the user speaks; during the AI reply the orb
-// reacts to the TTS amplitude instead. WebGL setup is guarded so the component
-// is a harmless empty div where WebGL isn't available (tests).
+// Ambient / calm: the gradient flows slowly; speaking flows a touch faster and
+// the glass brightens a little. Body size + colors stay constant. WebGL setup
+// is guarded so it's a harmless empty div where WebGL isn't available (tests).
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
@@ -17,24 +16,9 @@ import { getTtsLevel } from "../../tutor/tts";
 
 interface Props {
   state: VoiceState;
-  /** Mic level 0..1 (drives the listening spikes). */
+  /** Mic level 0..1 (the user speaking). */
   level: number;
   size?: number;
-}
-
-const N = 5000;
-
-function sphereShape(): Float32Array {
-  const a = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) {
-    const y = 1 - (i / (N - 1)) * 2;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    const phi = i * Math.PI * (3 - Math.sqrt(5));
-    a[i * 3] = Math.cos(phi) * r;
-    a[i * 3 + 1] = y;
-    a[i * 3 + 2] = Math.sin(phi) * r;
-  }
-  return a;
 }
 
 const NOISE = `
@@ -52,31 +36,56 @@ vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));p0*=n
 vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);m=m*m;
 return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));}`;
 
-const VERT =
+const VERT = `varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}`;
+
+const FRAG =
   NOISE +
   `
-uniform float uTime,uAudio,uDisplace,uSpike,uPointSize;
-varying float vB;
+uniform float uTime,uAudio;uniform vec3 uC1,uC2;varying vec2 vUv;
+// clean duotone: one color family, deep → light
+vec3 pal(float t){return mix(uC1,uC2,smoothstep(0.0,1.0,clamp(t,0.0,1.0)));}
 void main(){
-  vec3 base=position;
-  vec3 dir=normalize(base);
-  float n=snoise(base*1.4+uTime*0.3);
-  vec3 p=base+dir*(uDisplace*n + uAudio*uSpike*abs(n)); // spike outward with volume
-  vB=0.5+0.5*n;
-  vec4 mv=modelViewMatrix*vec4(p,1.0);
-  gl_PointSize=clamp(uPointSize*(1.0+uAudio*0.9)*(4.2/-mv.z),1.0,9.0); // points grow when you speak
-  gl_Position=projectionMatrix*mv;
+  vec2 uv=vUv*2.0-1.0;float r=length(uv);
+  float rb=0.52;                                  // body radius (margin left for glow)
+  vec2 bv=uv/rb;                                   // body-local coords
+  // 流光渐变 — clean smooth flowing field drifting inside the body
+  float t=uTime*0.08;
+  float f1=0.5+0.5*snoise(vec3(bv*0.8,t));
+  float f2=0.5+0.5*snoise(vec3(bv*0.75+4.0,t*0.75+2.0));
+  float f=f1*0.6+f2*0.4;
+  vec3 grad=pal(f*0.9+0.05+0.04*sin(uTime*0.15));
+  // ── circle body: even glass, NO inward glow ──
+  float body=smoothstep(rb+0.012,rb-0.03,r);
+  vec3 col=grad;
+  vec2 hp=uv-vec2(-0.18,0.18);
+  float hl=smoothstep(0.34,0.0,length(hp));        // soft top-left sheen
+  col+=vec3(1.0)*hl*0.30;
+  float rim=smoothstep(rb-0.09,rb,r)*smoothstep(rb+0.02,rb-0.05,r);
+  col+=mix(uC2,vec3(1.0),0.5)*rim*0.65;            // bright glass rim
+  float streak=smoothstep(0.05,0.0,abs(uv.x*0.6+uv.y-sin(uTime*0.25)*0.4))*body;
+  col+=vec3(1.0)*streak*0.10;                      // slow liquid specular streak
+  vec3 outc=col*body; float a=body*0.95;
+  // ── outer glow only: radiates OUTWARD from the rim, range grows with volume ──
+  float dist=r-rb;
+  float gw=0.13+uAudio*0.16;                       // glow reach grows with volume
+  float outside=smoothstep(-0.02,0.02,dist);
+  float glow=exp(-pow(max(dist,0.0)/gw,2.0))*outside;
+  vec3 glowCol=mix(uC2,vec3(1.0),0.3);
+  float gA=glow*(0.42+uAudio*0.55);
+  outc+=glowCol*gA; a+=gA;
+  gl_FragColor=vec4(outc,clamp(a,0.0,1.0));
 }`;
 
-const FRAG = `
-uniform vec3 uC1,uC2; uniform float uAudio; varying float vB;
-void main(){
-  vec2 c=gl_PointCoord-0.5; float d=length(c); if(d>0.5) discard;
-  float a=smoothstep(0.5,0.0,d)*0.6;   // soft round dot, modest alpha
-  gl_FragColor=vec4(mix(uC1,uC2,vB)*(1.0+uAudio*0.7), a); // brighter when you speak (no bloom → bounded)
-}`;
+// Per-state flow cadence (≈ seconds, the FRAG re-scales internally). Speaking
+// drifts a touch faster; idle is the slowest / most ambient.
+function flowSpeed(state: VoiceState): number {
+  if (state === "speaking") return 1.25;
+  if (state === "thinking" || state === "transcribing") return 1.0;
+  if (state === "listening") return 0.8;
+  return 0.55; // idle
+}
 
-export function ParticleOrb({ state, level, size = 300 }: Props) {
+export function VoiceOrb({ state, level, size = 340 }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -89,7 +98,6 @@ export function ParticleOrb({ state, level, size = 300 }: Props) {
 
     let renderer: THREE.WebGLRenderer;
     try {
-      // alpha:true + clearAlpha 0 → fully transparent canvas (no dark square).
       renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     } catch {
       return; // no WebGL (e.g. tests)
@@ -102,47 +110,43 @@ export function ParticleOrb({ state, level, size = 300 }: Props) {
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    const cam = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-    cam.position.z = 4.2; // far enough that the sphere + spikes leave a margin
-
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     const uniforms = {
       uTime: { value: 0 },
       uAudio: { value: 0 },
-      uDisplace: { value: 0.08 },
-      uSpike: { value: 0.6 },
-      uPointSize: { value: 5.0 },
-      uC1: { value: new THREE.Color(0x3f8fe0) }, // sky blue
-      uC2: { value: new THREE.Color(0xcfe6ff) }, // soft light blue (not pure white)
+      uC1: { value: new THREE.Color(0x5b6bc4) }, // 板岩蓝
+      uC2: { value: new THREE.Color(0xdfe6ff) }, // 近白
     };
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(sphereShape(), 3));
+    const geo = new THREE.PlaneGeometry(2, 2);
     const mat = new THREE.ShaderMaterial({
       uniforms,
       vertexShader: VERT,
       fragmentShader: FRAG,
       transparent: true,
-      blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    const points = new THREE.Points(geo, mat);
-    scene.add(points);
+    scene.add(new THREE.Mesh(geo, mat));
 
+    let flowT = 0;
     let amp = 0;
+    let last = performance.now();
     let raf = 0;
-    const start = performance.now();
 
     const frame = () => {
-      const t = (performance.now() - start) / 1000;
+      const now = performance.now();
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
       const st = stateRef.current;
+      flowT += dt * flowSpeed(st);
+
       let raw = 0;
       if (st === "speaking") raw = getTtsLevel();
       else if (st === "listening") raw = Math.min(1, Math.max(0, levelRef.current));
       else if (st === "thinking" || st === "transcribing") raw = 0.14;
-      amp += (raw - amp) * (raw > amp ? 0.35 : 0.12);
+      amp += (raw - amp) * (raw > amp ? 0.3 : 0.1);
 
-      uniforms.uTime.value = t;
+      uniforms.uTime.value = flowT;
       uniforms.uAudio.value = amp;
-      points.rotation.y = t * 0.14;
       renderer.render(scene, cam);
       raf = requestAnimationFrame(frame);
     };

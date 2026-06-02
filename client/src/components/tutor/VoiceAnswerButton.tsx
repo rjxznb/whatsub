@@ -93,10 +93,10 @@ export function VoiceAnswerButton({ onText, disabled }: Props) {
       }
       aria-label="语音作答"
       className={
-        "grid h-9 w-9 shrink-0 place-items-center rounded-md border transition-colors disabled:opacity-60 " +
+        "grid h-9 w-9 shrink-0 place-items-center rounded-full transition-colors disabled:opacity-60 " +
         (state === "recording"
-          ? "border-rose-500/70 bg-rose-500/15 text-rose-300 animate-pulse"
-          : "border-zinc-600 text-zinc-300 hover:border-zinc-400 hover:text-white")
+          ? "text-rose-400 animate-pulse"
+          : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
       }
     >
       {icon}

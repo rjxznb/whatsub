@@ -1,9 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { Send, Square, Mic, X, Loader2 } from "lucide-react";
+import { Send, Square, X } from "lucide-react";
 import { useAgent } from "../../store/agent";
 import { useLibrary } from "../../store/library";
-import { useVoiceDictation } from "../../voice/useVoiceDictation";
-import { registerDictationStarter } from "../../agent/chatBarBridge";
+import { VoiceDictationButton } from "../voice/VoiceDictationButton";
 import { useSlashCommands, type SlashCommand } from "../../store/slashCommands";
 import { expandSlash, isSlashTyping, filterCommands } from "../../agent/slash";
 import { atQueryAtEnd, composeWithRefs, type VideoRef } from "../../agent/mention";
@@ -407,22 +406,6 @@ export function InputBox({
         ? "" // focused but empty: no placeholder, just the cursor
         : typedPlaceholder || "问点什么…";
 
-  // Voice DICTATION (not the orb conversation): transcribe speech into the
-  // input field. The chat is for general assistance (mostly Chinese), so it
-  // just needs speech-to-text — the spoken-conversation orb is for the tutor.
-  const dictation = useVoiceDictation((t) => {
-    setText((d) => (d.trim() ? `${d.trim()} ${t}` : t));
-    requestAnimationFrame(() => textareaRef.current?.focus());
-  });
-  // Expose dictation to the global Shift+V shortcut via the bridge (a ref keeps
-  // the registered fn pointing at the current toggle without re-registering).
-  const dictationToggleRef = useRef(dictation.toggle);
-  dictationToggleRef.current = dictation.toggle;
-  useEffect(() => {
-    registerDictationStarter(() => dictationToggleRef.current());
-    return () => registerDictationStarter(null);
-  }, []);
-
   // Shared controls — arranged differently per mode below.
   const toolsBtn = (
     <button
@@ -443,28 +426,16 @@ export function InputBox({
   );
 
   // Voice input button — speech-to-text into the field (next to the tools btn).
+  // Self-contained (owns the recorder) + registers the global Shift+V target.
   const voiceBtn = (
-    <button
-      type="button"
-      onClick={dictation.toggle}
-      disabled={noLlm || dictation.state === "transcribing"}
-      aria-label="语音输入"
-      title={dictation.state === "recording" ? "停止并识别" : "语音输入"}
-      className={
-        "h-8 w-8 shrink-0 grid place-items-center rounded-full transition-colors " +
-        (dictation.state === "recording"
-          ? "text-rose-400 animate-pulse"
-          : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
-      }
-    >
-      {dictation.state === "recording" ? (
-        <Square size={14} fill="currentColor" />
-      ) : dictation.state === "transcribing" ? (
-        <Loader2 size={15} className="animate-spin" />
-      ) : (
-        <Mic size={15} />
-      )}
-    </button>
+    <VoiceDictationButton
+      registerGlobal
+      disabled={noLlm}
+      onText={(t) => {
+        setText((d) => (d.trim() ? `${d.trim()} ${t}` : t));
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }}
+    />
   );
 
   const sendBtn = streaming ? (

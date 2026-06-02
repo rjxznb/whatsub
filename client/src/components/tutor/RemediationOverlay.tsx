@@ -3,7 +3,7 @@ import type { RemediationRuntime } from "../../tutor/remediationRuntime";
 import { ERROR_PATTERN_LABELS } from "../../tutor/errorPatterns";
 import { LessonOverlay } from "./LessonOverlay";
 import { TUTOR_CARD, TUTOR_EYEBROW, TUTOR_TEXTAREA, BTN_PRIMARY } from "./styles";
-import { VoiceAnswerButton } from "./VoiceAnswerButton";
+import { VoiceDictationButton } from "../voice/VoiceDictationButton";
 
 interface Props {
   runtime: RemediationRuntime | null;
@@ -66,7 +66,7 @@ export function RemediationOverlay({ runtime, onFinish, onClose }: Props) {
                   className={`${TUTOR_TEXTAREA} mb-3`}
                 />
                 <div className="flex items-center gap-2">
-                  <VoiceAnswerButton
+                  <VoiceDictationButton
                     onText={(t) => setDraft((d) => (d.trim() ? `${d.trim()} ${t}` : t))}
                   />
                   <button

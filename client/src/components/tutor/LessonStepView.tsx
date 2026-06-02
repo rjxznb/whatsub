@@ -19,7 +19,7 @@ import {
 } from "../../tutor/tts";
 import { EDGE_VOICE_GROUPS } from "../../tutor/edgeTts";
 import { MarkdownText } from "../agent/markdown";
-import { VoiceAnswerButton } from "./VoiceAnswerButton";
+import { VoiceDictationButton } from "../voice/VoiceDictationButton";
 import {
   TUTOR_CARD,
   TUTOR_EYEBROW,
@@ -384,7 +384,7 @@ export function LessonStepView({
             className={TUTOR_TEXTAREA}
           />
           <div className="flex items-center justify-end gap-2">
-            <VoiceAnswerButton
+            <VoiceDictationButton
               disabled={busy}
               onText={(t) => setDraft((d) => (d.trim() ? `${d.trim()} ${t}` : t))}
             />

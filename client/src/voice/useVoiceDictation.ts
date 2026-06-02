@@ -11,8 +11,13 @@ import { transcribeVoice } from "./voiceStt";
 
 export type DictationState = "idle" | "recording" | "transcribing";
 
+/** Raw mic RMS rarely exceeds ~0.08 even when speaking; map onto 0..1 so the
+ *  waveform bars actually move. */
+const VOLUME_FULL_SCALE = 0.08;
+
 export function useVoiceDictation(onText: (text: string) => void) {
   const [state, setState] = useState<DictationState>("idle");
+  const [volume, setVolume] = useState(0); // 0..1 mic level (for waveform bars)
   const capRef = useRef<VoiceCapture | null>(null);
   const handledRef = useRef(false);
   // Keep the latest callback so the async capture closure never goes stale.
@@ -22,6 +27,7 @@ export function useVoiceDictation(onText: (text: string) => void) {
   const teardown = () => {
     capRef.current?.stop();
     capRef.current = null;
+    setVolume(0);
   };
 
   const start = async () => {
@@ -29,6 +35,7 @@ export function useVoiceDictation(onText: (text: string) => void) {
     setState("recording");
     try {
       capRef.current = await startVoiceCapture({
+        onLevel: (rms) => setVolume(Math.min(1, rms / VOLUME_FULL_SCALE)),
         onUtterance: async (wav) => {
           if (handledRef.current) return; // one dictation per recording
           handledRef.current = true;
@@ -65,5 +72,5 @@ export function useVoiceDictation(onText: (text: string) => void) {
     void start();
   };
 
-  return { state, toggle };
+  return { state, toggle, volume };
 }

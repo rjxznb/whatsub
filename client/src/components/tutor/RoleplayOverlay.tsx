@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { RoleplayRuntime } from "../../tutor/roleplayRuntime";
 import { LessonOverlay } from "./LessonOverlay";
 import { TUTOR_CARD, TUTOR_EYEBROW, TUTOR_TEXTAREA, BTN_PRIMARY } from "./styles";
-import { VoiceAnswerButton } from "./VoiceAnswerButton";
+import { VoiceDictationButton } from "../voice/VoiceDictationButton";
 
 interface Props {
   runtime: RoleplayRuntime;
@@ -67,7 +67,7 @@ export function RoleplayOverlay({ runtime, onFinishAndReport, onClose }: Props) 
             placeholder="用英文回复…（也可点麦克风语音回复）"
             className={`flex-1 ${TUTOR_TEXTAREA}`}
           />
-          <VoiceAnswerButton
+          <VoiceDictationButton
             disabled={runtime.state.loading}
             onText={(t) => setDraft((d) => (d.trim() ? `${d.trim()} ${t}` : t))}
           />

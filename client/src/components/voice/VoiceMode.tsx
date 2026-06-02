@@ -1,7 +1,9 @@
 /**
  * VoiceMode — Siri-style transparent voice overlay.
  *
- * Opened via Shift+V (or useVoiceMode.openVoice()). Renders a translucent
+ * Opened for spoken practice via the tutor's roleplay path
+ * (useVoiceMode.openVoice({ roleplay })). NOT the chat mic / Shift+V anymore —
+ * those do speech-to-text dictation into the chat field instead. Renders a translucent
  * full-screen layer (the app stays visible behind it) with a single pulsing
  * orb that grows as the user speaks. The AI's reply shows as ONE line — no
  * scrollback; past replies are reached with ←/→. After a few seconds of

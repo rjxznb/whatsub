@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useAgent } from "../../store/agent";
 import { getTool } from "../../agent/registry";
 import type { AssistantBlock, ToolMessage } from "../../types/agent";
+import { YouTubeResults } from "./YouTubeResults";
+import type { YouTubeSearchHit } from "../../agent/tools/youtube_search";
 
 interface Props {
   /** The tool_call AssistantBlock that spawned this card. */
@@ -97,6 +99,12 @@ export function ToolCallCard({ callBlock, parentStreaming }: Props) {
     );
   }
 
+  // ── youtube_search: render rich preview cards (thumbnail → inline play) ───
+  const ytHits =
+    callBlock.name === "youtube_search"
+      ? ((toolMsg.result as { hits?: YouTubeSearchHit[] } | null)?.hits ?? null)
+      : null;
+
   // ── Done OK (clickable; faded zinc text, no green) ────────────────────────
   return (
     <div className="my-1.5">
@@ -109,6 +117,7 @@ export function ToolCallCard({ callBlock, parentStreaming }: Props) {
         <span className="flex-1 truncate">{doneLabel(toolMsg.result)}</span>
         <span className="text-zinc-600">{expanded ? "▾" : "▸"}</span>
       </button>
+      {ytHits && <YouTubeResults hits={ytHits} />}
       {expanded && (
         <div className="mt-1 ml-2 space-y-1.5 text-[11px]">
           <div className="text-zinc-600 text-[10px]">

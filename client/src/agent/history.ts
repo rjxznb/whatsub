@@ -50,6 +50,13 @@ function estimateMessageTokens(m: Message): number {
   return estimateTokens(messageText(m)) + 4;
 }
 
+/** Total estimated tokens of a whole message list (for the context-usage ring). */
+export function estimateMessagesTokens(messages: Message[]): number {
+  let sum = 0;
+  for (const m of messages) sum += estimateMessageTokens(m);
+  return sum;
+}
+
 // ── #3: trim past-turn tool results ──────────────────────────────────────────
 
 /** Tool results whose serialized JSON exceeds this get folded in past turns. */

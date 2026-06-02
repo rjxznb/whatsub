@@ -7,6 +7,7 @@ import { expandSlash, isSlashTyping, filterCommands } from "../../agent/slash";
 import { ToolsPopover } from "./ToolsPopover";
 import { SlashMenu } from "./SlashMenu";
 import { CommandIcon } from "./CommandIcon";
+import { ContextRing } from "./ContextRing";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Animated placeholder ("typewriter") — cycles through these prompts when
@@ -456,6 +457,7 @@ export function InputBox({
             <div className="flex items-center gap-1">
               {toolsBtn}
               {voiceBtn}
+              <ContextRing />
             </div>
             {sendBtn}
           </div>
@@ -470,6 +472,7 @@ export function InputBox({
     <div className="flex items-end gap-1.5 px-2 py-1.5" style={{ minHeight: 48 }}>
       {toolsBtn}
       {voiceBtn}
+      <ContextRing />
       {popover}
       {slashMenu}
       {textarea}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { Send, Square } from "lucide-react";
+import { Send, Square, Mic } from "lucide-react";
 import { useAgent } from "../../store/agent";
+import { useVoiceMode } from "../../store/voiceMode";
 import { ToolsPopover } from "./ToolsPopover";
 import { CommandIcon } from "./CommandIcon";
 
@@ -275,6 +276,19 @@ export function InputBox({
     </button>
   );
 
+  // Voice mode toggle — moved here next to the tools button.
+  const voiceBtn = (
+    <button
+      type="button"
+      onClick={() => useVoiceMode.getState().openVoice()}
+      aria-label="语音模式"
+      title="切换到语音模式"
+      className="h-8 w-8 shrink-0 grid place-items-center rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors"
+    >
+      <Mic size={15} />
+    </button>
+  );
+
   const sendBtn = streaming ? (
     <button
       type="button"
@@ -362,7 +376,10 @@ export function InputBox({
         <div className="flex h-full flex-col rounded-2xl border border-zinc-700/70 bg-zinc-800/40 px-3 pt-2.5 pb-2">
           <div className="min-h-0 flex-1">{textarea}</div>
           <div className="flex shrink-0 items-center justify-between pt-1.5">
-            {toolsBtn}
+            <div className="flex items-center gap-1">
+              {toolsBtn}
+              {voiceBtn}
+            </div>
             {sendBtn}
           </div>
         </div>
@@ -375,6 +392,7 @@ export function InputBox({
   return (
     <div className="flex items-end gap-1.5 px-2 py-1.5" style={{ minHeight: 48 }}>
       {toolsBtn}
+      {voiceBtn}
       {popover}
       {textarea}
       {sendBtn}

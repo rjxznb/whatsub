@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, MoreHorizontal, X, ChevronDown, Mic } from "lucide-react";
+import { Plus, MoreHorizontal, X, ChevronDown } from "lucide-react";
 import { confirmDialog } from "../../store/appDialog";
 import { useAgent } from "../../store/agent";
-import { useVoiceMode } from "../../store/voiceMode";
 
 interface Props {
   onClose: () => void;
@@ -23,7 +22,6 @@ const FLOATING_MENU =
 
 export function ConversationHeader({ onClose }: Props) {
   const history = useAgent((s) => s.history);
-  const openVoice = useVoiceMode((s) => s.openVoice);
   const activeConv = history.conversations.find(
     (c) => c.id === history.activeConversationId,
   );
@@ -183,17 +181,6 @@ export function ConversationHeader({ onClose }: Props) {
       {/* Spacer pushes the buttons right; replaces the flex-1 on the title
           button so the title hugs its content + cap instead of stretching. */}
       <div className="flex-1" />
-
-      {/* 🎤 Voice — switch to voice mode. */}
-      <button
-        type="button"
-        onClick={openVoice}
-        aria-label="语音模式"
-        title="切换到语音模式"
-        className="h-7 w-7 grid place-items-center rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors"
-      >
-        <Mic size={16} />
-      </button>
 
       {/* ⊕ New — one-shot action, no popover, no outside-click concern. */}
       <button

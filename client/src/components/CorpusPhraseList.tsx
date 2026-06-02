@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { corpusQuota, type Quota } from '../lib/api/quota';
+import { AddCorpusPhraseDialog } from './AddCorpusPhraseDialog';
 
 interface MineItem {
   phraseNormalized: string;
@@ -32,10 +34,11 @@ interface Props {
 }
 
 export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFirst }: Props) {
-  const { data, error, refreshing } = useCorpusList<BrowseResp | MineResp>(
+  const { data, error, refreshing, refresh } = useCorpusList<BrowseResp | MineResp>(
     mode === 'mine' ? { mode: 'mine', tags } : { mode: 'browse', tags },
   );
   const isMine = mode === 'mine';
+  const [addOpen, setAddOpen] = useState(false);
 
   // Server-authoritative personal-corpus quota (used/limit). Only fetched for
   // the 'mine' list; best-effort (a failure just hides the badge). Refetched
@@ -62,19 +65,28 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     }
   }, [autoSelectFirst, selected, data, onSelect]);
 
+  const quotaFull = quota ? quota.used >= quota.limit : false;
   const header = isMine ? (
-    <div
-      className="px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400 shrink-0"
-      title="个人语料库额度（订阅 1000 / 免费 50）"
-    >
-      个人语料{' '}
-      {quota ? (
-        <span className={quota.used >= quota.limit ? 'text-amber-300 font-medium' : 'text-zinc-200'}>
-          {quota.used}/{quota.limit}
-        </span>
-      ) : (
-        '…'
-      )}
+    <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400 shrink-0">
+      <span title="个人语料库额度（订阅 1000 / 免费 50）">
+        个人语料{' '}
+        {quota ? (
+          <span className={quotaFull ? 'text-amber-300 font-medium' : 'text-zinc-200'}>
+            {quota.used}/{quota.limit}
+          </span>
+        ) : (
+          '…'
+        )}
+      </span>
+      <button
+        type="button"
+        onClick={() => setAddOpen(true)}
+        disabled={quotaFull}
+        title={quotaFull ? '额度已满，无法添加' : '添加短语到个人语料库'}
+        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 transition-colors disabled:opacity-40"
+      >
+        <Plus size={13} /> 添加
+      </button>
     </div>
   ) : null;
 
@@ -121,6 +133,15 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     <div className="w-64 h-full border-r border-zinc-800 flex flex-col min-w-0">
       {header}
       <div className="flex-1 overflow-y-auto min-w-0">{renderBody()}</div>
+      {addOpen && (
+        <AddCorpusPhraseDialog
+          quotaFull={quotaFull}
+          onClose={() => setAddOpen(false)}
+          onAdded={() => {
+            refresh(); // refetch the mine list (quota refetches via the data effect)
+          }}
+        />
+      )}
     </div>
   );
 }

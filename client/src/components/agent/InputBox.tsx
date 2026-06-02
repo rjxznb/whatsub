@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { Send, Square, Wrench } from "lucide-react";
+import { Send, Square } from "lucide-react";
 import { useAgent } from "../../store/agent";
 import { ToolsPopover } from "./ToolsPopover";
+import { CommandIcon } from "./CommandIcon";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Animated placeholder ("typewriter") — cycles through these prompts when
@@ -270,7 +271,7 @@ export function InputBox({
           : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
       }
     >
-      <Wrench size={15} />
+      <CommandIcon className="h-[15px] w-[15px]" />
     </button>
   );
 
@@ -291,11 +292,12 @@ export function InputBox({
       onClick={submit}
       disabled={!canSend}
       aria-label="发送"
+      // Outline-only: just the ring circle, no fill. Brightens when sendable.
       className={
-        "h-9 w-9 shrink-0 grid place-items-center rounded-full transition-colors " +
+        "h-9 w-9 shrink-0 grid place-items-center rounded-full border bg-transparent transition-colors " +
         (canSend
-          ? "bg-zinc-100 hover:bg-white text-zinc-900"
-          : "bg-zinc-700 text-zinc-400 cursor-not-allowed")
+          ? "border-zinc-400 text-zinc-100 hover:border-white hover:text-white"
+          : "border-zinc-700 text-zinc-600 cursor-not-allowed")
       }
     >
       <Send size={14} />

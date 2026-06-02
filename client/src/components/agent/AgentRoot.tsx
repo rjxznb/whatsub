@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAgent } from "../../store/agent";
+import { useLearnerProfile } from "../../tutor/learnerProfile";
 import { useAgentConfirms, confirmViaUI } from "../../store/agentConfirms";
 import { useSettings } from "../../store/settings";
 import { setNavigator } from "../../agent/nav";
@@ -101,6 +102,9 @@ export function AgentRoot() {
   useEffect(() => {
     setNavigator(navigate);
     void useAgent.getState().hydrate();
+    // Hydrate the learner profile too so the per-turn context can surface the
+    // user's weak patterns (the tutor loop) without each turn awaiting a load.
+    void useLearnerProfile.getState().hydrate();
     return () => setNavigator(null);
   }, [navigate]);
 

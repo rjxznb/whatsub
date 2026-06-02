@@ -1,0 +1,167 @@
+// src/components/agent/ToolsPopover.tsx
+//
+// "Agent 能用的工具" reference popover, opened from a button in the chat input.
+// Lists EVERY registered tool grouped by capability, with a risk badge. The
+// list is driven by the registry (TOOLS) so the count is always accurate; any
+// tool missing from the display map still shows in a 其它 group (never hidden).
+//
+// Portaled to <body> with fixed positioning computed from the trigger's rect,
+// so it escapes the chat panel's overflow-hidden clipping and works in both bar
+// and panel mode. Closes on Esc or an outside click.
+
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { TOOLS, getTool } from "../../agent/registry";
+import type { RiskTier } from "../../agent/types";
+
+interface Props {
+  open: boolean;
+  anchorEl: HTMLElement | null;
+  onClose: () => void;
+}
+
+interface ToolInfo {
+  label: string;
+  desc: string;
+}
+
+// Chinese display labels per tool. Membership/count come from the registry —
+// this map only prettifies. Keep keys aligned with the tool ids.
+const TOOL_INFO: Record<string, ToolInfo> = {
+  corpus_browse: { label: "查语料库", desc: "浏览公共 / 我的语料库短语" },
+  corpus_phrase_detail: { label: "短语详情", desc: "查某短语的释义 / 用法 / 标签" },
+  list_library: { label: "列视频库", desc: "列出本地库（可筛场景 / 状态）" },
+  list_vocab: { label: "列生词本", desc: "列出收藏的生词" },
+  youtube_search: { label: "搜 YouTube", desc: "搜视频（只搜不下）" },
+  recommend_review: { label: "推荐复习", desc: "按薄弱点定位到「视频 + 几分几秒」" },
+  query_learner_profile: { label: "读学习档案", desc: "水平 / 薄弱点 / 最近错误" },
+  open_video: { label: "打开视频", desc: "跳到播放页（可定位到秒）" },
+  open_page: { label: "跳转页面", desc: "库 / 生词本 / 语料库 / 设置" },
+  seek_to_time: { label: "定位时间", desc: "跳到某秒（仅播放页）" },
+  jump_to_cue: { label: "跳到字幕", desc: "跳到第 N 句（仅播放页）" },
+  start_lesson: { label: "开始精讲", desc: "生成计划逐句精讲（仅播放页）" },
+  start_roleplay: { label: "角色扮演", desc: "基于视频场景对练" },
+  start_remediation: { label: "专项练习", desc: "针对某薄弱 pattern 练 3 分钟" },
+  vocab_add: { label: "加生词", desc: "收藏一个 / 多个短语" },
+  vocab_remove: { label: "删生词", desc: "移除某条生词" },
+  vocab_update_note: { label: "改笔记", desc: "改某条生词的用法笔记" },
+  sync_to_cloud: { label: "同步到云", desc: "推到云端供 iOS 查看" },
+  materialize_from_cloud: { label: "下载到本地", desc: "把云端视频拉到本地" },
+  import_video: { label: "导入视频", desc: "从 URL 导入（YouTube / B站 等）" },
+  delete_video: { label: "删视频", desc: "删本地（可选同时删云端）" },
+  unsync_from_cloud: { label: "取消云同步", desc: "从云端下架（保留本地）" },
+  retranscribe_video: { label: "重新转写", desc: "用当前 whisper 重转字幕" },
+};
+
+const GROUPS: Array<{ title: string; ids: string[] }> = [
+  {
+    title: "发现 · 只读",
+    ids: ["corpus_browse", "corpus_phrase_detail", "list_library", "list_vocab", "youtube_search"],
+  },
+  {
+    title: "私教 · 学习",
+    ids: ["query_learner_profile", "recommend_review", "start_lesson", "start_roleplay", "start_remediation"],
+  },
+  { title: "导航", ids: ["open_video", "open_page", "seek_to_time", "jump_to_cue"] },
+  { title: "生词本", ids: ["vocab_add", "vocab_remove", "vocab_update_note"] },
+  { title: "库管理", ids: ["sync_to_cloud", "materialize_from_cloud", "import_video"] },
+  { title: "高风险（需确认）", ids: ["delete_video", "unsync_from_cloud", "retranscribe_video"] },
+];
+
+function RiskBadge({ tier }: { tier: RiskTier }) {
+  if (tier === "LOW") return null; // low-risk = read/jump, no badge needed
+  const isHigh = tier === "HIGH";
+  return (
+    <span
+      className={
+        "ml-1.5 shrink-0 rounded px-1 py-px text-[10px] leading-none " +
+        (isHigh ? "bg-rose-500/20 text-rose-300" : "bg-amber-500/20 text-amber-300")
+      }
+    >
+      {isHigh ? "高风险" : "需确认"}
+    </span>
+  );
+}
+
+export function ToolsPopover({ open, anchorEl, onClose }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
+
+  // Position above the trigger, left-aligned, clamped into the viewport.
+  useLayoutEffect(() => {
+    if (!open || !anchorEl) return;
+    const r = anchorEl.getBoundingClientRect();
+    const width = 300;
+    const margin = 8;
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - width - margin));
+    const bottom = window.innerHeight - r.top + 8; // sit 8px above the button
+    setPos({ left, bottom, width });
+  }, [open, anchorEl]);
+
+  // Close on Esc + outside click (ignore clicks on the trigger itself).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (panelRef.current?.contains(t)) return;
+      if (anchorEl?.contains(t)) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    // capture so we beat the panel's own drag mousedown handler
+    window.addEventListener("mousedown", onDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown, true);
+    };
+  }, [open, anchorEl, onClose]);
+
+  if (!open || !pos) return null;
+
+  const groupedIds = new Set(GROUPS.flatMap((g) => g.ids));
+  const leftover = TOOLS.filter((t) => !groupedIds.has(t.id)).map((t) => t.id);
+  const groups = leftover.length ? [...GROUPS, { title: "其它", ids: leftover }] : GROUPS;
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      data-no-drag
+      role="dialog"
+      aria-label="Agent 能用的工具"
+      className="fixed z-[120] rounded-lg border border-zinc-700 bg-zinc-900/98 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col"
+      style={{ left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: "min(62vh, 460px)" }}
+    >
+      <div className="shrink-0 px-3 py-2 border-b border-zinc-800 text-[12px] text-zinc-400">
+        Agent 能用的工具 · 共 {TOOLS.length} 个
+      </div>
+      <div className="min-h-0 overflow-y-auto py-1">
+        {groups.map((g) => (
+          <div key={g.title} className="px-2 py-1">
+            <div className="px-1 py-1 text-[11px] font-medium text-zinc-500">{g.title}</div>
+            {g.ids.map((id) => {
+              const tool = getTool(id);
+              const info = TOOL_INFO[id];
+              return (
+                <div key={id} className="flex items-start gap-2 rounded px-2 py-1 hover:bg-white/5">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center text-[13px] text-zinc-100">
+                      <span className="truncate">{info?.label ?? id}</span>
+                      {tool && <RiskBadge tier={tool.riskTier} />}
+                    </div>
+                    <div className="text-[11px] text-zinc-500 leading-snug">
+                      {info?.desc ?? tool?.description ?? ""}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>,
+    document.body,
+  );
+}

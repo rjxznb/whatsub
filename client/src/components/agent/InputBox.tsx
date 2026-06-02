@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { Send, Square } from "lucide-react";
+import { Send, Square, Wrench } from "lucide-react";
 import { useAgent } from "../../store/agent";
+import { ToolsPopover } from "./ToolsPopover";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Animated placeholder ("typewriter") — cycles through these prompts when
@@ -109,7 +110,9 @@ export function InputBox({
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [savedDraft, setSavedDraft] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const toolsBtnRef = useRef<HTMLButtonElement>(null);
 
   // Subscribe to the active conversation's messages directly (stable reference
   // managed by the store) and derive `userMessages` via useMemo so the
@@ -270,6 +273,27 @@ export function InputBox({
       }
       style={panelMode ? undefined : { minHeight: 48 }}
     >
+      {/* Tools reference: click to see every tool the agent can use. */}
+      <button
+        ref={toolsBtnRef}
+        type="button"
+        onClick={() => setToolsOpen((o) => !o)}
+        aria-label="查看所有工具"
+        title="Agent 能用的工具"
+        className={
+          "h-9 w-9 shrink-0 grid place-items-center rounded-md transition-colors " +
+          (toolsOpen
+            ? "bg-white/10 text-zinc-100"
+            : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
+        }
+      >
+        <Wrench size={15} />
+      </button>
+      <ToolsPopover
+        open={toolsOpen}
+        anchorEl={toolsBtnRef.current}
+        onClose={() => setToolsOpen(false)}
+      />
       <textarea
         ref={textareaRef}
         value={text}

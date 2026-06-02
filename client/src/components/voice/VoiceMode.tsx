@@ -196,7 +196,13 @@ function VoiceModeInner() {
   return createPortal(
     <div
       data-voice-mode
-      className="fixed inset-0 z-[110] flex flex-col items-center justify-end pb-16 gap-6 bg-black/35 backdrop-blur-sm"
+      className="fixed inset-0 z-[110] flex flex-col items-center justify-end pb-16 gap-6 backdrop-blur-sm"
+      // Blue → black vertical gradient (blue at the bottom) at 80% opacity, so
+      // the app stays faintly visible behind the voice overlay.
+      style={{
+        background:
+          "linear-gradient(0deg, rgba(26,51,121,0.8) 0%, rgba(15,23,42,0.8) 55%, rgba(0,0,0,0.8) 100%)",
+      }}
       // Click anywhere outside the orb/caption dismisses (Siri-like).
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) handleClose();

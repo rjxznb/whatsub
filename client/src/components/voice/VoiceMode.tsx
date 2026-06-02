@@ -21,8 +21,8 @@ import { VoiceConversation } from "../../voice/voiceConversation";
 import type { VoiceState } from "../../voice/types";
 import { setTtsAnalyse } from "../../tutor/tts";
 
-// Lazy so the three.js bundle is a separate chunk, loaded only when voice mode
-// first opens (keeps the main app bundle lean).
+// Lazy-loaded with the rest of voice mode; the orb is now a pure-CSS ring so
+// there's no heavy WebGL chunk to defer, but keeping it lazy is harmless.
 const VoiceOrb = lazy(() =>
   import("./VoiceOrb").then((m) => ({ default: m.VoiceOrb })),
 );

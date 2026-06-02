@@ -41,6 +41,7 @@ const TOOL_INFO: Record<string, ToolInfo> = {
   corpus_browse: { label: "查语料库", desc: "浏览公共 / 我的语料库短语", tpl: `在语料库里找关于 ${CARET} 的短语` },
   corpus_phrase_detail: { label: "短语详情", desc: "查某短语的释义 / 用法 / 标签", tpl: `查一下 "${CARET}" 这个短语的意思和用法` },
   list_library: { label: "列视频库", desc: "列出本地库（可筛场景 / 状态）", tpl: `列出我视频库里${CARET}的视频` },
+  read_video_analysis: { label: "读视频内容", desc: "读某视频的字幕全文 + 重点短语", tpl: `总结一下 @${CARET} 这个视频讲了什么` },
   list_vocab: { label: "列生词本", desc: "列出收藏的生词", tpl: `看看我的生词本里有哪些词` },
   youtube_search: { label: "搜 YouTube", desc: "搜视频（只搜不下）", tpl: `在 YouTube 上搜索：${CARET}` },
   recommend_review: { label: "推荐复习", desc: "按薄弱点定位到「视频 + 几分几秒」", tpl: `我最近哪方面比较弱？给我推荐几处复习片段` },
@@ -66,7 +67,7 @@ const TOOL_INFO: Record<string, ToolInfo> = {
 const GROUPS: Array<{ title: string; ids: string[] }> = [
   {
     title: "发现 · 只读",
-    ids: ["corpus_browse", "corpus_phrase_detail", "list_library", "list_vocab", "youtube_search"],
+    ids: ["corpus_browse", "corpus_phrase_detail", "list_library", "read_video_analysis", "list_vocab", "youtube_search"],
   },
   {
     title: "私教 · 学习",

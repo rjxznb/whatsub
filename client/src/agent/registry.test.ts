@@ -3,8 +3,8 @@ import { TOOLS, getTool, listTools } from "./registry";
 import type { ToolDef } from "./types";
 
 describe("registry", () => {
-  it("TOOLS has exactly 23 entries (spec contract) — through tutor-loop", () => {
-    expect(TOOLS.length).toBe(23);
+  it("TOOLS has exactly 24 entries (spec contract) — through @video", () => {
+    expect(TOOLS.length).toBe(24);
     expect(TOOLS.map((t) => t.id)).toEqual(
       expect.arrayContaining([
         "corpus_browse",
@@ -13,6 +13,7 @@ describe("registry", () => {
         "list_vocab",
         "youtube_search",
         "recommend_review",
+        "read_video_analysis",
         "open_video",
         "open_page",
         "seek_to_time",

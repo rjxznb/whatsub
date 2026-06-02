@@ -1,13 +1,23 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { Send, Square, Mic } from "lucide-react";
+import { Send, Square, Mic, X } from "lucide-react";
 import { useAgent } from "../../store/agent";
 import { useVoiceMode } from "../../store/voiceMode";
+import { useLibrary } from "../../store/library";
 import { useSlashCommands, type SlashCommand } from "../../store/slashCommands";
 import { expandSlash, isSlashTyping, filterCommands } from "../../agent/slash";
+import { atQueryAtEnd, composeWithRefs, type VideoRef } from "../../agent/mention";
 import { ToolsPopover } from "./ToolsPopover";
 import { SlashMenu } from "./SlashMenu";
+import { AtMenu, type AtVideoItem } from "./AtMenu";
 import { CommandIcon } from "./CommandIcon";
 import { ContextRing } from "./ContextRing";
+
+// Reference quick-actions shown beside @video chips (zero-typing presets).
+const REF_QUICK_ACTIONS: Array<{ label: string; prompt: string }> = [
+  { label: "总结", prompt: "总结这个视频讲了什么，列出重点表达和值得学的句子。" },
+  { label: "找类似", prompt: "找几个和这个视频主题类似的 YouTube 视频，配上封面让我预览。" },
+  { label: "出题", prompt: "基于这个视频的内容出 3-5 道理解 / 表达题考考我。" },
+];
 
 // ────────────────────────────────────────────────────────────────────────────
 // Animated placeholder ("typewriter") — cycles through these prompts when
@@ -146,6 +156,58 @@ export function InputBox({
     });
   };
 
+  // ── @ video references (panel only) ───────────────────────────────────────
+  const [refs, setRefs] = useState<VideoRef[]>([]);
+  const [atIndex, setAtIndex] = useState(0);
+  const [atDismissed, setAtDismissed] = useState(false);
+  const libraryVideos = useLibrary((s) => s.library.videos);
+  const atMatch = panelMode && !noLlm && !streaming ? atQueryAtEnd(text) : null;
+  const atActive = !!atMatch && !atDismissed;
+  const atItems: AtVideoItem[] = useMemo(() => {
+    if (!atActive || !atMatch) return [];
+    const q = atMatch.query.toLowerCase();
+    const vids = (libraryVideos ?? []).filter((v) => v.status !== "failed");
+    const matched = q ? vids.filter((v) => v.title.toLowerCase().includes(q)) : vids;
+    return matched.slice(0, 8).map((v) => ({ id: v.id, title: v.title, durationSec: v.durationSec }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atActive, atMatch?.query, libraryVideos]);
+
+  const removeRef = (id: string) => setRefs((prev) => prev.filter((r) => r.id !== id));
+
+  const acceptRef = (item: AtVideoItem) => {
+    if (!atMatch) return;
+    const before = text.slice(0, atMatch.start);
+    setText(before);
+    setAtDismissed(true);
+    setRefs((prev) => (prev.some((r) => r.id === item.id) ? prev : [...prev, { id: item.id, title: item.title }]));
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      try {
+        el.setSelectionRange(before.length, before.length);
+      } catch {
+        /* ignore */
+      }
+    });
+  };
+
+  // Send `prompt` with the current references' anchor preamble, then reset.
+  const sendWithRefs = (prompt: string) => {
+    if (streaming || noLlm) return;
+    const full = composeWithRefs(refs, prompt);
+    if (!full.trim()) return;
+    onSend(full);
+    setText("");
+    setRefs([]);
+    setHistoryIndex(null);
+    setSavedDraft("");
+    setSlashDismissed(false);
+    setSlashIndex(0);
+    setAtDismissed(false);
+    setAtIndex(0);
+  };
+
   // Subscribe to the active conversation's messages directly (stable reference
   // managed by the store) and derive `userMessages` via useMemo so the
   // selector itself never returns a fresh array — that would cause
@@ -213,15 +275,10 @@ export function InputBox({
 
   const submit = () => {
     if (!canSend) return;
-    // Expand a "/command args" line into its prompt template before sending;
-    // non-commands send unchanged.
+    // Expand a "/command args" line into its prompt template, then prepend any
+    // @video reference anchors. sendWithRefs handles the reset.
     const raw = text.trim();
-    onSend(expandSlash(raw, slashCommands) ?? raw);
-    setText("");
-    setHistoryIndex(null);
-    setSavedDraft("");
-    setSlashDismissed(false);
-    setSlashIndex(0);
+    sendWithRefs(expandSlash(raw, slashCommands) ?? raw);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -231,9 +288,11 @@ export function InputBox({
     if (historyIndex !== null && next !== userMessages[historyIndex]) {
       setHistoryIndex(null);
     }
-    // Re-arm the slash menu + reset highlight as the command name changes.
+    // Re-arm the slash + @ menus and reset their highlights as the text changes.
     setSlashDismissed(false);
     setSlashIndex(0);
+    setAtDismissed(false);
+    setAtIndex(0);
     setText(next);
   };
 
@@ -259,6 +318,32 @@ export function InputBox({
         if (e.key === "Enter" || e.key === "Tab") {
           e.preventDefault();
           acceptSlash(slashItems[Math.min(slashIndex, slashItems.length - 1)]);
+          return;
+        }
+      }
+    }
+
+    // @ reference autocomplete owns ↑/↓/Enter/Tab/Esc while typing a mention.
+    if (atActive) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtDismissed(true);
+        return;
+      }
+      if (atItems.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setAtIndex((i) => Math.min(atItems.length - 1, i + 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setAtIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          acceptRef(atItems[Math.min(atIndex, atItems.length - 1)]);
           return;
         }
       }
@@ -444,6 +529,53 @@ export function InputBox({
     />
   );
 
+  const atMenu = (
+    <AtMenu
+      open={atActive}
+      anchorEl={textareaRef.current}
+      items={atItems}
+      highlight={atIndex}
+      onHover={setAtIndex}
+      onPick={acceptRef}
+      onClose={() => setAtDismissed(true)}
+    />
+  );
+
+  // Reference chips + zero-typing quick actions (panel only, when refs exist).
+  const refChips =
+    refs.length > 0 ? (
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 pb-1.5">
+        {refs.map((r) => (
+          <span
+            key={r.id}
+            className="inline-flex max-w-[180px] items-center gap-1 rounded-md bg-blue-500/15 px-1.5 py-0.5 text-[11px] text-blue-200"
+          >
+            <span className="text-blue-300/70">📹</span>
+            <span className="truncate">{r.title}</span>
+            <button
+              type="button"
+              onClick={() => removeRef(r.id)}
+              aria-label="移除引用"
+              className="text-blue-300/60 hover:text-blue-100"
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        <span className="mx-0.5 text-zinc-600">·</span>
+        {REF_QUICK_ACTIONS.map((a) => (
+          <button
+            key={a.label}
+            type="button"
+            onClick={() => sendWithRefs(a.prompt)}
+            className="rounded-md border border-zinc-600/70 px-1.5 py-0.5 text-[11px] text-zinc-300 transition-colors hover:border-zinc-400 hover:text-white"
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+    ) : null;
+
   // Panel mode: a self-contained rounded input CARD embedded in the chat
   // surface — text on top, an action row (tools left, send right) below.
   if (panelMode) {
@@ -451,7 +583,9 @@ export function InputBox({
       <div className="h-full p-2">
         {popover}
         {slashMenu}
+        {atMenu}
         <div className="flex h-full flex-col rounded-2xl border border-zinc-700/70 bg-zinc-800/40 px-3 pt-2.5 pb-2">
+          {refChips}
           <div className="min-h-0 flex-1">{textarea}</div>
           <div className="flex shrink-0 items-center justify-between pt-1.5">
             <div className="flex items-center gap-1">
@@ -475,6 +609,7 @@ export function InputBox({
       <ContextRing />
       {popover}
       {slashMenu}
+      {atMenu}
       {textarea}
       {sendBtn}
     </div>

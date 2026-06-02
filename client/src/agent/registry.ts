@@ -5,6 +5,7 @@ import { listLibraryTool } from "./tools/list_library";
 import { listVocabTool } from "./tools/list_vocab";
 import { youtubeSearchTool } from "./tools/youtube_search";
 import { recommendReviewTool } from "./tools/recommend_review";
+import { readVideoAnalysisTool } from "./tools/read_video_analysis";
 import { openVideoTool } from "./tools/open_video";
 import { openPageTool } from "./tools/open_page";
 import { seekToTimeTool } from "./tools/seek_to_time";
@@ -34,6 +35,7 @@ export const TOOLS: ToolDef[] = [
   listVocabTool as unknown as ToolDef,
   youtubeSearchTool as unknown as ToolDef, // T29 (added 2026-05-30)
   recommendReviewTool as unknown as ToolDef, // tutor loop (added 2026-06-02)
+  readVideoAnalysisTool as unknown as ToolDef, // @video references (added 2026-06-02)
   // navigation (T15)
   openVideoTool as unknown as ToolDef,
   openPageTool as unknown as ToolDef,

@@ -1,8 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
-import { Send, Square, Mic, X } from "lucide-react";
+import { Send, Square, Mic, X, Loader2 } from "lucide-react";
 import { useAgent } from "../../store/agent";
-import { useVoiceMode } from "../../store/voiceMode";
 import { useLibrary } from "../../store/library";
+import { useVoiceDictation } from "../../voice/useVoiceDictation";
 import { useSlashCommands, type SlashCommand } from "../../store/slashCommands";
 import { expandSlash, isSlashTyping, filterCommands } from "../../agent/slash";
 import { atQueryAtEnd, composeWithRefs, type VideoRef } from "../../agent/mention";
@@ -406,6 +406,14 @@ export function InputBox({
         ? "" // focused but empty: no placeholder, just the cursor
         : typedPlaceholder || "问点什么…";
 
+  // Voice DICTATION (not the orb conversation): transcribe speech into the
+  // input field. The chat is for general assistance (mostly Chinese), so it
+  // just needs speech-to-text — the spoken-conversation orb is for the tutor.
+  const dictation = useVoiceDictation((t) => {
+    setText((d) => (d.trim() ? `${d.trim()} ${t}` : t));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  });
+
   // Shared controls — arranged differently per mode below.
   const toolsBtn = (
     <button
@@ -425,16 +433,28 @@ export function InputBox({
     </button>
   );
 
-  // Voice mode toggle — moved here next to the tools button.
+  // Voice input button — speech-to-text into the field (next to the tools btn).
   const voiceBtn = (
     <button
       type="button"
-      onClick={() => useVoiceMode.getState().openVoice()}
-      aria-label="语音模式"
-      title="切换到语音模式"
-      className="h-8 w-8 shrink-0 grid place-items-center rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors"
+      onClick={dictation.toggle}
+      disabled={noLlm || dictation.state === "transcribing"}
+      aria-label="语音输入"
+      title={dictation.state === "recording" ? "停止并识别" : "语音输入"}
+      className={
+        "h-8 w-8 shrink-0 grid place-items-center rounded-full transition-colors " +
+        (dictation.state === "recording"
+          ? "text-rose-400 animate-pulse"
+          : "text-zinc-400 hover:text-zinc-100 hover:bg-white/5")
+      }
     >
-      <Mic size={15} />
+      {dictation.state === "recording" ? (
+        <Square size={14} fill="currentColor" />
+      ) : dictation.state === "transcribing" ? (
+        <Loader2 size={15} className="animate-spin" />
+      ) : (
+        <Mic size={15} />
+      )}
     </button>
   );
 

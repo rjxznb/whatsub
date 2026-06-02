@@ -25,6 +25,15 @@ export function createOpenAICompatibleProvider(
   const cfg = settings.openaiCompatible;
   const baseUrl = cfg.baseUrl.replace(/\/$/, "");
 
+  // DeepSeek V4 (deepseek-v4-flash / -pro) defaults thinking mode to ENABLED,
+  // so it emits a long reasoning chain before the answer — much slower than the
+  // old deepseek-chat (which was the non-thinking alias). Our tasks (精讲 plan /
+  // step gen / agent tool-use) are structured, not reasoning-heavy, so disable
+  // thinking for DeepSeek to get the old fast behavior back. `thinking` is a
+  // DeepSeek-only param — gated by host so it never touches OpenAI/Kimi/etc.
+  const isDeepSeek = /(?:\/\/|\.)deepseek\.com\b/i.test(baseUrl);
+  const deepseekNoThink = isDeepSeek ? { thinking: { type: "disabled" } } : {};
+
   return {
     async *stream(req: ProviderRequest): AsyncIterable<string> {
       const resp = await fetch(`${baseUrl}/chat/completions`, {
@@ -40,6 +49,7 @@ export function createOpenAICompatibleProvider(
             { role: "system", content: req.systemPrompt },
             { role: "user", content: req.userPrompt },
           ],
+          ...deepseekNoThink,
         }),
         signal: req.signal,
       });
@@ -72,6 +82,7 @@ export function createOpenAICompatibleProvider(
           },
         })),
         stream: true,
+        ...deepseekNoThink,
       };
       const resp = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",

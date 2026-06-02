@@ -1101,6 +1101,9 @@ export function Player() {
           <div className="flex flex-col items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-900 px-9 py-7 shadow-2xl animate-agent-popover-in">
             <Loader2 className="h-7 w-7 animate-spin text-blue-400" />
             <div className="text-sm text-zinc-300">正在生成精讲计划…</div>
+            <div className="max-w-[220px] text-center text-xs leading-relaxed text-zinc-500">
+              正在读取 {analysis.subtitles.length} 句字幕、结合你的薄弱点规划重点。视频较长时需要等十几秒。
+            </div>
           </div>
         </div>
       )}

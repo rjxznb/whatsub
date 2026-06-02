@@ -158,6 +158,38 @@ export function ToolsPopover({ open, anchorEl, onClose, onPick }: Props) {
         点一个把指令模板填到输入框 · 共 {TOOLS.length} 个
       </div>
       <div className="min-h-0 overflow-y-auto py-1">
+        {/* Input shortcuts — surface the / and @ affordances users may not know. */}
+        <div className="px-2 py-1">
+          <div className="px-1 py-1 text-[11px] font-medium text-zinc-500">输入技巧</div>
+          <button
+            type="button"
+            onClick={() => pick("/")}
+            title="在输入框输入 / 唤起"
+            className="flex w-full items-start gap-2 rounded px-2 py-1 text-left hover:bg-white/5 transition-colors"
+          >
+            <span className="mt-px text-[13px] font-mono text-blue-300">/</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] text-zinc-100">斜杠命令</div>
+              <div className="text-[11px] text-zinc-500 leading-snug">
+                调用 / 管理自定义指令（可复用的提示词模板）
+              </div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => pick("@")}
+            title="在输入框输入 @ 唤起"
+            className="flex w-full items-start gap-2 rounded px-2 py-1 text-left hover:bg-white/5 transition-colors"
+          >
+            <span className="mt-px text-[13px] font-mono text-blue-300">@</span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] text-zinc-100">引用视频</div>
+              <div className="text-[11px] text-zinc-500 leading-snug">
+                引用库里的视频，围绕它总结 / 找类似 / 出题
+              </div>
+            </div>
+          </button>
+        </div>
         {groups.map((g) => (
           <div key={g.title} className="px-2 py-1">
             <div className="px-1 py-1 text-[11px] font-medium text-zinc-500">{g.title}</div>

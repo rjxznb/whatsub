@@ -502,6 +502,12 @@ export function InputBox({
         setText(tplText);
         setHistoryIndex(null);
         setSavedDraft("");
+        // Re-arm the / and @ menus so inserting "/" or "@" (the 输入技巧 rows)
+        // actually opens them.
+        setSlashDismissed(false);
+        setSlashIndex(0);
+        setAtDismissed(false);
+        setAtIndex(0);
         requestAnimationFrame(() => {
           const el = textareaRef.current;
           if (!el) return;

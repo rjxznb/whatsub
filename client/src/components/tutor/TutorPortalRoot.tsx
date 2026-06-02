@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTutorRuntime } from "../../store/tutorRuntime";
+import { useVoiceMode } from "../../store/voiceMode";
 import { useSettings } from "../../store/settings";
 import { useAnalysis } from "../../store/analysis";
 import { usePlayerState } from "../../store/playerState";
@@ -257,7 +258,7 @@ export function TutorPortalRoot() {
           settings={settings}
           onCancel={close}
           onPick={(s) => {
-            rpRuntimeRef.current = new RoleplayRuntime({
+            const rt = new RoleplayRuntime({
               scenario: s,
               llm: {
                 generateTurn: (args) => generateTurn({ settings, ...args }),
@@ -266,7 +267,23 @@ export function TutorPortalRoot() {
                 logEvent: (e) => useLearnerProfile.getState().logEvent(e),
               },
             });
-            setMode({ kind: "roleplay-in-progress", scenario: s });
+            rpRuntimeRef.current = rt;
+            // Run the roleplay as a VOICE conversation in the orb overlay: the
+            // responder drives the runtime and returns the AI character's line
+            // (spoken via TTS). Close the picker overlay; the orb takes over.
+            close();
+            useVoiceMode.getState().openVoice({
+              title: s.title,
+              respond: async (userText) => {
+                await rt.submitUserMessage(userText);
+                const turns = rt.state.turns;
+                const last = turns[turns.length - 1];
+                return last && last.role === "agent" ? last.text : "";
+              },
+              onClose: () => {
+                void rt.finish();
+              },
+            });
           }}
         />
       </LessonOverlay>

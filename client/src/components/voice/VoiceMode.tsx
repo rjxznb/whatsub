@@ -57,6 +57,7 @@ function statusHint(state: VoiceState, errorMsg: string): string {
 
 function VoiceModeInner() {
   const closeVoice = useVoiceMode((s) => s.closeVoice);
+  const roleplay = useVoiceMode((s) => s.roleplay);
   const settings = useSettings((s) => s.settings);
 
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
@@ -92,7 +93,13 @@ function VoiceModeInner() {
     setVoiceState("idle");
     bumpActivity();
 
-    const conv = new VoiceConversation(settings, {
+    // Roleplay mode (opened from the tutor): drive the conversation with the
+    // RoleplayRuntime-backed responder instead of the general agent. Everything
+    // else (mic, STT, TTS, orb) is identical.
+    const rp = useVoiceMode.getState().roleplay;
+    const conv = new VoiceConversation(
+      settings,
+      {
       onState: (s) => {
         setVoiceState(s);
         // While the AI is busy, keep the overlay alive.
@@ -125,7 +132,9 @@ function VoiceModeInner() {
           setMicDenied(true);
         }
       },
-    });
+      },
+      rp ? { respond: rp.respond } : undefined,
+    );
     convRef.current = conv;
     conv.start().catch(() => {
       /* mic-denied already surfaced via onError */
@@ -136,6 +145,12 @@ function VoiceModeInner() {
     convRef.current?.stop();
     convRef.current = null;
     startedRef.current = false;
+    // Roleplay: flush observed errors to the profile before tearing down.
+    try {
+      useVoiceMode.getState().roleplay?.onClose?.();
+    } catch {
+      /* ignore */
+    }
     resumeVideo();
     closeVoice();
   }, [closeVoice, resumeVideo]);
@@ -240,6 +255,15 @@ function VoiceModeInner() {
         </div>
       ) : (
         <>
+          {/* Roleplay scenario title (voice roleplay launched from the tutor). */}
+          {roleplay && (
+            <div
+              className="text-sm text-zinc-200"
+              style={{ textShadow: "0 1px 8px rgba(0,0,0,0.8)" }}
+            >
+              🎭 {roleplay.title}
+            </div>
+          )}
           {/* Single reply, in a translucent pill, with ←/→ history nav beside it. */}
           {shownReply && (
             <div className="flex items-center gap-2 px-4 max-w-[680px] w-full justify-center">

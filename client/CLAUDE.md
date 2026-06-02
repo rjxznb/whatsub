@@ -85,31 +85,37 @@ Desktop never asks for an email/OTP. `LicenseSessionGate` (mounted once at app r
 
 ## AI Agent
 
-Conversational agent mounted globally over every route. ReAct loop with a 22-tool registry, multi-vendor streaming, persisted history, page-aware context injection.
+Conversational agent mounted globally over every route. ReAct loop with a 23-tool registry, multi-vendor streaming, persisted history, page-aware context injection. Framed as a **private tutor** (not just a tool-caller): the per-turn context surfaces the learner's weak patterns and the agent recommends specific video timestamps to review them (see "Private-tutor loop" below).
 
 **Three-state ChatBar:** `icon` (40×40 logo button) ↔ `bar` (600×50 input strip) ↔ `panel` (full chat surface). Mode is module-level zustand state + localStorage (`agentBarMode`); position likewise (`agentIconPos` / `agentBarPos`, viewport-clamped on load and on resize). `pageDefaultMode(pathname)` returns `icon` on `/player/*`, `bar` elsewhere. Navigation auto-nudges to page default UNLESS the user explicitly opened the panel (panel is sticky across nav). Closing the panel steps **down** to `bar`, not back to the page default — bidirectional step-down. **The reverse collapse animation (bar → icon) was deliberately removed**: a stale `setTimeout` could survive a mid-animation dep change (e.g. nav adjusting iconPos), leaving the bar stuck mounted at icon size — visually a gray square instead of the whatsub logo. Collapsing to icon is now a plain JSX swap.
 
 **Files:**
 - `src/components/agent/` — `AgentRoot` (router/auth-aware shell, mounts once in `App.tsx` inside `Router`), `ChatBar` (icon/bar/panel state machine, draggable, persists position), `InputBox` (textarea + typewriter placeholder + ↑/↓ history nav), `ConversationHeader`, `MessageList` / `UserBubble` / `AssistantBubble`, `ToolCallCard`, `InlineConfirmCard` / `InlineConfirmList`, `markdown.tsx` (hand-rolled — supports GFM-style pipe tables + `[text](url)` links opened via tauri-opener), `EmptyState` (noLlm copy + suggestion chips).
-- `src/agent/` — `runtime.ts` (ReAct loop, 5-tool cap per turn), `types.ts` (`AgentEvent` AsyncGenerator, ToolDef, PageContext, message shapes), `context.ts` (per-turn page state injection — see below), `registry.ts` (22-tool static list), `tools/<id>.ts` (one file per tool + its `.test.ts`), `nav.ts` (router-bridge — global `setNavigator(fn)` so tools can route without prop-drilling), `gate.ts` (per-page tool availability filter), `cost.ts`, `_promptBuilders.ts` (system-prompt assembler).
+- `src/agent/` — `runtime.ts` (ReAct loop, 5-tool cap per turn; `STATIC_SYSTEM_PROMPT` carries the 私教 identity + `⟨私教职责⟩` block), `types.ts` (`AgentEvent` AsyncGenerator, ToolDef, PageContext, message shapes), `context.ts` (per-turn page state injection — see below), `registry.ts` (23-tool static list), `tools/<id>.ts` (one file per tool + its `.test.ts`), `nav.ts` (router-bridge — global `setNavigator(fn)` so tools can route without prop-drilling), `gate.ts` (per-page tool availability filter), `cost.ts`, `_promptBuilders.ts` (system-prompt assembler).
 - `src/store/agent.ts` — zustand store: `history` (versioned, persisted), `streaming` state, `runInBackground` (single-flight background job per importQueue/Library tool), conversation CRUD (`createConversation` / `switchActive` / `deleteConversation` / `clearAll` / `exportHistory`).
 - `src/store/agentConfirms.ts` — pending HIGH-risk tool confirmation requests rendered inline as cards.
-- `src/store/playerState.ts` — global player time + cue refs so `seek_to_time` / `jump_to_cue` / `explain_passage` tools can read/write without prop-drilling.
+- `src/store/playerState.ts` — global player time + cue refs so `seek_to_time` / `jump_to_cue` tools can read/write without prop-drilling.
+- `src/components/agent/ToolsPopover.tsx` — the wrench button in `InputBox` opens this; lists every registered tool grouped by capability with risk badges. Membership/count read from the registry (any unmapped tool falls into 其它, never hidden); portaled to body to escape the panel's `overflow-hidden`.
 - `src/llm/llmIdentity.ts` — vendor adapters (OpenAI / Claude / Gemini); each emits a unified `AgentEvent` stream so the runtime is vendor-agnostic.
 - `src-tauri/src/commands/agent.rs` — `agent_history_load` / `agent_history_save` (5 MB cap, version field, corrupt-file → default-empty). Tests use injectable paths under `std::env::temp_dir()` per the `paths::*` rule.
 - `src-tauri/src/commands/auth.rs::get_session_token` — exposes the bearer to TS so `lib/api/quota.ts` and `store/importQueue.ts` can `fetch` with auth (same pattern as `librarySync.ts`).
 
-**22-tool registry** (`src/agent/registry.ts`) — grouped by risk + capability:
-- discovery (read-only): `corpus_browse`, `corpus_phrase_detail`, `list_library`, `list_vocab`, `youtube_search`
+**23-tool registry** (`src/agent/registry.ts`) — grouped by risk + capability:
+- discovery (read-only): `corpus_browse`, `corpus_phrase_detail`, `list_library`, `list_vocab`, `youtube_search`, `recommend_review`
 - navigation: `open_video`, `open_page`, `seek_to_time`, `jump_to_cue`
-- in-video AI: `explain_passage`, `generate_quiz`, `mark_liaisons`, `translate_phrase`
+- tutor entry points: `start_lesson`, `start_roleplay`, `start_remediation`, `query_learner_profile` (these replaced the old in-video AI tools `explain_passage` / `generate_quiz` / `mark_liaisons` / `translate_phrase`)
 - vocab write: `vocab_add`, `vocab_remove`, `vocab_update_note`
 - library write: `sync_to_cloud`, `materialize_from_cloud`, `import_video`
 - library HIGH (require user confirm): `delete_video`, `unsync_from_cloud`, `retranscribe_video`
 
 `ToolDef.availableOn(page: PageContext)` lets each tool gate itself — e.g. `seek_to_time` only surfaces on `/player/*`. The runtime's tool list per turn is `listTools(currentPage)`, so the LLM only ever sees the tools it can actually invoke from the current page.
 
-**Page-context injection (`agent/context.ts`):** every turn's system prompt receives a fresh `PageContext` snapshot — pathname, active video id + currentTime + currentCueIdx (from `playerState`), library count, vocab count, corpus session status. So "解释一下这一段" knows which cue the user is staring at without the user spelling out the video id.
+**Page-context injection (`agent/context.ts`):** every turn's system prompt receives a fresh `PageContext` snapshot — pathname, active video id + currentTime + currentCueIdx (from `playerState`), library count, vocab count, and (when the learner profile is hydrated with data) the top weak patterns as `水平 B1 · 薄弱点: 过去式不规则×7 · 冠词缺失×5`. So "解释一下这一段" knows which cue the user is staring at, and "我哪儿弱" gets a grounded answer without the user spelling anything out.
+
+**Private-tutor loop:** the learner profile (`tutor/types.ts` `LearnerProfile`, Rust-persisted) accumulates `ErrorEvent`s during lessons/roleplay — each carries `source.videoId` + `cueIdx`. The agent closes the loop with:
+- **Weak-pattern awareness** — `context.ts` injects the top weak patterns each turn (above); `AgentRoot` hydrates the profile at mount so the sync snapshot has data.
+- **`recommend_review` tool** — resolves the user's OWN past mistakes back to `{video, MM:SS, sentence, your error → correction}` by loading each error's `load_analysis` and reading `subtitles[cueIdx].time`. Dedups by spot, skips resolved/deleted, honors a limit. The agent narrates the items and offers `open_video(videoId, atSec)` or `start_remediation`.
+- This is **review-anchored** (re-visit where you actually erred). A complementary "learn new examples" source — scanning the library for *unseen* cues that teach a weak pattern — is NOT built; it needs a pattern→cue index (grammar patterns can't be reliably matched to arbitrary cues without one, ideally tagged at analysis time).
 
 **Typewriter placeholder** (`InputBox.tsx`): 6 example Chinese prompts cycled char-by-char in the textarea placeholder when idle. Pauses (state preserved) on focus, resumes on blur. The auto-resize useLayoutEffect has an empty-text fast path returning 36px without measuring scrollHeight — during the icon→bar stretch animation, the textarea is briefly ~40px wide and `scrollHeight` reports the wrapped placeholder height (~80–100px), which would persist as inline `height` after the bar widens. Without the fast path, the bar paints too tall until the user types.
 

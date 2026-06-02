@@ -2,7 +2,10 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { Send, Square, Mic } from "lucide-react";
 import { useAgent } from "../../store/agent";
 import { useVoiceMode } from "../../store/voiceMode";
+import { useSlashCommands, type SlashCommand } from "../../store/slashCommands";
+import { expandSlash, isSlashTyping, filterCommands } from "../../agent/slash";
 import { ToolsPopover } from "./ToolsPopover";
+import { SlashMenu } from "./SlashMenu";
 import { CommandIcon } from "./CommandIcon";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -113,8 +116,34 @@ export function InputBox({
   const [savedDraft, setSavedDraft] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const toolsBtnRef = useRef<HTMLButtonElement>(null);
+
+  // ── Slash commands ────────────────────────────────────────────────────────
+  const slashCommands = useSlashCommands((s) => s.commands);
+  const slashActive = !noLlm && !streaming && isSlashTyping(text) && !slashDismissed;
+  const slashItems = useMemo(
+    () => (slashActive ? filterCommands(slashCommands, text.slice(1)) : []),
+    [slashActive, slashCommands, text],
+  );
+  // Complete the input to "/name " so the user types args, then Enter runs it.
+  const acceptSlash = (cmd: SlashCommand) => {
+    const next = `/${cmd.name} `;
+    setText(next);
+    setSlashDismissed(true);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      try {
+        el.setSelectionRange(next.length, next.length);
+      } catch {
+        /* ignore */
+      }
+    });
+  };
 
   // Subscribe to the active conversation's messages directly (stable reference
   // managed by the store) and derive `userMessages` via useMemo so the
@@ -183,10 +212,15 @@ export function InputBox({
 
   const submit = () => {
     if (!canSend) return;
-    onSend(text.trim());
+    // Expand a "/command args" line into its prompt template before sending;
+    // non-commands send unchanged.
+    const raw = text.trim();
+    onSend(expandSlash(raw, slashCommands) ?? raw);
     setText("");
     setHistoryIndex(null);
     setSavedDraft("");
+    setSlashDismissed(false);
+    setSlashIndex(0);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -196,10 +230,39 @@ export function InputBox({
     if (historyIndex !== null && next !== userMessages[historyIndex]) {
       setHistoryIndex(null);
     }
+    // Re-arm the slash menu + reset highlight as the command name changes.
+    setSlashDismissed(false);
+    setSlashIndex(0);
     setText(next);
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash-command autocomplete owns ↑/↓/Enter/Tab/Esc while typing a name.
+    if (slashActive) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+      if (slashItems.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashIndex((i) => Math.min(slashItems.length - 1, i + 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          acceptSlash(slashItems[Math.min(slashIndex, slashItems.length - 1)]);
+          return;
+        }
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -367,12 +430,26 @@ export function InputBox({
     />
   );
 
+  const slashMenu = (
+    <SlashMenu
+      open={slashActive}
+      anchorEl={textareaRef.current}
+      items={slashItems}
+      highlight={slashIndex}
+      onHover={setSlashIndex}
+      onPick={acceptSlash}
+      onClose={() => setSlashDismissed(true)}
+      onAfterEdit={() => textareaRef.current?.focus()}
+    />
+  );
+
   // Panel mode: a self-contained rounded input CARD embedded in the chat
   // surface — text on top, an action row (tools left, send right) below.
   if (panelMode) {
     return (
       <div className="h-full p-2">
         {popover}
+        {slashMenu}
         <div className="flex h-full flex-col rounded-2xl border border-zinc-700/70 bg-zinc-800/40 px-3 pt-2.5 pb-2">
           <div className="min-h-0 flex-1">{textarea}</div>
           <div className="flex shrink-0 items-center justify-between pt-1.5">
@@ -394,6 +471,7 @@ export function InputBox({
       {toolsBtn}
       {voiceBtn}
       {popover}
+      {slashMenu}
       {textarea}
       {sendBtn}
     </div>

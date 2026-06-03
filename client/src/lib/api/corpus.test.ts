@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue("tok") }));
 
-import { corpusContribute, CorpusContributeError } from "./corpus";
+import { corpusContribute, corpusDelete, CorpusContributeError } from "./corpus";
 
 const okResp = (body: unknown, ok = true, status = 200) =>
   ({ ok, status, json: async () => body, text: async () => JSON.stringify(body) }) as Response;
@@ -52,5 +52,25 @@ describe("corpusContribute", () => {
     await expect(
       corpusContribute({ phraseRaw: "x", contextSentence: "y", source: { kind: "webpage", url: "https://e.x" } }),
     ).rejects.toBeInstanceOf(CorpusContributeError);
+  });
+});
+
+describe("corpusDelete", () => {
+  it("DELETEs the contribution and resolves on 200", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(corpusDelete(7)).resolves.toBeUndefined();
+    expect(fetchMock.mock.calls[0][0]).toContain("/corpus/contribute/7");
+    expect(fetchMock.mock.calls[0][1].method).toBe("DELETE");
+  });
+
+  it("treats 404 as success (already gone)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) }));
+    await expect(corpusDelete(7)).resolves.toBeUndefined();
+  });
+
+  it("throws on other errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ reason: "boom" }) }));
+    await expect(corpusDelete(7)).rejects.toBeInstanceOf(CorpusContributeError);
   });
 });

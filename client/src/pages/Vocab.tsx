@@ -104,7 +104,7 @@ export function Vocab() {
     const remaining = corpusQ ? corpusQ.limit - corpusQ.used : Infinity;
     if (remaining < ids.length) {
       await notify(
-        `云端余量不足：还能升级 ${Math.max(0, remaining)} 条，但有 ${ids.length} 条待升级。可先取消一些或升级订阅。`,
+        `云端余量不足：还能上传 ${Math.max(0, remaining)} 条，但有 ${ids.length} 条待上传。可先移除一些或升级订阅。`,
       );
       return;
     }
@@ -113,10 +113,10 @@ export function Vocab() {
       const { succeeded, failed } = await promoteMany(ids);
       corpusQuota().then(setCorpusQ).catch(() => {});
       if (failed.length === 0) {
-        await notify(`已升级 ${succeeded} 条到云端语料库。`);
+        await notify(`已上传 ${succeeded} 条到云端语料库。`);
       } else {
         await notify(
-          `升级完成：成功 ${succeeded}，失败 ${failed.length}（${PROMOTE_REASON[failed[0].reason] ?? failed[0].reason}）。`,
+          `上传完成：成功 ${succeeded}，失败 ${failed.length}（${PROMOTE_REASON[failed[0].reason] ?? failed[0].reason}）。`,
         );
       }
     } finally {
@@ -311,7 +311,7 @@ export function Vocab() {
                     type="button"
                     disabled={busy}
                     onClick={() => void batchPromote(g.videoId, unp)}
-                    title="把这个视频里未升级的短语一起升级到云端语料库"
+                    title="把这个视频里未上传的短语一起上传到云端语料库"
                     className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-white/5 hover:text-blue-300 transition-colors disabled:opacity-50"
                   >
                     {busy ? (
@@ -319,7 +319,7 @@ export function Vocab() {
                     ) : (
                       <CloudUpload className="h-3 w-3" />
                     )}
-                    升级 {unp.length} 条
+                    上传 {unp.length} 条
                     {corpusQ ? `（余 ${Math.max(0, corpusQ.limit - corpusQ.used)}）` : ""}
                   </button>
                 );
@@ -496,7 +496,7 @@ const PROMOTE_REASON: Record<string, string> = {
   auth_required: "云端未连接，请稍后重试",
   bad_token: "登录已过期",
   rate_limited: "操作太频繁，请稍后再试",
-  empty_phrase: "短语为空，无法升级",
+  empty_phrase: "短语为空，无法上传",
 };
 
 interface CardProps {
@@ -538,7 +538,7 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource, onSeek }: Car
       await unpromote(e.id);
     } else {
       const r = await promoteToCloud(e.id);
-      if (!r.ok) setCloudErr(PROMOTE_REASON[r.reason ?? ""] ?? `升级失败：${r.reason ?? ""}`);
+      if (!r.ok) setCloudErr(PROMOTE_REASON[r.reason ?? ""] ?? `上传失败：${r.reason ?? ""}`);
     }
     setCloudBusy(false);
   };
@@ -614,7 +614,7 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource, onSeek }: Car
           type="button"
           onClick={() => void toggleCloud()}
           disabled={cloudBusy}
-          title={promoted ? "已在云端语料库 · 点击移除" : "升级到云端语料库（个人语料）"}
+          title={promoted ? "已在云端语料库 · 点击移除" : "上传到云端语料库（个人语料）"}
           className={
             "flex h-6 w-6 items-center justify-center rounded-full transition-colors " +
             (promoted

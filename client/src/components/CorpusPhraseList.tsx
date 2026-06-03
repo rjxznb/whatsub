@@ -47,6 +47,12 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
 
   const handleDelete = async (item: MineItem) => {
     if (deletingId !== null) return;
+    // No id → the app is running an older build whose corpus_mine doesn't carry
+    // the contribution id yet. Guard so we don't POST .../contribute/undefined.
+    if (!item.id || item.id <= 0) {
+      void notify('删除需要更新后的版本：请重启应用（重新编译）后再试。');
+      return;
+    }
     const ok = await confirmDialog(`从个人语料库删除「${item.phraseRaw}」？`, {
       title: '删除语料',
       okText: '删除',

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { notify } from "../store/appDialog";
-import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check, Cloud, CloudUpload, Loader2 } from "lucide-react";
+import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check, Cloud, CloudUpload, Loader2, Play, Film } from "lucide-react";
 import { NoteBubble } from "../components/NoteBubble";
 import { NoteBadge } from "../components/NoteBadge";
 import { VocabTour } from "../components/VocabTour";
@@ -9,6 +9,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useVocabulary } from "../store/vocab";
 import { corpusQuota, type Quota } from "../lib/api/quota";
+import { PhrasePlayer } from "../components/PhrasePlayer";
+import { parseYouTubeUrl } from "../components/YouTubeEmbed";
+import { formatTime } from "../utils/time";
 import { lookupPhonetic } from "../llm/phonetic";
 import { useSpeech } from "../hooks/useSpeech";
 import type { VocabEntry } from "../types/vocab";
@@ -83,6 +86,10 @@ export function Vocab() {
   const promoteMany = useVocabulary((s) => s.promoteMany);
   const [corpusQ, setCorpusQ] = useState<Quota | null>(null);
   const [batchingId, setBatchingId] = useState<string | null>(null);
+  // 按视频 inline player: one expanded group at a time; clicking a phrase's
+  // timestamp seeks that group's shared player.
+  const [expandedVideoId, setExpandedVideoId] = useState<string | null>(null);
+  const [seek, setSeek] = useState<{ videoId: string; sec: number } | null>(null);
   // Best-effort personal-corpus quota for the batch precheck (hidden if it
   // fails — the backend still enforces quota_exceeded). Refetched as the count
   // changes (promotes from anywhere).
@@ -317,7 +324,35 @@ export function Vocab() {
                   </button>
                 );
               })()}
+              {g.videoId !== "__unknown__" && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedVideoId((v) => (v === g.videoId ? null : g.videoId))
+                  }
+                  title="在此预览视频，点短语时间戳跳转"
+                  className={
+                    "inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors " +
+                    (expandedVideoId === g.videoId
+                      ? "bg-white/10 text-zinc-100"
+                      : "text-zinc-400 hover:bg-white/5 hover:text-zinc-100")
+                  }
+                >
+                  <Film className="h-3 w-3" />
+                  {expandedVideoId === g.videoId ? "收起" : "预览"}
+                </button>
+              )}
             </div>
+            {/* Inline shared player for this video (accordion — one at a time). */}
+            {expandedVideoId === g.videoId && (
+              <div className="mb-3 overflow-hidden rounded-lg border border-zinc-800">
+                <PhrasePlayer
+                  videoId={g.videoId}
+                  youtubeId={parseYouTubeUrl(g.items.find((i) => i.videoUrl)?.videoUrl ?? "")?.videoId}
+                  seekTo={seek?.videoId === g.videoId ? seek.sec : undefined}
+                />
+              </div>
+            )}
             {/* gap-x bumped to 12 (48px) so the NoteBadge tag — which
                 dangles ~40px past the card's right edge with its 26°
                 tilt — has room to swing without overlapping the next
@@ -330,6 +365,11 @@ export function Vocab() {
                   ipa={phoneticMap[e.expression]}
                   onSpeak={() => speak(e.expression)}
                   onRemove={() => void remove(e.id)}
+                  onSeek={
+                    expandedVideoId === g.videoId && e.cueTime != null
+                      ? () => setSeek({ videoId: g.videoId, sec: e.cueTime! })
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -466,9 +506,12 @@ interface CardProps {
   onRemove: () => void;
   /** When true, render a small "from <video>" line under the card body. */
   showSource?: boolean;
+  /** When provided (按视频 preview), render a ▶ MM:SS chip that seeks the
+   *  group's inline player to this phrase's cue time. */
+  onSeek?: () => void;
 }
 
-function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) {
+function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource, onSeek }: CardProps) {
   const href = playerHrefFor(e);
   const cardRef = useRef<HTMLDivElement>(null);
   // Bubble open-state lives on the card so each card has its own. We
@@ -548,6 +591,17 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
           {e.expression}
         </Link>
         {ipa && <span className="font-ipa text-zinc-300 text-sm">{ipa}</span>}
+        {onSeek && e.cueTime != null && (
+          <button
+            type="button"
+            onClick={onSeek}
+            title="在上方预览里跳到这一句"
+            className="inline-flex items-center gap-0.5 rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] text-blue-300 hover:bg-zinc-700 transition-colors"
+          >
+            <Play className="h-2.5 w-2.5" fill="currentColor" />
+            {formatTime(e.cueTime)}
+          </button>
+        )}
         <button
           type="button"
           onClick={onSpeak}

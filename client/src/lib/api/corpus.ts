@@ -55,6 +55,29 @@ export class CorpusContributeError extends Error {
   }
 }
 
+/** Delete a personal-corpus contribution by id (used to "un-promote" a vocab
+ *  entry). 404 is treated as success (already gone). */
+export async function corpusDelete(contributionId: number): Promise<void> {
+  const token = await invoke<string | null>("get_session_token");
+  if (!token) throw new CorpusContributeError("auth_required");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${BASE}/corpus/contribute/${contributionId}`, {
+      method: "DELETE",
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok && resp.status !== 404) {
+      const j = (await resp.json().catch(() => null)) as { reason?: string } | null;
+      throw new CorpusContributeError(j?.reason ?? `http_${resp.status}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function corpusContribute(
   body: CorpusContributeBody,
 ): Promise<CorpusContributeResult> {

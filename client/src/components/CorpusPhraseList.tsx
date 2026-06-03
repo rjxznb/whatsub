@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Trash2, Loader2 } from 'lucide-react';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { corpusQuota, type Quota } from '../lib/api/quota';
+import { corpusDelete } from '../lib/api/corpus';
+import { confirmDialog, notify } from '../store/appDialog';
 import { AddCorpusPhraseDialog } from './AddCorpusPhraseDialog';
 
 interface MineItem {
+  /** corpus_contributions.id — for per-row delete. */
+  id: number;
   phraseNormalized: string;
   phraseRaw: string;
   meaningZh: string | null;
@@ -39,6 +43,28 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
   );
   const isMine = mode === 'mine';
   const [addOpen, setAddOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const handleDelete = async (item: MineItem) => {
+    if (deletingId !== null) return;
+    const ok = await confirmDialog(`从个人语料库删除「${item.phraseRaw}」？`, {
+      title: '删除语料',
+      okText: '删除',
+      cancelText: '取消',
+      danger: true,
+    });
+    if (!ok) return;
+    setDeletingId(item.id);
+    try {
+      await corpusDelete(item.id);
+      if (selected === item.phraseNormalized) onSelect('');
+      refresh();
+    } catch (e) {
+      void notify(`删除失败：${String(e)}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   // Server-authoritative personal-corpus quota (used/limit). Only fetched for
   // the 'mine' list; best-effort (a failure just hides the badge). Refetched
@@ -102,29 +128,52 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     }
     return (
       <ul>
-        {data.items.map((item) => (
-          <li
-            key={item.phraseNormalized}
-            onClick={() => onSelect(item.phraseNormalized)}
-            className={`px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
-              selected === item.phraseNormalized ? 'bg-zinc-800' : ''
-            }`}
-          >
-            <div className="text-sm font-medium">{item.phraseRaw}</div>
-            {item.meaningZh && (
-              <div className="text-xs text-zinc-400 truncate">{item.meaningZh}</div>
-            )}
-            {item.tags && item.tags.length > 0 && (
-              <div className="flex flex-wrap gap-1 mt-1">
-                {item.tags.map((t) => (
-                  <span key={t} className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200">
-                    {t}
-                  </span>
-                ))}
-              </div>
-            )}
-          </li>
-        ))}
+        {data.items.map((item, i) => {
+          // mine rows can share a phraseNormalized (duplicate uploads) → key by
+          // the contribution id when present.
+          const key = isMine ? `${(item as MineItem).id}-${i}` : item.phraseNormalized;
+          return (
+            <li
+              key={key}
+              onClick={() => onSelect(item.phraseNormalized)}
+              className={`group relative px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
+                selected === item.phraseNormalized ? 'bg-zinc-800' : ''
+              }`}
+            >
+              <div className="text-sm font-medium pr-6">{item.phraseRaw}</div>
+              {item.meaningZh && (
+                <div className="text-xs text-zinc-400 truncate">{item.meaningZh}</div>
+              )}
+              {item.tags && item.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {item.tags.map((t) => (
+                    <span key={t} className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {isMine && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDelete(item as MineItem);
+                  }}
+                  disabled={deletingId !== null}
+                  title="从个人语料库删除"
+                  className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-zinc-500 opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-300 transition-colors disabled:opacity-40"
+                >
+                  {deletingId === (item as MineItem).id ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={13} />
+                  )}
+                </button>
+              )}
+            </li>
+          );
+        })}
       </ul>
     );
   }

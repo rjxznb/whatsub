@@ -45,6 +45,9 @@ pub struct BrowseResponse {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MineItem {
+    /** corpus_contributions.id — needed so the client can delete one row. */
+    #[serde(default)]
+    pub id: i64,
     #[serde(rename = "phraseNormalized")]
     pub phrase_normalized: String,
     #[serde(rename = "phraseRaw")]

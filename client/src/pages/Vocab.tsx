@@ -619,7 +619,7 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource, onSeek }: Car
             "flex h-6 w-6 items-center justify-center rounded-full transition-colors " +
             (promoted
               ? "text-blue-300 hover:bg-blue-900/30"
-              : "text-zinc-500 hover:bg-zinc-800 hover:text-blue-300 opacity-0 group-hover:opacity-100")
+              : "text-zinc-500 hover:bg-zinc-800 hover:text-blue-300")
           }
         >
           {cloudBusy ? (
@@ -634,7 +634,7 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource, onSeek }: Car
           type="button"
           onClick={onRemove}
           title="移出词汇本"
-          className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-red-900/30 hover:text-red-300 transition-colors opacity-0 group-hover:opacity-100"
+          className="mr-2 flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-red-900/30 hover:text-red-300 transition-colors"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>

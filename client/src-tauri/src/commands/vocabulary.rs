@@ -45,6 +45,15 @@ pub struct VocabEntry {
     /// Sync lifecycle marker: "pending" | "synced" | "conflict"
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_status: Option<String>,
+    // ── Cloud personal-corpus upload (desktop 上传到语料库) ──
+    /// corpus_contributions.id once uploaded to the cloud corpus; None = not
+    /// uploaded. MUST be a real field (not dropped) so the uploaded state
+    /// persists — otherwise the card reverts and the user can upload again,
+    /// creating duplicate cloud rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_contribution_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_at: Option<i64>,
 }
 
 impl VocabEntry {
@@ -83,6 +92,12 @@ impl VocabEntry {
         }
         if incoming.sync_status.is_some() {
             self.sync_status = incoming.sync_status.clone();
+        }
+        if incoming.cloud_contribution_id.is_some() {
+            self.cloud_contribution_id = incoming.cloud_contribution_id;
+        }
+        if incoming.promoted_at.is_some() {
+            self.promoted_at = incoming.promoted_at;
         }
     }
 }

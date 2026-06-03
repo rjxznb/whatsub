@@ -8,6 +8,7 @@ import { VocabTour } from "../components/VocabTour";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useVocabulary } from "../store/vocab";
+import { corpusQuota, type Quota } from "../lib/api/quota";
 import { lookupPhonetic } from "../llm/phonetic";
 import { useSpeech } from "../hooks/useSpeech";
 import type { VocabEntry } from "../types/vocab";
@@ -79,6 +80,42 @@ function playerHrefFor(e: VocabEntry): string {
 
 export function Vocab() {
   const { entries, loaded, reload, remove } = useVocabulary();
+  const promoteMany = useVocabulary((s) => s.promoteMany);
+  const [corpusQ, setCorpusQ] = useState<Quota | null>(null);
+  const [batchingId, setBatchingId] = useState<string | null>(null);
+  // Best-effort personal-corpus quota for the batch precheck (hidden if it
+  // fails — the backend still enforces quota_exceeded). Refetched as the count
+  // changes (promotes from anywhere).
+  useEffect(() => {
+    let cancelled = false;
+    corpusQuota().then((q) => { if (!cancelled) setCorpusQ(q); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [entries]);
+
+  const batchPromote = async (videoId: string, ids: string[]) => {
+    if (ids.length === 0) return;
+    const remaining = corpusQ ? corpusQ.limit - corpusQ.used : Infinity;
+    if (remaining < ids.length) {
+      await notify(
+        `云端余量不足：还能升级 ${Math.max(0, remaining)} 条，但有 ${ids.length} 条待升级。可先取消一些或升级订阅。`,
+      );
+      return;
+    }
+    setBatchingId(videoId);
+    try {
+      const { succeeded, failed } = await promoteMany(ids);
+      corpusQuota().then(setCorpusQ).catch(() => {});
+      if (failed.length === 0) {
+        await notify(`已升级 ${succeeded} 条到云端语料库。`);
+      } else {
+        await notify(
+          `升级完成：成功 ${succeeded}，失败 ${failed.length}（${PROMOTE_REASON[failed[0].reason] ?? failed[0].reason}）。`,
+        );
+      }
+    } finally {
+      setBatchingId(null);
+    }
+  };
   const { speak } = useSpeech();
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortMode>(() => {
@@ -258,6 +295,28 @@ export function Vocab() {
               )}
               <span className="text-zinc-600 text-xs">·</span>
               <span className="text-zinc-500 text-xs">{g.items.length} 条</span>
+              {(() => {
+                const unp = g.items.filter((i) => !i.cloudContributionId).map((i) => i.id);
+                if (unp.length === 0) return null;
+                const busy = batchingId === g.videoId;
+                return (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void batchPromote(g.videoId, unp)}
+                    title="把这个视频里未升级的短语一起升级到云端语料库"
+                    className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-zinc-400 hover:bg-white/5 hover:text-blue-300 transition-colors disabled:opacity-50"
+                  >
+                    {busy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <CloudUpload className="h-3 w-3" />
+                    )}
+                    升级 {unp.length} 条
+                    {corpusQ ? `（余 ${Math.max(0, corpusQ.limit - corpusQ.used)}）` : ""}
+                  </button>
+                );
+              })()}
             </div>
             {/* gap-x bumped to 12 (48px) so the NoteBadge tag — which
                 dangles ~40px past the card's right edge with its 26°

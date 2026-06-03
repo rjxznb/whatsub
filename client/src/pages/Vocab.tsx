@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { notify } from "../store/appDialog";
-import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check } from "lucide-react";
+import { ArrowLeft, Star, Trash2, Volume2, FileOutput, ChevronDown, Check, Cloud, CloudUpload, Loader2 } from "lucide-react";
 import { NoteBubble } from "../components/NoteBubble";
 import { NoteBadge } from "../components/NoteBadge";
 import { VocabTour } from "../components/VocabTour";
@@ -391,6 +391,15 @@ export function Vocab() {
   );
 }
 
+/** Backend reason → Chinese message for a failed cloud promote. */
+const PROMOTE_REASON: Record<string, string> = {
+  quota_exceeded: "云端语料额度已满",
+  auth_required: "云端未连接，请稍后重试",
+  bad_token: "登录已过期",
+  rate_limited: "操作太频繁，请稍后再试",
+  empty_phrase: "短语为空，无法升级",
+};
+
 interface CardProps {
   entry: VocabEntry;
   ipa: string | null | undefined;
@@ -411,7 +420,26 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
     rect: { left: number; top: number; width: number; height: number };
   } | null>(null);
   const updateNote = useVocabulary((s) => s.updateNote);
+  const promoteToCloud = useVocabulary((s) => s.promoteToCloud);
+  const unpromote = useVocabulary((s) => s.unpromote);
   const hasNote = !!e.note;
+
+  // Promote to / un-promote from the cloud personal corpus.
+  const promoted = !!e.cloudContributionId;
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudErr, setCloudErr] = useState<string | null>(null);
+  const toggleCloud = async () => {
+    if (cloudBusy) return;
+    setCloudBusy(true);
+    setCloudErr(null);
+    if (promoted) {
+      await unpromote(e.id);
+    } else {
+      const r = await promoteToCloud(e.id);
+      if (!r.ok) setCloudErr(PROMOTE_REASON[r.reason ?? ""] ?? `升级失败：${r.reason ?? ""}`);
+    }
+    setCloudBusy(false);
+  };
 
   function openEditor() {
     if (!cardRef.current) return;
@@ -471,6 +499,26 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
         </button>
         <button
           type="button"
+          onClick={() => void toggleCloud()}
+          disabled={cloudBusy}
+          title={promoted ? "已在云端语料库 · 点击移除" : "升级到云端语料库（个人语料）"}
+          className={
+            "flex h-6 w-6 items-center justify-center rounded-full transition-colors " +
+            (promoted
+              ? "text-blue-300 hover:bg-blue-900/30"
+              : "text-zinc-500 hover:bg-zinc-800 hover:text-blue-300 opacity-0 group-hover:opacity-100")
+          }
+        >
+          {cloudBusy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : promoted ? (
+            <Cloud className="h-3.5 w-3.5" />
+          ) : (
+            <CloudUpload className="h-3.5 w-3.5" />
+          )}
+        </button>
+        <button
+          type="button"
           onClick={onRemove}
           title="移出词汇本"
           className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-red-900/30 hover:text-red-300 transition-colors opacity-0 group-hover:opacity-100"
@@ -481,6 +529,7 @@ function VocabCard({ entry: e, ipa, onSpeak, onRemove, showSource }: CardProps) 
       {e.meaningZh && (
         <div className="text-zinc-100 text-xs mt-1.5">{e.meaningZh}</div>
       )}
+      {cloudErr && <div className="text-[10px] text-rose-300 mt-1">{cloudErr}</div>}
       {e.usage && (
         <div className="text-zinc-400 text-xs mt-1 italic">{e.usage}</div>
       )}

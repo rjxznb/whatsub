@@ -11,11 +11,18 @@ const BASE = "https://whatsub.eversay.cc/api";
 const TIMEOUT_MS = 20_000;
 
 export interface CorpusSource {
-  kind: "youtube" | "webpage" | "pdf";
-  url: string;
+  /** "library" = a desktop/iOS Library video (anchored by libraryEntryId). */
+  kind: "youtube" | "webpage" | "pdf" | "library";
+  /** Optional for "library" kind (libraryEntryId is the anchor). Required for
+   *  youtube/webpage/pdf. */
+  url?: string;
   title?: string;
-  /** YouTube only — seconds into the video. */
+  /** YouTube / library — seconds into the video. */
   timestampSec?: number;
+  /** "library" kind — the Library entry id (matches iOS PhraseSource). */
+  libraryEntryId?: string;
+  /** Optional YouTube id fallback (for cross-device playback). */
+  youtubeId?: string;
 }
 
 export interface CorpusContributeBody {

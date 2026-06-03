@@ -25,6 +25,13 @@ export interface VocabEntry {
   pageUrl?: string;
   videoUrl?: string;
   syncStatus?: "synced" | "pending";
+
+  // ── Cloud-corpus promote (desktop → /api/corpus/contribute) ──
+  /** corpus_contributions.id once promoted; undefined = not promoted. Stored
+   *  front-end only — vocabulary.json is free-form, so no Rust change needed. */
+  cloudContributionId?: number;
+  /** ms timestamp of the promote; undefined = not promoted. */
+  promotedAt?: number;
 }
 
 export function makeVocabId(expression: string): string {

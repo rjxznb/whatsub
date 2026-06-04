@@ -18,6 +18,10 @@ import type {
 // api.deepseek.com is blocked with a bare "Failed to fetch". Routing through
 // Rust bypasses both the CSP and CORS (same as the Claude provider).
 import { fetch } from "@tauri-apps/plugin-http";
+// invoke is for the whatsub-managed relay's per-request bearer resolution
+// (get_session_token / trial_read_state). Tauri core APIs run inside the
+// WebView so no plugin-http is needed here.
+import { invoke } from "@tauri-apps/api/core";
 
 export function createOpenAICompatibleProvider(
   settings: Settings,
@@ -34,13 +38,44 @@ export function createOpenAICompatibleProvider(
   const isDeepSeek = /(?:\/\/|\.)deepseek\.com\b/i.test(baseUrl);
   const deepseekNoThink = isDeepSeek ? { thinking: { type: "disabled" } } : {};
 
+  // whatSub managed-LLM relay (2026-06-04): detect by host. When active,
+  // ignore the configured apiKey and resolve a Bearer at request time
+  // from the Tauri side — session token (Pro/Free) first, falls back to
+  // the trial token persisted in trial.json (TRIAL_ACTIVE). This makes
+  // the "whatsub-managed" vendor preset zero-config: user picks it, no
+  // API-key field, the layer below transparently auths each call.
+  const isWhatsubRelay = /\bwhatsub\.eversay\.cc\/api\/llm\b/i.test(baseUrl);
+  async function resolveAuthHeader(): Promise<string> {
+    if (!isWhatsubRelay) return `Bearer ${cfg.apiKey}`;
+    try {
+      const session = await invoke<string | null>("get_session_token");
+      if (session) return `Bearer ${session}`;
+    } catch {
+      // get_session_token throws when nothing's stored — fall through.
+    }
+    try {
+      // Trial path: pull the trialToken from the local trial.json the
+      // license store wrote on /trial/start. Same Rust command that
+      // /store/license.ts reads on init.
+      const trial = await invoke<{ trialToken?: string } | null>("trial_read_state");
+      if (trial?.trialToken) return `Bearer ${trial.trialToken}`;
+    } catch {
+      // ignore
+    }
+    // No session, no trial — caller will get a 401 from the relay,
+    // which the existing error path translates into the "needs key"
+    // upsell. Don't throw here; let the network error surface naturally.
+    return "Bearer ";
+  }
+
   return {
     async *stream(req: ProviderRequest): AsyncIterable<string> {
+      const authHeader = await resolveAuthHeader();
       const resp = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${cfg.apiKey}`,
+          authorization: authHeader,
         },
         body: JSON.stringify({
           model: cfg.model,
@@ -84,11 +119,12 @@ export function createOpenAICompatibleProvider(
         stream: true,
         ...deepseekNoThink,
       };
+      const authHeader = await resolveAuthHeader();
       const resp = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${cfg.apiKey}`,
+          authorization: authHeader,
         },
         body: JSON.stringify(body),
         signal: opts.signal,

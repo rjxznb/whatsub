@@ -38,19 +38,28 @@ export type LicenseMode = 'NEEDS_KEY' | 'TRIAL_ACTIVE' | 'ACTIVE';
 /** Stored locally as `<app-data>/trial.json` after the first /trial/start.
  *  Subsequent launches read this directly without hitting the server, so
  *  the trial works fully offline once registered.
- *  `expiresAt` is unix ms — once Date.now() crosses it, mode → NEEDS_KEY. */
+ *  `expiresAt` is unix ms — once Date.now() crosses it, mode → NEEDS_KEY.
+ *
+ *  `trialToken` (added 2026-06-04, managed-LLM relay): opaque bearer
+ *  minted by the server on /api/trial/start. Trial-mode users hit the
+ *  managed-LLM relay (`POST /api/llm/v1/chat/completions`) with this
+ *  as Authorization, skipping BYOK config. Optional for back-compat
+ *  with cached pre-relay trial.json — the TS layer re-calls /start
+ *  to backfill, which is idempotent on fingerprint AND returns the
+ *  same token even on re-call. */
 export interface TrialState {
   fingerprint: string;
   startedAt: number;
   expiresAt: number;
+  trialToken?: string;
 }
 
 /** Server `/api/trial/start` response. Keep in lockstep with the route
  *  in `whatsub-license/src/routes/trial.ts` (see docs/
  *  whatsub-trial-server-snippet.md for the reference impl). */
 export type TrialStartResponse =
-  | { status: 'granted'; startedAt: number; expiresAt: number }
-  | { status: 'already_used'; startedAt: number; expiresAt: number }
+  | { status: 'granted'; startedAt: number; expiresAt: number; trialToken: string }
+  | { status: 'already_used'; startedAt: number; expiresAt: number; trialToken: string }
   | { status: 'bad_request'; detail: string };
 
 /** Hard-coded URL of the deployed activation server. Embedded at build

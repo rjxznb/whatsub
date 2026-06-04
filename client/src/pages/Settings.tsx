@@ -16,6 +16,7 @@ import { useModelDownload } from "../store/modelDownload";
 import { useUpdater } from "../hooks/useUpdater";
 import { useLicense } from "../store/license";
 import { SiteIcon } from "../components/SiteIcon";
+import { ManagedRelayQuotaPanel } from "../components/ManagedRelayQuotaPanel";
 import { getVersion } from "@tauri-apps/api/app";
 
 export function Settings() {
@@ -1156,6 +1157,11 @@ function VendorSection({
   // affecting routing (getProvider still resolves the URL from the vendor
   // preset internally).
   const showBaseUrl = isCustom;
+  // whatSub 托管 (managed-LLM relay): API key + model are server-resolved
+  // (Bearer = session/trial token, model = forced deepseek-v4-flash) so we
+  // hide the input rows entirely and surface a quota panel + helper copy
+  // instead. The user just picks the vendor and is done.
+  const isManagedRelay = vendor.id === "whatsub-managed";
 
   return (
     <div className="space-y-4">
@@ -1208,31 +1214,37 @@ function VendorSection({
         </div>
       )}
 
-      <SecretField
-        label="API Key"
-        value={activeKey}
-        onChange={setActiveKey}
-      />
-      {vendor.keyConsoleUrl && (
-        <a
-          href={vendor.keyConsoleUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300"
-        >
-          获取 / 管理 API Key <ExternalLink className="h-3 w-3" />
-        </a>
-      )}
+      {isManagedRelay ? (
+        <ManagedRelayQuotaPanel />
+      ) : (
+        <>
+          <SecretField
+            label="API Key"
+            value={activeKey}
+            onChange={setActiveKey}
+          />
+          {vendor.keyConsoleUrl && (
+            <a
+              href={vendor.keyConsoleUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300"
+            >
+              获取 / 管理 API Key <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
 
-      <ModelField
-        models={vendor.models}
-        value={activeModel}
-        onChange={setActiveModel}
-      />
-      {vendor.models.length > 0 && (
-        <div className="-mt-2 text-[10px] text-zinc-500">
-          点输入框右侧的图标看推荐模型列表，也可以手动输入其它模型名
-        </div>
+          <ModelField
+            models={vendor.models}
+            value={activeModel}
+            onChange={setActiveModel}
+          />
+          {vendor.models.length > 0 && (
+            <div className="-mt-2 text-[10px] text-zinc-500">
+              点输入框右侧的图标看推荐模型列表，也可以手动输入其它模型名
+            </div>
+          )}
+        </>
       )}
 
       {vendor.note && (

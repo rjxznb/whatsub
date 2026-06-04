@@ -129,12 +129,22 @@ pub fn license_save_state(state: LicenseState) -> AppResult<()> {
 
 /// Mirror of `TrialState` in TS — local cache of the server's trial
 /// registration. Presence + non-expired `expires_at` = TRIAL_ACTIVE.
+///
+/// `trial_token` (added 2026-06-04) is the opaque bearer the server
+/// minted in `/api/trial/start`; the client uses it as Authorization
+/// header on the managed-LLM relay (`POST /api/llm/v1/chat/completions`)
+/// so trial-mode users get LLM access without configuring their own
+/// API key. Optional for back-compat with pre-2026-06-04 cached files —
+/// when missing, the TS layer re-calls /trial/start which is idempotent
+/// on fingerprint AND returns the same token via lazy backfill.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrialState {
     pub fingerprint: String,
     pub started_at: i64,
     pub expires_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trial_token: Option<String>,
 }
 
 #[tauri::command]

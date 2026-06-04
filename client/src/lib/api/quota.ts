@@ -60,3 +60,40 @@ export function libraryQuota(): Promise<Quota> {
 export function corpusQuota(): Promise<Quota> {
   return fetchQuota("/corpus/quota");
 }
+
+/** Managed-LLM relay quota — extends the base shape with tier + reset
+ *  info so the Settings page can render "本月剩余 ≈N 次解析" or
+ *  "免费体验包 LIFETIME". `tier`:
+ *    - 'pro'   monthly bucket, resets on `periodResetAt` (epoch ms)
+ *    - 'trial' lifetime per-fingerprint (24h window also caps it)
+ *    - 'free'  per-email lifetime (200K), `periodResetAt` is 0
+ *  Added 2026-06-04 (managed-LLM relay phase 3). */
+export interface LlmQuota extends Quota {
+  requestCount: number;
+  tier: "pro" | "trial" | "free";
+  /** 0 for free tier (no reset until upgrade). */
+  periodResetAt: number;
+}
+
+/** Accepts an optional explicit bearer so trial-mode callers can pass
+ *  their trialToken (the relay-issued bearer from /api/trial/start)
+ *  rather than the per-account session token. Pro / free tiers use the
+ *  default (get_session_token). */
+export async function llmQuota(bearerOverride?: string): Promise<LlmQuota> {
+  const token = bearerOverride ?? (await getToken());
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${BASE}/llm/quota`, {
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`llm quota http ${resp.status}: ${text}`);
+    }
+    return resp.json() as Promise<LlmQuota>;
+  } finally {
+    clearTimeout(timer);
+  }
+}

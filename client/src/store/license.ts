@@ -335,6 +335,11 @@ async function fetchTrialFromServer(
         fingerprint,
         startedAt: data.startedAt,
         expiresAt: data.expiresAt,
+        // trialToken added 2026-06-04 — server returns it on every /start
+        // call (idempotent on fingerprint). Older servers (pre-relay)
+        // omit it; the openai-compatible relay provider falls back to
+        // session token in that case, which gracefully degrades.
+        trialToken: (data as { trialToken?: string }).trialToken,
       },
     };
   }

@@ -5,11 +5,22 @@ import { useCorpusPhrase } from '../hooks/useCorpusPhrase';
 import { useSpeech } from '../hooks/useSpeech';
 import { lookupPhonetic } from '../llm/phonetic';
 import { YouTubeEmbed, parseYouTubeUrl } from './YouTubeEmbed';
+import { PhrasePlayer } from './PhrasePlayer';
 
 interface Contribution {
   id: number;
   contextSentence: string;
-  source: { kind: string; url: string; title?: string; timestampSec?: number };
+  source: {
+    kind: string;
+    /** Optional for "library" sources (anchored by libraryEntryId). */
+    url?: string;
+    title?: string;
+    timestampSec?: number;
+    /** "library" kind — local Library entry id (play local → YouTube fallback). */
+    libraryEntryId?: string;
+    /** YouTube id fallback. */
+    youtubeId?: string;
+  };
   contributedAt: number;
 }
 
@@ -81,7 +92,7 @@ function instanceStartSec(c: Contribution): number | null {
   if (typeof c.source.timestampSec === 'number' && c.source.timestampSec > 0) {
     return c.source.timestampSec;
   }
-  const parsed = parseYouTubeUrl(c.source.url);
+  const parsed = parseYouTubeUrl(c.source.url ?? '');
   return parsed && parsed.startSec > 0 ? parsed.startSec : null;
 }
 
@@ -129,7 +140,13 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
     : -1;
   const currentIdx = selectedIdx >= 0 ? selectedIdx : 0;
   const instance = allInstances[currentIdx] ?? null;
-  const parsedUrl = instance ? parseYouTubeUrl(instance.source.url) : null;
+  const parsedUrl = instance ? parseYouTubeUrl(instance.source.url ?? '') : null;
+  // "library" sources play the LOCAL Library video (PhrasePlayer), falling back
+  // to YouTube if the local file is gone — so vocab-promoted phrases are
+  // playable too. A YouTube id can come from the explicit youtubeId or the url.
+  const libId = instance?.source.libraryEntryId;
+  const ytId = instance ? (instance.source.youtubeId ?? parsedUrl?.videoId) : undefined;
+  const hasPlayer = !!(libId || parsedUrl || ytId);
   // YouTubeEmbed receives the explicit per-instance startSec when available;
   // otherwise it falls back to whatever the URL itself carries.
   const embedStart = instance
@@ -186,21 +203,26 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
                 {formatTime(sec)}
               </button>
             )}
-            {c.source.title && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openUrl(c.source.url).catch((err) =>
-                    console.error('open source url failed', err)
-                  );
-                }}
-                title={`在浏览器打开 ${c.source.url}`}
-                className="text-xs text-zinc-400 hover:text-blue-300 hover:underline truncate text-left max-w-full"
-              >
-                {c.source.title}
-              </button>
-            )}
+            {c.source.title &&
+              (c.source.url ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openUrl(c.source.url!).catch((err) =>
+                      console.error('open source url failed', err)
+                    );
+                  }}
+                  title={`在浏览器打开 ${c.source.url}`}
+                  className="text-xs text-zinc-400 hover:text-blue-300 hover:underline truncate text-left max-w-full"
+                >
+                  {c.source.title}
+                </button>
+              ) : (
+                <span className="text-xs text-zinc-400 truncate max-w-full" title={c.source.title}>
+                  {c.source.title}
+                </span>
+              ))}
           </div>
         )}
         <div>{c.contextSentence}</div>
@@ -258,7 +280,7 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
           );
         })()}
       </div>
-      {parsedUrl && (
+      {hasPlayer && (
         <div className="space-y-2">
           {allInstances.length > 1 && (
             <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5">
@@ -283,11 +305,20 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
               </button>
             </div>
           )}
-          <YouTubeEmbed
-            key={`${instance?.id ?? 'none'}:${seekNonce}`}
-            videoId={parsedUrl.videoId}
-            startSec={embedStart}
-          />
+          {libId ? (
+            <PhrasePlayer
+              key={`${instance?.id ?? 'none'}:${seekNonce}`}
+              videoId={libId}
+              youtubeId={ytId}
+              seekTo={embedStart}
+            />
+          ) : (
+            <YouTubeEmbed
+              key={`${instance?.id ?? 'none'}:${seekNonce}`}
+              videoId={(parsedUrl?.videoId ?? ytId)!}
+              startSec={embedStart}
+            />
+          )}
           {instance && (() => {
             const sec = instanceStartSec(instance);
             if (sec === null) return null;

@@ -30,10 +30,22 @@ export type ActivateResponse =
   | { status: 'invalid_key' }
   | { status: 'bad_request'; detail: string };
 
-/** Two-state machine: NEEDS_KEY → ACTIVE. No revocation in v1.
- *  TRIAL_ACTIVE is the new third mode — app fully usable but a banner
- *  shows the countdown, and at expiry the mode flips to NEEDS_KEY. */
-export type LicenseMode = 'NEEDS_KEY' | 'TRIAL_ACTIVE' | 'ACTIVE';
+/** Gate states (priority high → low):
+ *   - ACTIVE      永久授权 license 已激活(license.json 在盘)
+ *   - SUB_ACTIVE  纯订阅用户(无 license,但 /api/auth/me 报
+ *                 hasActiveSubscription=true 来自 iOS 订阅 / 支付宝
+ *                 时段会员 / 网站 ¥22 月订阅)。功能上等同 ACTIVE,
+ *                 但 LicenseGate 在角落显示「订阅中」徽标。
+ *                 2026-06-04 added —— spec §1.2 隐含的假设是「桌面入口
+ *                 = 买断 OR 试用」,但 LLM 中转上线后 Pro 订阅必须
+ *                 解锁完整三端访问。
+ *   - TRIAL_ACTIVE 24h 试用期内,banner 倒计时,到期 → NEEDS_KEY
+ *   - NEEDS_KEY    付费墙(可输入授权码 / 启动试用 / 邮箱登录解锁订阅) */
+export type LicenseMode =
+  | 'NEEDS_KEY'
+  | 'TRIAL_ACTIVE'
+  | 'SUB_ACTIVE'
+  | 'ACTIVE';
 
 /** Stored locally as `<app-data>/trial.json` after the first /trial/start.
  *  Subsequent launches read this directly without hitting the server, so

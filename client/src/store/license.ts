@@ -123,7 +123,35 @@ export const useLicense = create<LicenseStore>((set, get) => ({
         return;
       }
 
-      // No license → fall through to trial flow. Read local trial.json:
+      // No license — try subscription before falling into trial. A pure
+      // subscriber (Alipay 时段会员, iOS 自动续费, 网站 ¥22/月) gets
+      // SUB_ACTIVE which is functionally equivalent to ACTIVE; the gate
+      // shows a small "订阅中" pill instead of the trial countdown.
+      //
+      // 2026-06-04: this branch closes a spec §1.2 gap — before it,
+      // pure subscribers were stuck on NEEDS_KEY (only license + trial
+      // unlocked the desktop). auth_me is short-circuited Rust-side
+      // when no session_token exists, so this never adds a network
+      // round-trip for first-time installs.
+      try {
+        const me = await invoke<{
+          authenticated: boolean;
+          email?: string;
+          hasActiveLicense?: boolean;
+          hasActiveSubscription?: boolean;
+        }>('auth_me');
+        if (me.authenticated && me.hasActiveSubscription) {
+          set({ device, mode: 'SUB_ACTIVE' });
+          return;
+        }
+      } catch {
+        // Network error or unexpected response — fall through to trial
+        // flow. Better to lose the SUB_ACTIVE shortcut than block the
+        // user offline.
+      }
+
+      // No license, no active subscription → fall through to trial.
+      // Read local trial.json:
       //   - present + not expired   → TRIAL_ACTIVE
       //   - present + expired       → NEEDS_KEY (banner-less; standard
       //                                activation screen with extra copy)

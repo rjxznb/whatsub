@@ -36,6 +36,13 @@ struct MeResp {
     email: String,
     #[serde(rename = "hasActiveLicense")]
     has_active_license: bool,
+    /// True iff iOS auto-renew sub is active OR a web_subscriptions row's
+    /// expires_at > now. Added 2026-06-04 — used by LicenseGate to let
+    /// pure subscribers (no license) into the desktop without buying a
+    /// buyout SKU. Field is optional on the wire so older servers still
+    /// deserialize cleanly.
+    #[serde(rename = "hasActiveSubscription", default)]
+    has_active_subscription: bool,
 }
 
 #[derive(Serialize)]
@@ -50,6 +57,10 @@ pub struct StatusResult {
     pub email: Option<String>,
     #[serde(rename = "hasActiveLicense")]
     pub has_active_license: Option<bool>,
+    /// Mirrors `MeResp.has_active_subscription`. Drives the desktop
+    /// LicenseGate's SUB_ACTIVE branch (2026-06-04).
+    #[serde(rename = "hasActiveSubscription")]
+    pub has_active_subscription: Option<bool>,
 }
 
 fn map_reason(body: &serde_json::Value) -> String {
@@ -130,6 +141,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             authenticated: false,
             email: None,
             has_active_license: None,
+            has_active_subscription: None,
         });
     };
     if !auth::is_valid(&auth) {
@@ -138,6 +150,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             authenticated: false,
             email: None,
             has_active_license: None,
+            has_active_subscription: None,
         });
     }
     let client = Client::new();
@@ -156,6 +169,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             authenticated: true,
             email: Some(m.email),
             has_active_license: Some(m.has_active_license),
+            has_active_subscription: Some(m.has_active_subscription),
         })
     } else {
         // Token rejected — drop it locally too

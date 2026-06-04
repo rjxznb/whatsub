@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft, Mail, ChevronDown } from 'lucide-react';
 import { useLicense, type ActivateError } from '../store/license';
 import { TrialBanner } from './TrialBanner';
 
@@ -48,10 +49,10 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     return <ActivationScreen />;
   }
 
-  // mode === 'ACTIVE' or 'TRIAL_ACTIVE' — children render in both cases.
-  // Celebration only fires on the NEEDS_KEY → ACTIVE transition (real
-  // license activation), not on trial start; the trial banner already
-  // signals "you got access" implicitly.
+  // mode === 'ACTIVE' / 'SUB_ACTIVE' / 'TRIAL_ACTIVE' — children render
+  // in all three cases. Celebration only fires on the
+  // NEEDS_KEY → ACTIVE transition (real license activation), not on
+  // trial start; the trial banner already signals "you got access".
   if (celebrating) {
     return <CelebrationOverlay onDone={() => setCelebrating(false)} />;
   }
@@ -65,7 +66,36 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     );
   }
 
+  if (mode === 'SUB_ACTIVE') {
+    return (
+      <>
+        <SubBadge />
+        {children}
+      </>
+    );
+  }
+
   return <>{children}</>;
+}
+
+/** Tiny top-right "订阅中" pill. 2026-06-04 — adds a glanceable cue for
+ *  SUB_ACTIVE users (no license file on disk, but Pro subscription
+ *  active server-side) so they know which auth path is unlocking them
+ *  without having to dig into Settings. */
+function SubBadge() {
+  return (
+    <div
+      className="fixed top-2 right-3 z-40 px-2 py-1 rounded-full text-[10px] font-semibold tracking-[0.05em]"
+      style={{
+        background: 'linear-gradient(135deg, #3b9bff22 0%, #fcd34d22 100%)',
+        border: '1px solid #3b9bff55',
+        color: '#fcd34d',
+        pointerEvents: 'none',
+      }}
+    >
+      ★ Pro 订阅中
+    </div>
+  );
 }
 
 /**
@@ -367,9 +397,218 @@ function ActivationScreen() {
           <br />
           换电脑想转移？私信客服免费帮你挪一下设备槽位～
         </p>
+
+        <SubLoginSection />
       </div>
     </div>
   );
+}
+
+/** 2026-06-04: collapsed "我已订阅 → 邮箱登录解锁" affordance below the
+ *  buyout activation form. Lets pure subscribers (no buyout license)
+ *  unlock the desktop via the same OTP login flow that previously was
+ *  only wired for license-from-email. Successful verify triggers a
+ *  full re-init of the license store → init() walks the SUB_ACTIVE
+ *  branch via auth_me → gate dissolves. */
+function SubLoginSection() {
+  const { init } = useLicense();
+  const [open, setOpen] = useState(false);
+  // 3 phases: 'email' → fill email + send code · 'code' → enter 6-digit
+  // code · 'verifying' → POSTing /verify-code. Errors surface inline,
+  // never as toast / alert (the user is still inside the gate).
+  const [phase, setPhase] = useState<'email' | 'code' | 'verifying'>('email');
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
+  async function sendCode(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const trimmed = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setError('邮箱格式不对');
+      return;
+    }
+    setSending(true);
+    try {
+      const res = await invoke<{ ok: boolean; reason?: string }>(
+        'auth_send_code',
+        { email: trimmed },
+      );
+      if (!res.ok) {
+        setError(reasonToChinese(res.reason));
+      } else {
+        setPhase('code');
+      }
+    } catch (e) {
+      setError('发送失败：' + String(e));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function verify(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!/^\d{6}$/.test(code.trim())) {
+      setError('验证码应为 6 位数字');
+      return;
+    }
+    setPhase('verifying');
+    try {
+      const res = await invoke<{ ok: boolean; reason?: string }>(
+        'auth_verify_code',
+        { email: email.trim(), code: code.trim() },
+      );
+      if (!res.ok) {
+        setError(reasonToChinese(res.reason));
+        setPhase('code');
+        return;
+      }
+      // Session persisted by Rust; re-run init() so the store re-checks
+      // auth_me, sees hasActiveSubscription=true, flips mode to
+      // SUB_ACTIVE → the gate dissolves and the app mounts.
+      await init();
+    } catch (e) {
+      setError('登录失败：' + String(e));
+      setPhase('code');
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-5 w-full flex items-center justify-center gap-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+      >
+        <Mail className="w-3 h-3" />
+        我已订阅 Pro · 用邮箱登录解锁
+        <ChevronDown className="w-3 h-3" />
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-5 px-4 py-4 bg-zinc-900/50 border border-zinc-800 rounded-lg">
+      <div className="flex items-baseline justify-between mb-3">
+        <span className="text-xs font-medium text-zinc-300">订阅用户登录</span>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            setPhase('email');
+            setEmail('');
+            setCode('');
+            setError(null);
+          }}
+          className="text-[10px] text-zinc-500 hover:text-zinc-300"
+        >
+          收起
+        </button>
+      </div>
+
+      {phase === 'email' && (
+        <form onSubmit={sendCode} className="space-y-2">
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (error) setError(null);
+            }}
+            placeholder="订阅时使用的邮箱"
+            autoComplete="email"
+            disabled={sending}
+            className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={sending || !email.trim()}
+            className="w-full bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 font-medium px-4 py-2 rounded text-sm flex items-center justify-center gap-2"
+          >
+            {sending ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                正在发送验证码…
+              </>
+            ) : (
+              '获取邮箱验证码'
+            )}
+          </button>
+        </form>
+      )}
+
+      {(phase === 'code' || phase === 'verifying') && (
+        <form onSubmit={verify} className="space-y-2">
+          <div className="text-[11px] text-zinc-500 leading-relaxed">
+            已发送到 <span className="text-zinc-300 font-mono">{email}</span>，请填入收到的 6 位验证码。
+          </div>
+          <input
+            type="text"
+            value={code}
+            onChange={(e) => {
+              const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+              setCode(v);
+              if (error) setError(null);
+            }}
+            placeholder="000000"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            disabled={phase === 'verifying'}
+            className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-base text-center font-mono tracking-[0.4em] focus:outline-none focus:border-blue-500 disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={phase === 'verifying' || code.length !== 6}
+            className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:hover:bg-blue-500 text-black font-medium px-4 py-2 rounded text-sm flex items-center justify-center gap-2"
+          >
+            {phase === 'verifying' ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                正在验证…
+              </>
+            ) : (
+              '登录解锁'
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPhase('email');
+              setCode('');
+              setError(null);
+            }}
+            className="w-full text-[11px] text-zinc-500 hover:text-zinc-300"
+          >
+            改用其他邮箱
+          </button>
+        </form>
+      )}
+
+      {error && (
+        <p className="mt-2 text-[11px] text-rose-300">{error}</p>
+      )}
+
+      <p className="mt-3 text-[10px] text-zinc-600 leading-relaxed">
+        如果你订阅了 whatSub Pro（月度 ¥22 / 年度 ¥168），用同一个邮箱在这里登录即可解锁桌面端，无需买断授权码。
+      </p>
+    </div>
+  );
+}
+
+/** Map backend error reasons (auth_send_code / auth_verify_code) to
+ *  Chinese copy. Unknown reasons fall back to the raw string. */
+function reasonToChinese(reason?: string): string {
+  switch (reason) {
+    case 'invalid_email': return '邮箱格式不对';
+    case 'no_code': return '请先获取验证码';
+    case 'wrong_code': return '验证码错误';
+    case 'too_many_attempts': return '尝试次数过多，请重新获取验证码';
+    case 'rate_limited': return '请求过快，请稍后再试';
+    default: return reason ? `登录失败 (${reason})` : '登录失败';
+  }
 }
 
 function ErrorDisplay({ error }: { error: ActivateError }) {

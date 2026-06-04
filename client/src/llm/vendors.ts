@@ -28,9 +28,10 @@ export const VENDORS: VendorPreset[] = [
     protocol: "openai-compatible",
     baseUrl: "https://whatsub.eversay.cc/api/llm/v1",
     // Server forces deepseek-v4-flash regardless of what we send; the
-    // model field is shown read-only in Settings for clarity.
+    // model field is shown read-only in Settings for clarity. No `note`:
+    // for this vendor Settings renders ManagedRelayQuotaPanel (used/limit
+    // only) instead — we deliberately don't surface the internal cost cap.
     models: ["deepseek-v4-flash"],
-    note: "Pro / 试用免配置 — 用 whatSub 后端代付 DeepSeek，月度额度封顶 ¥7.4 内 🛜",
   },
   {
     id: "deepseek",

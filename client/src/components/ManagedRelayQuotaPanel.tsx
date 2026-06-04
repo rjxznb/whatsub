@@ -55,8 +55,7 @@ export function ManagedRelayQuotaPanel() {
   return (
     <div className="space-y-2 mt-1">
       <div className="text-[11px] text-zinc-400 italic bg-zinc-900/40 border-l-2 border-blue-700 px-3 py-1.5 rounded-r leading-relaxed">
-        whatSub 后端代付 DeepSeek，Pro / 试用 / 免费用户都能直接用，不用自己填 key。
-        服务端强制 deepseek-v4-flash + 月度 / 终身额度封顶。
+        whatSub 托管模式，开箱即用，无需自己填 API key。
       </div>
 
       {loading && !quota && (

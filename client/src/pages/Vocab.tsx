@@ -13,7 +13,7 @@ import { PhrasePlayer } from "../components/PhrasePlayer";
 import { parseYouTubeUrl } from "../components/YouTubeEmbed";
 import { formatTime } from "../utils/time";
 import { lookupPhonetic } from "../llm/phonetic";
-import { useSpeech } from "../hooks/useSpeech";
+import { ttsSpeak } from "../tutor/tts";
 import type { VocabEntry } from "../types/vocab";
 
 type SortMode = "byVideo" | "recent" | "oldest" | "alpha";
@@ -123,7 +123,11 @@ export function Vocab() {
       setBatchingId(null);
     }
   };
-  const { speak } = useSpeech();
+  // Read phrases with the Edge neural voice (same as the tutor) — better than
+  // the OS TTS. Falls back to Web Speech inside ttsSpeak if edge is unreachable.
+  const speak = (text: string) => {
+    void ttsSpeak(text, { lang: "en-US" });
+  };
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortMode>(() => {
     const saved =

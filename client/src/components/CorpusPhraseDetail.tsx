@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Play, ChevronLeft, ChevronRight, Volume2 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useCorpusPhrase } from '../hooks/useCorpusPhrase';
-import { useSpeech } from '../hooks/useSpeech';
+import { ttsSpeak } from '../tutor/tts';
 import { lookupPhonetic } from '../llm/phonetic';
 import { YouTubeEmbed, parseYouTubeUrl } from './YouTubeEmbed';
 import { PhrasePlayer } from './PhrasePlayer';
@@ -104,7 +104,11 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
   // timestamp re-seeks the player to the start second instead of being
   // a no-op when you're already on that instance.
   const [seekNonce, setSeekNonce] = useState(0);
-  const { speak, voices, voiceURI, setVoiceURI } = useSpeech();
+  // Edge neural voice (same as the tutor), not the OS TTS. ttsSpeak handles
+  // its own Web-Speech fallback if edge is unreachable.
+  const speak = (text: string) => {
+    void ttsSpeak(text, { lang: 'en-US' });
+  };
   const [ipa, setIpa] = useState<string | null>(null);
 
   useEffect(() => {
@@ -245,20 +249,6 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
           >
             <Volume2 className="h-4 w-4" />
           </button>
-          {voices.length > 0 && (
-            <select
-              value={voiceURI ?? ''}
-              onChange={(e) => setVoiceURI(e.target.value)}
-              title="选择 TTS 音色"
-              className="ml-auto text-xs bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-200 max-w-[200px]"
-            >
-              {voices.map((v) => (
-                <option key={v.voiceURI} value={v.voiceURI}>
-                  {v.name} ({v.lang})
-                </option>
-              ))}
-            </select>
-          )}
         </div>
         {detail.phrase.meaningZh && (
           <p className="text-zinc-400 mt-1">{detail.phrase.meaningZh}</p>

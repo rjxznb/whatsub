@@ -45,6 +45,14 @@ export function createOpenAICompatibleProvider(
         body: JSON.stringify({
           model: cfg.model,
           stream: true,
+          // Spike instrumentation 2026-06-04: ask DeepSeek to emit a final
+          // SSE chunk with prompt/completion token counts so we can measure
+          // ¥/video before pricing the upcoming managed-LLM relay. The
+          // parser logs each usage chunk with [SPIKE] prefix; grep the
+          // devtools console for that to harvest totals. Safe in prod —
+          // include_usage is universally supported by openai-compatible
+          // providers and only adds one terminal chunk.
+          stream_options: { include_usage: true },
           messages: [
             { role: "system", content: req.systemPrompt },
             { role: "user", content: req.userPrompt },
@@ -283,6 +291,18 @@ async function* parseSSEStream(
         const obj = JSON.parse(payload);
         const delta = obj?.choices?.[0]?.delta?.content;
         if (typeof delta === "string") yield delta;
+        // Spike instrumentation 2026-06-04: log usage when DeepSeek emits
+        // the final usage chunk (response to stream_options.include_usage).
+        // Format: [SPIKE] usage prompt=N completion=N total=N model=X
+        // Grep devtools console for `[SPIKE]` to harvest. Remove after
+        // managed-LLM relay quota numbers are locked in.
+        const u = obj?.usage;
+        if (u && typeof u.prompt_tokens === "number") {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[SPIKE] usage prompt=${u.prompt_tokens} completion=${u.completion_tokens ?? 0} total=${u.total_tokens ?? (u.prompt_tokens + (u.completion_tokens ?? 0))} model=${obj?.model ?? "?"}`,
+          );
+        }
       } catch {
         // skip malformed lines
       }

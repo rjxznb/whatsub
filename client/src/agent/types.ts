@@ -32,4 +32,4 @@ export type AgentEvent =
   | { type: "tool_call_args"; callId: string; deltaJson: string }
   | { type: "tool_call_end"; callId: string }
   | { type: "stop_reason"; reason: "end_turn" | "tool_use" | "max_tokens" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; upsell?: boolean };

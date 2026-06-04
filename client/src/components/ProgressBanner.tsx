@@ -1,4 +1,8 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAnalysis } from "../store/analysis";
+
+/** whatSub Pro subscription page (same deep-link SyncButton's upsell uses). */
+const SUBSCRIBE_URL = "https://whatsub.eversay.cc/mobile#pro";
 
 const PHASE_LABELS: Record<string, string> = {
   downloading: "下载视频",
@@ -29,7 +33,8 @@ export function ProgressBanner({
   onRetranscribe,
   onMoveToBackground,
 }: Props) {
-  const { phase, progressPercent, errorMessage, subtitles } = useAnalysis();
+  const { phase, progressPercent, errorMessage, errorUpsell, subtitles } =
+    useAnalysis();
   if (phase === "idle" || phase === "complete") return null;
 
   const isError = phase === "error";
@@ -76,6 +81,14 @@ export function ProgressBanner({
           className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs transition-colors"
         >
           继续解析
+        </button>
+      )}
+      {isError && errorUpsell && (
+        <button
+          onClick={() => void openUrl(SUBSCRIBE_URL).catch(() => {})}
+          className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-zinc-900 font-medium text-xs transition-colors whitespace-nowrap"
+        >
+          升级 Pro
         </button>
       )}
       {isError && onRetranscribe && (

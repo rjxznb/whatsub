@@ -43,6 +43,9 @@ export interface AssistantMessage {
    *  quota wall). Rendered by AssistantBubble in place of the generic
    *  "连接中断" fallback. */
   errorText?: string;
+  /** True when the error is an upsell wall (quota / license) — AssistantBubble
+   *  then shows a 「升级 Pro」 CTA next to errorText. */
+  errorUpsell?: boolean;
   usage?: { promptChars: number; responseChars: number; cnyEstimate: number | null };
   vendor: string;
   model: string;

@@ -31,13 +31,16 @@ interface AnalysisState {
   subtitles: Subtitle[];
   summary: Omit<AnalysisResult, "subtitles"> | null;
   errorMessage: string | null;
+  /** True when the error is a whatSub-relay upsell wall (quota / license) —
+   *  ProgressBanner then shows a 「升级 Pro」 CTA next to the message. */
+  errorUpsell: boolean;
 
   startFor: (videoId: string) => void;
   setPhase: (phase: AnalysisPhase, percent?: number) => void;
   appendSubtitle: (s: Subtitle) => void;
   setSubtitles: (s: Subtitle[]) => void;
   setSummary: (s: Omit<AnalysisResult, "subtitles">) => void;
-  setError: (msg: string) => void;
+  setError: (msg: string, upsell?: boolean) => void;
   updateSubtitle: (idx: number, partial: Partial<Subtitle>) => void;
   deleteSubtitle: (idx: number) => void;
   insertSubtitle: (idx: number, sub: Subtitle) => void;
@@ -52,6 +55,7 @@ export const useAnalysis = create<AnalysisState>((set) => ({
   subtitles: [],
   summary: null,
   errorMessage: null,
+  errorUpsell: false,
 
   startFor: (id) =>
     set({
@@ -61,6 +65,7 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       subtitles: [],
       summary: null,
       errorMessage: null,
+      errorUpsell: false,
     }),
   setPhase: (phase, percent) =>
     set((s) => ({ phase, progressPercent: percent ?? s.progressPercent })),
@@ -76,7 +81,8 @@ export const useAnalysis = create<AnalysisState>((set) => ({
     }),
   setSubtitles: (s) => set({ subtitles: dedupSubtitles(s) }),
   setSummary: (s) => set({ summary: s }),
-  setError: (msg) => set({ phase: "error", errorMessage: msg }),
+  setError: (msg, upsell = false) =>
+    set({ phase: "error", errorMessage: msg, errorUpsell: upsell }),
   updateSubtitle: (idx, partial) =>
     set((st) => ({
       subtitles: st.subtitles.map((s, i) => (i === idx ? { ...s, ...partial } : s)),
@@ -108,5 +114,6 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       subtitles: [],
       summary: null,
       errorMessage: null,
+      errorUpsell: false,
     }),
 }));

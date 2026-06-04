@@ -246,6 +246,7 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
         // the message so AssistantBubble shows it instead of "连接中断".
         stopReason = "error";
         if (ev.message) assistantMsg.errorText = ev.message;
+        if (ev.upsell) assistantMsg.errorUpsell = true;
       }
     }
 

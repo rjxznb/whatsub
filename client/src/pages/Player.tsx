@@ -24,6 +24,7 @@ import { ProgressBanner } from "../components/ProgressBanner";
 import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
+import { RelayError } from "../llm/providers/relayErrors";
 import { dedupSubtitles } from "../store/analysis";
 import {
   runInBackground,
@@ -322,9 +323,10 @@ export function Player() {
       }
       // Prefer e.message: a relay quota wall throws a RelayError whose message
       // is already user-friendly ("额度已用完→升级 Pro"); String(e) would
-      // prefix it with "RelayError:".
+      // prefix it with "RelayError:". `upsell` drives the 升级 Pro CTA.
       const msg = e instanceof Error ? e.message : String(e);
-      analysis.setError(msg);
+      const upsell = e instanceof RelayError && e.upsell;
+      analysis.setError(msg, upsell);
       await invoke("library_set_status", {
         id: videoId,
         status: "failed",

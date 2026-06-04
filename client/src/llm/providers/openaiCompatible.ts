@@ -140,13 +140,17 @@ export function createOpenAICompatibleProvider(
       if (!resp.ok || !resp.body) {
         const text = resp.body ? await resp.text() : "no body";
         let message = `OpenAI-compatible API ${resp.status}: ${text}`;
+        let upsell = false;
         // Relay rejections carry a friendly message — surface it as-is so the
         // agent bubble shows "额度已用完→升级 Pro" rather than a status dump.
         if (isWhatsubRelay) {
           const info = parseRelayError(resp.status, text);
-          if (info) message = info.message;
+          if (info) {
+            message = info.message;
+            upsell = info.upsell;
+          }
         }
-        yield { type: "error", message };
+        yield { type: "error", message, upsell };
         return;
       }
       const reader = resp.body

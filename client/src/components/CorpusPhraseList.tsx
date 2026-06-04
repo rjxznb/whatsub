@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, List, Layers, ChevronDown } from 'lucide-react';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { corpusQuota, type Quota } from '../lib/api/quota';
 import { corpusDelete } from '../lib/api/corpus';
 import { confirmDialog, notify } from '../store/appDialog';
 import { AddCorpusPhraseDialog } from './AddCorpusPhraseDialog';
+
+interface MineSource {
+  kind?: string;
+  url?: string;
+  title?: string;
+  libraryEntryId?: string;
+  youtubeId?: string;
+}
 
 interface MineItem {
   /** corpus_contributions.id — for per-row delete. */
@@ -13,6 +21,38 @@ interface MineItem {
   phraseRaw: string;
   meaningZh: string | null;
   tags?: string[];
+  /** Where the phrase was saved from (drives the 按来源 grouping). */
+  source?: MineSource;
+}
+
+// ── 按来源 grouping (mirrors the mobile GroupedMineView) ──────────────────────
+type MineLayout = 'flat' | 'grouped';
+const LAYOUT_KEY = 'corpus.mine.layout';
+
+function hostOf(url?: string): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+}
+
+/** Stable group key: Library entry → YouTube → URL host → "manual". */
+function groupKey(s?: MineSource): string {
+  if (s?.libraryEntryId) return `lib:${s.libraryEntryId}`;
+  if (s?.youtubeId) return `yt:${s.youtubeId}`;
+  const h = hostOf(s?.url);
+  if (h) return `url:${h}`;
+  return 'manual';
+}
+
+function groupTitle(s: MineSource | undefined, key: string): string {
+  if (s?.title) return s.title;
+  if (key.startsWith('lib:')) return '库内视频';
+  if (key.startsWith('yt:')) return 'YouTube';
+  if (key.startsWith('url:')) return key.slice(4);
+  return '手动添加';
 }
 interface PublicItem extends MineItem {
   tags?: string[];
@@ -44,6 +84,22 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
   const isMine = mode === 'mine';
   const [addOpen, setAddOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [layout, setLayout] = useState<MineLayout>(() => {
+    try {
+      return (localStorage.getItem(LAYOUT_KEY) as MineLayout) ?? 'flat';
+    } catch {
+      return 'flat';
+    }
+  });
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const setMineLayout = (l: MineLayout) => {
+    setLayout(l);
+    try {
+      localStorage.setItem(LAYOUT_KEY, l);
+    } catch {
+      /* ignore */
+    }
+  };
 
   const handleDelete = async (item: MineItem) => {
     if (deletingId !== null) return;
@@ -110,17 +166,92 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
           '…'
         )}
       </span>
-      <button
-        type="button"
-        onClick={() => setAddOpen(true)}
-        disabled={quotaFull}
-        title={quotaFull ? '额度已满，无法添加' : '添加短语到个人语料库'}
-        className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 transition-colors disabled:opacity-40"
-      >
-        <Plus size={13} /> 添加
-      </button>
+      <div className="flex items-center gap-1">
+        {/* Layout: 平铺 (flat) vs 按来源分组 (grouped). */}
+        <div className="flex items-center rounded bg-zinc-800/60 p-0.5">
+          <button
+            type="button"
+            onClick={() => setMineLayout('flat')}
+            title="平铺：每条短语一行"
+            className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'flat' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+          >
+            <List size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setMineLayout('grouped')}
+            title="按来源分组"
+            className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'grouped' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+          >
+            <Layers size={12} />
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAddOpen(true)}
+          disabled={quotaFull}
+          title={quotaFull ? '额度已满，无法添加' : '添加短语到个人语料库'}
+          className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-zinc-300 hover:bg-white/5 hover:text-zinc-100 transition-colors disabled:opacity-40"
+        >
+          <Plus size={13} /> 添加
+        </button>
+      </div>
     </div>
   ) : null;
+
+  const toggleGroup = (k: string) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
+
+  function renderRow(item: MineItem | PublicItem, idx: number) {
+    // mine rows can share a phraseNormalized (duplicate uploads) → key by id.
+    const key = isMine ? `${(item as MineItem).id}-${idx}` : item.phraseNormalized;
+    return (
+      <li
+        key={key}
+        onClick={() => onSelect(item.phraseNormalized)}
+        className={`group relative px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
+          selected === item.phraseNormalized ? 'bg-zinc-800' : ''
+        }`}
+      >
+        <div className="text-sm font-medium pr-6">{item.phraseRaw}</div>
+        {item.meaningZh && (
+          <div className="text-xs text-zinc-400 truncate">{item.meaningZh}</div>
+        )}
+        {item.tags && item.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {item.tags.map((t) => (
+              <span key={t} className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200">
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+        {isMine && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void handleDelete(item as MineItem);
+            }}
+            disabled={deletingId !== null}
+            title="从个人语料库删除"
+            className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-zinc-500 opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-300 transition-colors disabled:opacity-40"
+          >
+            {deletingId === (item as MineItem).id ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Trash2 size={13} />
+            )}
+          </button>
+        )}
+      </li>
+    );
+  }
 
   function renderBody() {
     if (error && !data) {
@@ -132,56 +263,44 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     if (data.items.length === 0) {
       return <div className="p-4 text-zinc-500 text-sm">暂无</div>;
     }
-    return (
-      <ul>
-        {data.items.map((item, i) => {
-          // mine rows can share a phraseNormalized (duplicate uploads) → key by
-          // the contribution id when present.
-          const key = isMine ? `${(item as MineItem).id}-${i}` : item.phraseNormalized;
-          return (
-            <li
-              key={key}
-              onClick={() => onSelect(item.phraseNormalized)}
-              className={`group relative px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
-                selected === item.phraseNormalized ? 'bg-zinc-800' : ''
-              }`}
-            >
-              <div className="text-sm font-medium pr-6">{item.phraseRaw}</div>
-              {item.meaningZh && (
-                <div className="text-xs text-zinc-400 truncate">{item.meaningZh}</div>
-              )}
-              {item.tags && item.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {item.tags.map((t) => (
-                    <span key={t} className="px-1.5 py-0.5 text-[10px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200">
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {isMine && (
+
+    // 按来源分组（仅「我的」）：group key = libraryEntryId → youtubeId → host → manual.
+    if (isMine && layout === 'grouped') {
+      const order: string[] = [];
+      const buckets = new Map<string, MineItem[]>();
+      for (const it of data.items as MineItem[]) {
+        const k = groupKey(it.source);
+        if (!buckets.has(k)) {
+          buckets.set(k, []);
+          order.push(k);
+        }
+        buckets.get(k)!.push(it);
+      }
+      return (
+        <div>
+          {order.map((k) => {
+            const grp = buckets.get(k)!;
+            const isCollapsed = collapsed.has(k);
+            return (
+              <div key={k}>
                 <button
                   type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleDelete(item as MineItem);
-                  }}
-                  disabled={deletingId !== null}
-                  title="从个人语料库删除"
-                  className="absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full text-zinc-500 opacity-0 group-hover:opacity-100 hover:bg-red-900/30 hover:text-red-300 transition-colors disabled:opacity-40"
+                  onClick={() => toggleGroup(k)}
+                  className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-zinc-400 hover:bg-zinc-800/60 border-b border-zinc-800/60"
                 >
-                  {deletingId === (item as MineItem).id ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Trash2 size={13} />
-                  )}
+                  <ChevronDown size={12} className={isCollapsed ? '-rotate-90 transition-transform' : 'transition-transform'} />
+                  <span className="flex-1 truncate text-zinc-300">{groupTitle(grp[0].source, k)}</span>
+                  <span className="text-zinc-500">{grp.length}</span>
                 </button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    );
+                {!isCollapsed && <ul>{grp.map((it, i) => renderRow(it, i))}</ul>}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    return <ul>{data.items.map((it, i) => renderRow(it, i))}</ul>;
   }
 
   return (

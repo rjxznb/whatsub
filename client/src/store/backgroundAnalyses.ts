@@ -222,7 +222,7 @@ async function driveRetranscribeThenAnalyze(
       return {
         jobs: {
           ...state.jobs,
-          [videoId]: { ...job, phase: "error", errorMessage: String(e) },
+          [videoId]: { ...job, phase: "error", errorMessage: e instanceof Error ? e.message : String(e) },
         },
       };
     });
@@ -359,7 +359,7 @@ async function driveBgAnalysis(ac: AbortController, opts: RunInBackgroundOptions
       return {
         jobs: {
           ...state.jobs,
-          [videoId]: { ...job, phase: "error", errorMessage: String(e) },
+          [videoId]: { ...job, phase: "error", errorMessage: e instanceof Error ? e.message : String(e) },
         },
       };
     });

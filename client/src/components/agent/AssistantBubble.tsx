@@ -50,7 +50,7 @@ export function AssistantBubble({ msg, streaming }: Props) {
           );
         })}
         {msg.stopReason === "error" && (
-          <div className="text-xs text-rose-400">连接中断</div>
+          <div className="text-xs text-rose-400">{msg.errorText ?? "连接中断"}</div>
         )}
         {msg.stopReason === "cancelled" && (
           <div className="text-xs text-zinc-500">已停止</div>

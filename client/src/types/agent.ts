@@ -39,6 +39,10 @@ export interface AssistantMessage {
   ts: number;
   blocks: AssistantBlock[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "error" | "cancelled";
+  /** User-facing error copy when stopReason === "error" (e.g. a whatSub relay
+   *  quota wall). Rendered by AssistantBubble in place of the generic
+   *  "连接中断" fallback. */
+  errorText?: string;
   usage?: { promptChars: number; responseChars: number; cnyEstimate: number | null };
   vendor: string;
   model: string;

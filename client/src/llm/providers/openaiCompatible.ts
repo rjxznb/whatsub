@@ -22,6 +22,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 // (get_session_token / trial_read_state). Tauri core APIs run inside the
 // WebView so no plugin-http is needed here.
 import { invoke } from "@tauri-apps/api/core";
+import { parseRelayError, RelayError } from "./relayErrors";
 
 export function createOpenAICompatibleProvider(
   settings: Settings,
@@ -90,7 +91,14 @@ export function createOpenAICompatibleProvider(
       });
 
       if (!resp.ok) {
-        throw new Error(`OpenAI-compatible API ${resp.status}: ${await resp.text()}`);
+        const text = await resp.text();
+        // For the whatSub relay, turn the structured {error,message} body into
+        // a friendly RelayError (e.g. quota wall) instead of a raw status dump.
+        if (isWhatsubRelay) {
+          const info = parseRelayError(resp.status, text);
+          if (info) throw new RelayError(info, resp.status);
+        }
+        throw new Error(`OpenAI-compatible API ${resp.status}: ${text}`);
       }
       if (!resp.body) {
         throw new Error("response body missing");
@@ -130,12 +138,15 @@ export function createOpenAICompatibleProvider(
         signal: opts.signal,
       });
       if (!resp.ok || !resp.body) {
-        yield {
-          type: "error",
-          message: `OpenAI-compatible API ${resp.status}: ${
-            resp.body ? await resp.text() : "no body"
-          }`,
-        };
+        const text = resp.body ? await resp.text() : "no body";
+        let message = `OpenAI-compatible API ${resp.status}: ${text}`;
+        // Relay rejections carry a friendly message — surface it as-is so the
+        // agent bubble shows "额度已用完→升级 Pro" rather than a status dump.
+        if (isWhatsubRelay) {
+          const info = parseRelayError(resp.status, text);
+          if (info) message = info.message;
+        }
+        yield { type: "error", message };
         return;
       }
       const reader = resp.body

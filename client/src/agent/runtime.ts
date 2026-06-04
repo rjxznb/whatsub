@@ -241,9 +241,11 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
         else if (ev.reason === "max_tokens") stopReason = "max_tokens";
         else stopReason = "end_turn";
       } else if (ev.type === "error") {
-        // Spec §8.10 / §8.4 — adapter-level malformed response. Mark error
-        // and finalize.
+        // Spec §8.10 / §8.4 — adapter-level error (malformed response OR a
+        // whatSub relay rejection carrying friendly copy). Mark error, keep
+        // the message so AssistantBubble shows it instead of "连接中断".
         stopReason = "error";
+        if (ev.message) assistantMsg.errorText = ev.message;
       }
     }
 

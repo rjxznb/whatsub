@@ -320,11 +320,15 @@ export function Player() {
         flushPartialSave();
         return;
       }
-      analysis.setError(String(e));
+      // Prefer e.message: a relay quota wall throws a RelayError whose message
+      // is already user-friendly ("额度已用完→升级 Pro"); String(e) would
+      // prefix it with "RelayError:".
+      const msg = e instanceof Error ? e.message : String(e);
+      analysis.setError(msg);
       await invoke("library_set_status", {
         id: videoId,
         status: "failed",
-        error: String(e),
+        error: msg,
       });
       await reload();
     }

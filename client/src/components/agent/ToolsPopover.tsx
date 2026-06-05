@@ -65,13 +65,21 @@ const TOOL_INFO: Record<string, ToolInfo> = {
 };
 
 const GROUPS: Array<{ title: string; ids: string[] }> = [
+  // Curated "best + most-used" set, surfaced first so users meet the
+  // flagship features (总结 / 精讲 / 角色扮演 / 推荐复习) before the long
+  // categorized list. These ids are intentionally MOVED out of their
+  // category groups below (not duplicated) so each tool still appears once.
+  {
+    title: "⭐ 常用 · 精选",
+    ids: ["read_video_analysis", "start_lesson", "start_roleplay", "recommend_review", "youtube_search", "corpus_browse"],
+  },
   {
     title: "发现 · 只读",
-    ids: ["corpus_browse", "corpus_phrase_detail", "list_library", "read_video_analysis", "list_vocab", "youtube_search"],
+    ids: ["corpus_phrase_detail", "list_library", "list_vocab"],
   },
   {
     title: "私教 · 学习",
-    ids: ["query_learner_profile", "recommend_review", "start_lesson", "start_roleplay", "start_remediation"],
+    ids: ["query_learner_profile", "start_remediation"],
   },
   { title: "导航", ids: ["open_video", "open_page", "seek_to_time", "jump_to_cue"] },
   { title: "生词本", ids: ["vocab_add", "vocab_remove", "vocab_update_note"] },

@@ -277,26 +277,38 @@ pub async fn site_login_start(
     let mut child = spawn_browser(&browser_path, port, &profile_dir, &args.login_url)
         .map_err(|e| format!("启动浏览器失败：{e}"))?;
 
-    // Poll until CDP endpoint responds (browser fully booted), up to 30s.
-    // We also check if the child process exited prematurely each cycle —
-    // common cause:Chrome/Edge has a "single-instance per user-data-dir"
-    // lock. If a stale instance is still running with our profile dir
-    // (e.g. previous login flow that wasn't cleanly torn down), the new
-    // chrome.exe just signals the existing one to open the URL and
-    // exits immediately — CDP never comes up on the new port we picked.
+    // Poll until the CDP endpoint responds (browser fully booted), up to 30s.
+    //
+    // ⚠️ The child process exiting is NOT a failure by itself. Edge (and
+    // sometimes Chrome) uses a LAUNCHER process that forks the real browser
+    // and then exits 0 — the actual browser is a separate process that binds
+    // the debug port a moment LATER. So when `child` exits we keep polling CDP
+    // for a grace window; only if CDP still hasn't come up do we treat the
+    // exit as a genuine failure. (Earlier this bailed immediately on child
+    // exit → "exit code 0" false failures even though DevTools was listening.)
     let mut ready = false;
     let mut exit_status: Option<std::process::ExitStatus> = None;
-    for _ in 0..150 {
+    let mut child_exited_at: Option<usize> = None;
+    const GRACE_AFTER_EXIT: usize = 25; // ~5s of extra CDP polling
+    for i in 0..150 {
         tokio::time::sleep(Duration::from_millis(200)).await;
         if is_cdp_alive(port).await {
             ready = true;
             break;
         }
-        // Quick poll: did the child already exit? If so, no point
-        // waiting the full 30s — error out with the exit code.
-        if let Ok(Some(s)) = child.try_wait() {
-            exit_status = Some(s);
-            break;
+        if child_exited_at.is_none() {
+            if let Ok(Some(s)) = child.try_wait() {
+                exit_status = Some(s);
+                child_exited_at = Some(i);
+                // keep polling CDP — the real browser may still be coming up
+            }
+        } else if let Some(start) = child_exited_at {
+            // Launcher already exited and CDP STILL isn't up after the grace
+            // window → genuine failure (handoff to a stale instance, policy
+            // block, etc.). Stop waiting the full 30s.
+            if i.saturating_sub(start) >= GRACE_AFTER_EXIT {
+                break;
+            }
         }
     }
     if !ready {

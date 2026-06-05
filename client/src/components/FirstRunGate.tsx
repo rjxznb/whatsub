@@ -126,12 +126,13 @@ export function FirstRunGate({ children }: Props) {
   const { settings, load, loaded, save } = useSettings();
   const [modelOk, setModelOk] = useState<boolean | null>(null);
 
-  // Trial users have a trial token → free managed-relay LLM, so they need no
-  // BYOK key. `relayEligible` gates the zero-config "已就绪" path below.
+  // Trial users (trial token) AND pure Pro subscribers (SUB_ACTIVE — session
+  // token from a prior email login) both get free managed-relay LLM, so they
+  // need no BYOK key. `relayEligible` gates the zero-config "已就绪" path below.
   // (Licensed/买断 users are mode==='ACTIVE' and get license_blocked on the
   // relay, so they keep the BYOK onboarding.)
   const mode = useLicense((s) => s.mode);
-  const relayEligible = mode === "TRIAL_ACTIVE";
+  const relayEligible = mode === "TRIAL_ACTIVE" || mode === "SUB_ACTIVE";
   const [trialOnboarded, setTrialOnboarded] = useState(() => {
     try {
       return localStorage.getItem(TRIAL_ONBOARDED_KEY) === "1";
@@ -237,7 +238,8 @@ export function FirstRunGate({ children }: Props) {
   if (trialReady && !showByokCards) {
     return (
       <WelcomeIntro>
-        <TrialReadyPanel
+        <ManagedReadyPanel
+          isPro={mode === "SUB_ACTIVE"}
           onEnter={enterAsTrial}
           onUseOwnKey={() => setShowByokCards(true)}
         />
@@ -260,13 +262,17 @@ export function FirstRunGate({ children }: Props) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Zero-config ready screen (trial users — bundled model + free relay LLM)
+// Zero-config ready screen — bundled model + free managed-relay LLM.
+// Shown to trial users (trialToken) and pure Pro subscribers (SUB_ACTIVE
+// session token); `isPro` only swaps the AI-card subtitle copy.
 // ─────────────────────────────────────────────────────────────────
 
-function TrialReadyPanel({
+function ManagedReadyPanel({
+  isPro,
   onEnter,
   onUseOwnKey,
 }: {
+  isPro: boolean;
   onEnter: () => Promise<void>;
   onUseOwnKey: () => void;
 }) {
@@ -281,7 +287,10 @@ function TrialReadyPanel({
         </Card>
         <Card stepNum={2} title="AI 翻译" done>
           <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0" /> whatsub 托管已就绪 · 试用期免费，无需配置
+            <Check className="h-4 w-4 shrink-0" />{" "}
+            {isPro
+              ? "whatsub 托管已就绪 · Pro 订阅已解锁，无需配置"
+              : "whatsub 托管已就绪 · 试用期免费，无需配置"}
           </div>
         </Card>
       </div>

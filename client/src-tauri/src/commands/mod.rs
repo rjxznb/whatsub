@@ -9,6 +9,7 @@ pub mod youtube_auth;
 pub mod yt_dlp;
 pub mod auth;
 pub mod corpus;
+pub mod corpus_cache;
 pub mod library_sync;
 pub mod agent;
 pub mod learner_profile;

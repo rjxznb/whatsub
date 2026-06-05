@@ -63,6 +63,8 @@ pub fn run() {
             commands::license::trial_save_state,
             commands::license::license_activate_http,
             commands::license::license_trial_start_http,
+            commands::corpus_cache::corpus_cache_load,
+            commands::corpus_cache::corpus_cache_save,
             commands::yt_dlp::yt_dlp_get_status,
             commands::yt_dlp::yt_dlp_update,
             commands::youtube_auth::site_presets,

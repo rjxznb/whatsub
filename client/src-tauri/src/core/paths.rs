@@ -35,6 +35,13 @@ pub fn trial_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("trial.json"))
 }
 
+/// Corpus SWR cache (public/mine versions + cached lists), a plain JSON KV
+/// map. Lives in the unified `whatsub/` dir; `corpus_cache_load` migrates the
+/// legacy tauri-plugin-store copy from the bundle-identifier dir.
+pub fn corpus_cache_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("corpus_cache.json"))
+}
+
 /// Returns %APPDATA%/whatsub/agent_history.json — AI agent conversation
 /// history persistence (capped at 5MB; oldest conversations dropped first).
 pub fn agent_history_path() -> Result<PathBuf, String> {

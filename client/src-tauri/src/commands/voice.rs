@@ -37,11 +37,13 @@ pub async fn voice_transcribe(
 
     std::fs::write(&wav_path, &bytes)?;
 
-    let model_file = whisper::model_path(&model)?;
-    if !model_file.exists() {
-        let _ = std::fs::remove_file(&wav_path);
-        return Err(AppError::NotFound(format!("model not downloaded: {model}")));
-    }
+    let model_file = match whisper::resolve_model_path(&app, &model) {
+        Some(p) => p,
+        None => {
+            let _ = std::fs::remove_file(&wav_path);
+            return Err(AppError::NotFound(format!("model not downloaded: {model}")));
+        }
+    };
 
     let model_str = model_file.to_string_lossy().to_string();
     let wav_str = wav_path.to_string_lossy().to_string();

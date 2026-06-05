@@ -13,8 +13,10 @@ pub struct ModelDownloadState {
 }
 
 #[tauri::command]
-pub fn whisper_model_status(size: String) -> AppResult<bool> {
-    whisper::model_exists(&size)
+pub fn whisper_model_status(app: AppHandle, size: String) -> AppResult<bool> {
+    // Reports true for a user-downloaded OR app-bundled model, so first-run
+    // auto-detects the bundled ggml-base and skips the download step.
+    Ok(whisper::model_exists(&app, &size))
 }
 
 /// Bytes already on disk for an in-progress (partial) download. 0 if no

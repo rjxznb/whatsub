@@ -1,0 +1,5 @@
+Build-time drop dir for the bundled whisper model (ggml-base.bin).
+CI downloads the .bin here before `tauri build` so it ships in the installer.
+The .bin is gitignored; this file keeps the dir present AND makes the
+bundle.resources glob (models/*) match in a dev checkout that has no model
+(an empty glob is a fatal tauri-build error).

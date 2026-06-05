@@ -4,7 +4,7 @@ use crate::error::{AppError, AppResult};
 use crate::pipeline::spawn::run_sidecar;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
 
 /// String used in `AppError::Other` when a download is interrupted by the
@@ -27,12 +27,40 @@ pub fn model_info(size: &str) -> Option<(&'static str, u64)> {
         .map(|(_, url, mb)| (*url, *mb))
 }
 
+/// User-writable model path (`<models_dir>/ggml-{size}.bin`). This is where
+/// downloads land; the bundled fallback below is read-only.
 pub fn model_path(size: &str) -> AppResult<std::path::PathBuf> {
     Ok(paths::models_dir()?.join(format!("ggml-{size}.bin")))
 }
 
-pub fn model_exists(size: &str) -> AppResult<bool> {
-    Ok(model_path(size)?.exists())
+/// Path to a model shipped inside the app bundle (Tauri `bundle.resources` →
+/// `<resource_dir>/models/ggml-{size}.bin`). We bundle one small model
+/// (`ggml-base.bin`) so first-run needs no download; returns `Some` only when
+/// that resource actually exists for `size`. Read-only — never written to.
+pub fn bundled_model_path(app: &AppHandle, size: &str) -> Option<std::path::PathBuf> {
+    let p = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("models")
+        .join(format!("ggml-{size}.bin"));
+    p.exists().then_some(p)
+}
+
+/// Resolve the model file to actually use for `size`: a user-downloaded copy
+/// takes precedence (they may have fetched a better-quality tier), else the
+/// bundled copy. `None` = not available anywhere → caller must prompt download.
+pub fn resolve_model_path(app: &AppHandle, size: &str) -> Option<std::path::PathBuf> {
+    if let Ok(user) = model_path(size) {
+        if user.exists() {
+            return Some(user);
+        }
+    }
+    bundled_model_path(app, size)
+}
+
+pub fn model_exists(app: &AppHandle, size: &str) -> bool {
+    resolve_model_path(app, size).is_some()
 }
 
 /// Download (or resume) the model file for `size`.
@@ -296,12 +324,9 @@ pub async fn transcribe(
     video_id: &str,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<std::path::PathBuf> {
-    let model = model_path(model_size)?;
-    if !model.exists() {
-        return Err(AppError::NotFound(format!(
-            "model not downloaded: {model_size}"
-        )));
-    }
+    let model = resolve_model_path(app, model_size).ok_or_else(|| {
+        AppError::NotFound(format!("model not downloaded: {model_size}"))
+    })?;
 
     let audio_str = audio_path.to_string_lossy().to_string();
     let model_str = model.to_string_lossy().to_string();

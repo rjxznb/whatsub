@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Bundled whisper model — downloaded into src-tauri/models/ at build time
+# (CI) so it ships in the installer; never committed (142MB binary).
+src-tauri/models/*.bin
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

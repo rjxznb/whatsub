@@ -6,7 +6,8 @@
       "binaries/ggml-base.dll",
       "binaries/ggml-cpu.dll",
       "binaries/ggml-vulkan.dll",
-      "binaries/whisper.dll"
+      "binaries/whisper.dll",
+      "models/*"
     ]
   }
 }

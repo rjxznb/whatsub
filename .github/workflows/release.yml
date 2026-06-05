@@ -274,6 +274,28 @@ jobs:
           workspaces: client/src-tauri
           shared-key: tauri-build-windows
 
+      # Bundled whisper model — ships a small ggml-base inside the installer so
+      # first-run needs no model download (resolved via bundle.resources →
+      # resource_dir()/models/ in pipeline/whisper.rs::bundled_model_path).
+      # Gitignored (142MB binary); cached across runs.
+      - name: Cache bundled whisper model (Windows)
+        id: model-cache-win
+        uses: actions/cache@v4
+        with:
+          path: client/src-tauri/models/ggml-base.bin
+          key: whisper-model-base-v1
+
+      - name: Download bundled whisper model (Windows)
+        if: steps.model-cache-win.outputs.cache-hit != 'true'
+        run: |
+          $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+          Write-Host "Downloading bundled model $url"
+          New-Item -ItemType Directory -Force -Path client/src-tauri/models | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile client/src-tauri/models/ggml-base.bin -UseBasicParsing
+          $sz = (Get-Item client/src-tauri/models/ggml-base.bin).Length
+          Write-Host "Downloaded $([math]::Round($sz/1MB,1)) MB"
+          if ($sz -lt 100MB) { Write-Error "model too small ($sz bytes) — download failed"; exit 1 }
+
       - name: Tauri build (NSIS .exe + .sig)
         working-directory: client
         env:
@@ -513,6 +535,28 @@ jobs:
       # vite is cached, only the bundle step does meaningful new work.
       # Hard-fails after 3 attempts because downstream Apple notarization +
       # stapler steps consume the .dmg directly.
+      # Bundled whisper model — same ggml-base shipped inside the .app so
+      # first-run needs no model download. Gitignored; cached (shared key with
+      # the Windows job since it's the same file).
+      - name: Cache bundled whisper model (macOS)
+        id: model-cache-mac
+        uses: actions/cache@v4
+        with:
+          path: client/src-tauri/models/ggml-base.bin
+          key: whisper-model-base-v1
+
+      - name: Download bundled whisper model (macOS)
+        if: steps.model-cache-mac.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p client/src-tauri/models
+          url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+          echo "Downloading bundled model $url"
+          curl -fL "$url" -o client/src-tauri/models/ggml-base.bin
+          sz=$(stat -f%z client/src-tauri/models/ggml-base.bin)
+          echo "Downloaded $((sz/1024/1024)) MB"
+          if [ "$sz" -lt 100000000 ]; then echo "model too small ($sz) — download failed"; exit 1; fi
+
       - name: Tauri build (signed; 3x retry for bundle_dmg.sh flakes)
         working-directory: client
         env:

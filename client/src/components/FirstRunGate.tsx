@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -140,7 +140,6 @@ export function FirstRunGate({ children }: Props) {
       return false;
     }
   });
-  const [showByokCards, setShowByokCards] = useState(false);
 
   useEffect(() => {
     load();
@@ -198,16 +197,16 @@ export function FirstRunGate({ children }: Props) {
   // BYOK configured → straight to app (any mode).
   if (hasLlmKey && modelOk) return <>{children}</>;
 
-  // Trial users: free managed-relay LLM (no key) + bundled model = both
-  // onboarding steps already satisfied. Show a one-click "已就绪" screen the
-  // first time, then enter directly on subsequent launches.
-  const trialReady = relayEligible && modelOk;
-  if (trialReady && trialOnboarded) return <>{children}</>;
+  // Relay-eligible (trial / Pro subscriber): bundled model + free managed LLM
+  // → NOTHING to configure. Play the welcome animation once, then auto-enter
+  // (persist the managed vendor on the way in). Subsequent launches skip
+  // straight in via the trialOnboarded marker.
+  const relayReady = relayEligible && modelOk;
+  if (relayReady && trialOnboarded) return <>{children}</>;
 
-  async function enterAsTrial() {
-    // Persist the managed vendor (no key — bearer resolved from the trial
-    // token at request time) so every LLM feature routes to the relay on
-    // entry. Skip if the user already configured something else.
+  async function enterManaged() {
+    // Persist the managed vendor (no key — bearer resolved from the session /
+    // trial token at request time) so every LLM feature routes to the relay.
     if (settings.vendorId !== "whatsub-managed") {
       const v = getVendor("whatsub-managed");
       if (v) {
@@ -235,92 +234,89 @@ export function FirstRunGate({ children }: Props) {
     setTrialOnboarded(true);
   }
 
-  if (trialReady && !showByokCards) {
+  if (relayReady) {
     return (
       <WelcomeIntro>
-        <ManagedReadyPanel
-          isPro={mode === "SUB_ACTIVE"}
-          onEnter={enterAsTrial}
-          onUseOwnKey={() => setShowByokCards(true)}
-        />
+        <AutoEnterWelcome isPro={mode === "SUB_ACTIVE"} onEnter={enterManaged} />
       </WelcomeIntro>
     );
   }
 
-  // Fall-through: a licensed (买断) user who needs BYOK, a trial user who
-  // chose "use my own key", or (dev builds) no bundled model. The original
-  // two-card flow. Cards pre-mount at opacity 0 so their state warms during
-  // the intro; items-start lets the model card collapse during download.
+  // Otherwise: a 买断/license user who needs BYOK, or (dev builds) no bundled
+  // model. Show ONLY the step(s) that actually need the user — the model is
+  // bundled in release, so a buyout user usually sees just the API-key card.
+  const cards: ReactNode[] = [];
+  if (!modelOk) {
+    cards.push(
+      <ModelDownloadCard
+        key="model"
+        stepNum={cards.length + 1}
+        done={modelOk}
+        onModelReady={() => setModelOk(true)}
+      />,
+    );
+  }
+  if (!hasLlmKey) {
+    cards.push(
+      <TranslationServiceCard
+        key="llm"
+        stepNum={cards.length + 1}
+        settings={settings}
+        save={save}
+        done={hasLlmKey}
+      />,
+    );
+  }
   return (
     <WelcomeIntro>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
-        <ModelDownloadCard done={modelOk} onModelReady={() => setModelOk(true)} />
-        <TranslationServiceCard settings={settings} save={save} done={hasLlmKey} />
+      <div
+        className={
+          cards.length > 1
+            ? "grid grid-cols-1 md:grid-cols-2 gap-5 items-start"
+            : "max-w-md mx-auto"
+        }
+      >
+        {cards}
       </div>
     </WelcomeIntro>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Zero-config ready screen — bundled model + free managed-relay LLM.
-// Shown to trial users (trialToken) and pure Pro subscribers (SUB_ACTIVE
-// session token); `isPro` only swaps the AI-card subtitle copy.
+// Auto-enter welcome (trial / Pro — zero config). Shown inside WelcomeIntro;
+// after the brand animation settles it auto-enters the app (no click). A short
+// "已就绪" line gives the moment some meaning. `isPro` swaps trial vs Pro copy.
 // ─────────────────────────────────────────────────────────────────
 
-function ManagedReadyPanel({
+function AutoEnterWelcome({
   isPro,
   onEnter,
-  onUseOwnKey,
 }: {
   isPro: boolean;
-  onEnter: () => Promise<void>;
-  onUseOwnKey: () => void;
+  onEnter: () => Promise<void> | void;
 }) {
-  const [busy, setBusy] = useState(false);
+  const onEnterRef = useRef(onEnter);
+  onEnterRef.current = onEnter;
+  // One-shot timer from mount. Children mount at frame 0 (opacity 0) under the
+  // ~9.8s WelcomeIntro animation; fire shortly after it settles so the line is
+  // visible for a beat, then auto-enter.
+  useEffect(() => {
+    const t = setTimeout(() => void onEnterRef.current(), 10_500);
+    return () => clearTimeout(t);
+  }, []);
   return (
-    <div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
-        <Card stepNum={1} title="字幕识别引擎" done>
-          <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0" /> 已内置识别模型，开箱即用
-          </div>
-        </Card>
-        <Card stepNum={2} title="AI 翻译" done>
-          <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0" />{" "}
-            {isPro
-              ? "whatsub 托管已就绪 · Pro 订阅已解锁，无需配置"
-              : "whatsub 托管已就绪 · 试用期免费，无需配置"}
-          </div>
-        </Card>
+    <div className="text-center">
+      <div className="inline-flex items-center gap-2 text-sm text-zinc-200">
+        <Check className="h-4 w-4 text-green-400 shrink-0" />
+        {isPro ? "Pro 已就绪 · 开箱即用" : "试用已开始 · 免费 AI 已就绪"}
       </div>
-      <div className="mt-6 flex flex-col items-center gap-3">
-        <button
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await onEnter();
-            } finally {
-              setBusy(false);
-            }
-          }}
-          disabled={busy}
-          className="px-8 py-3 bg-blue-500 hover:bg-blue-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-medium rounded text-base inline-flex items-center justify-center gap-2"
-        >
-          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-          开始使用 →
-        </button>
-        <button
-          type="button"
-          onClick={onUseOwnKey}
-          className="text-xs text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline"
-        >
-          想用自己的 API key？点这里配置
-        </button>
+      <div className="mt-3 text-xs text-zinc-500 inline-flex items-center gap-1.5">
+        <Loader2 className="h-3 w-3 animate-spin" /> 正在进入…
       </div>
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────────────────────────
 // Card 1: Translation service
@@ -330,10 +326,12 @@ function TranslationServiceCard({
   settings,
   save,
   done,
+  stepNum = 2,
 }: {
   settings: Settings;
   save: (s: Settings) => Promise<void>;
   done: boolean;
+  stepNum?: number;
 }) {
   // Default to deepseek for users who haven't picked a vendor yet (new install
   // or settings.json missing vendorId), but respect any explicit choice carried
@@ -420,7 +418,7 @@ function TranslationServiceCard({
   }
 
   return (
-    <Card stepNum={2} title="选择翻译服务" done={done}>
+    <Card stepNum={stepNum} title="选择翻译服务" done={done}>
       <p className="text-sm text-zinc-400 mb-4 leading-relaxed">
         请选择一个为你工作的人工智能吧 🪄
       </p>
@@ -517,7 +515,15 @@ function TranslationServiceCard({
 
 type DlPhase = "idle" | "downloading" | "paused";
 
-function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady: () => void }) {
+function ModelDownloadCard({
+  done,
+  onModelReady,
+  stepNum = 1,
+}: {
+  done: boolean;
+  onModelReady: () => void;
+  stepNum?: number;
+}) {
   const { settings, save } = useSettings();
   const [selectedSize, setSelectedSize] = useState<WhisperModelSize>(settings.whisperModel);
   // Per-tier "downloaded" + "partial download %" maps. Refreshed on mount,
@@ -634,7 +640,7 @@ function ModelDownloadCard({ done, onModelReady }: { done: boolean; onModelReady
 
   return (
     <Card
-      stepNum={1}
+      stepNum={stepNum}
       title="下载字幕识别引擎"
       done={done}
       compact={collapsed}

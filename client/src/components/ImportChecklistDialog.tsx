@@ -105,6 +105,11 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
   const [selectedKey, setSelectedKey] = useState<string>('youtube');
   const [customUrl, setCustomUrl] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Installed browsers (lowercase ids) + the user's pick ("" = auto-detect).
+  // Lets the user choose Chrome — Edge can hand off to a startup-boost
+  // background process and exit 0 before CDP comes up.
+  const [browsers, setBrowsers] = useState<string[]>([]);
+  const [selectedBrowser, setSelectedBrowser] = useState<string>('');
 
   // Login-in-flight state. `pendingLogin` non-null swaps the layout to
   // the "等待保存" panel. `starting` covers the brief window between
@@ -141,6 +146,9 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
           if (p) setPendingLogin({ key: p.siteKey, label: p.label });
         })
         .catch(() => {}),
+      invoke<string[]>('site_login_browsers')
+        .then((b) => setBrowsers(b))
+        .catch(() => {}),
     ]);
   }, []);
 
@@ -173,7 +181,9 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
     setLoginError(null);
     setStarting(true);
     try {
-      await invoke('site_login_start', { args });
+      await invoke('site_login_start', {
+        args: { ...args, browser: selectedBrowser || undefined },
+      });
       setPendingLogin({ key: args.key, label: args.label });
     } catch (e) {
       setLoginError(`登录窗口启动失败：${String(e)}`);
@@ -424,6 +434,21 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                     </>
                   )}
                 </div>
+                {browsers.length > 1 && (
+                  <select
+                    value={selectedBrowser}
+                    onChange={(e) => setSelectedBrowser(e.target.value)}
+                    title="用哪个浏览器登录。Edge 报「exit code 0」时可换 Chrome"
+                    className="px-2 py-1.5 bg-zinc-950 border border-zinc-700 rounded text-xs text-zinc-100 hover:border-zinc-600 shrink-0"
+                  >
+                    <option value="">自动</option>
+                    {browsers.map((b) => (
+                      <option key={b} value={b}>
+                        {b === 'edge' ? 'Edge' : b === 'chrome' ? 'Chrome' : b === 'brave' ? 'Brave' : b}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
                   type="button"
                   onClick={onClickLogin}

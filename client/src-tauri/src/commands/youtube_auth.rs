@@ -200,6 +200,12 @@ pub struct StartArgs {
     pub label: String,
     pub login_url: String,
     pub harvest_domains: Vec<String>,
+    /// Optional explicit browser: "edge" | "chrome" | "brave". When None we
+    /// auto-detect (Edge-first on Win). Lets the user pick Chrome, which —
+    /// unlike Edge — won't hand off to a startup-boost background process and
+    /// exit 0 before CDP comes up.
+    #[serde(default)]
+    pub browser: Option<String>,
 }
 
 #[tauri::command]
@@ -255,8 +261,12 @@ pub async fn site_login_start(
     }
 
     // Need to spawn a fresh browser. Pick a free port + launch.
-    let browser_path = detect_browser()
-        .ok_or_else(|| "未检测到 Edge / Chrome / Brave —— 请安装其中一个".to_string())?;
+    let browser_path = match args.browser.as_deref() {
+        Some(id) => browser_path_named(id)
+            .ok_or_else(|| format!("未找到所选浏览器（{id}）—— 请确认已安装"))?,
+        None => detect_browser()
+            .ok_or_else(|| "未检测到 Edge / Chrome / Brave —— 请安装其中一个".to_string())?,
+    };
     let profile_dir = paths::app_data_dir()?.join("sites-browser");
     std::fs::create_dir_all(&profile_dir)
         .map_err(|e| format!("create sites-browser profile dir: {e}"))?;
@@ -296,11 +306,13 @@ pub async fn site_login_start(
                 "浏览器进程在 CDP 启动前就退出了 (exit code {code})。最常见原因:\
                  \n① 已经有 Chrome/Edge 实例在用同一个登录 profile —— 请彻底退出\
                  所有 {browser_label} 窗口(系统托盘里也检查一下)后重试\
-                 \n② 企业 / 学校组策略禁用了 --remote-debugging-port 调试端口",
+                 \n② 企业 / 学校组策略禁用了 --remote-debugging-port 调试端口\
+                 \n③ 换用 Chrome(下拉里选)通常能绕过 Edge 的后台移交问题{log_tail}",
                 browser_label = browser_path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("浏览器"),
+                log_tail = read_sitelogin_log_tail(),
             )
         } else {
             format!(
@@ -612,34 +624,67 @@ pub fn site_logins_clear() -> Result<(), String> {
 
 // ─── Helpers: browser detection ──────────────────────────────────────
 
-fn detect_browser() -> Option<PathBuf> {
-    // Order: Edge (most universal on Win) → Chrome → Brave. Mac flips
-    // to Chrome first since Edge is less common there.
-    let candidates: Vec<Vec<PathBuf>> = if cfg!(target_os = "windows") {
-        vec![win_paths("Edge"), win_paths("Chrome"), win_paths("Brave")]
+/// Candidate exe paths for one browser ("Edge" | "Chrome" | "Brave") on the
+/// current OS. The first that `.exists()` is the one we launch.
+fn browser_candidates(name: &str) -> Vec<PathBuf> {
+    if cfg!(target_os = "windows") {
+        win_paths(name)
     } else if cfg!(target_os = "macos") {
-        vec![
-            vec![PathBuf::from(
+        match name {
+            "Chrome" => vec![PathBuf::from(
                 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             )],
-            vec![PathBuf::from(
+            "Edge" => vec![PathBuf::from(
                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
             )],
-            vec![PathBuf::from(
+            "Brave" => vec![PathBuf::from(
                 "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
             )],
-        ]
+            _ => vec![],
+        }
     } else {
         vec![]
-    };
-    for group in candidates {
-        for p in group {
-            if p.exists() {
-                return Some(p);
-            }
+    }
+}
+
+/// Preferred auto-detect order. Mac flips to Chrome first (Edge less common).
+fn browser_order() -> [&'static str; 3] {
+    if cfg!(target_os = "macos") {
+        ["Chrome", "Edge", "Brave"]
+    } else {
+        ["Edge", "Chrome", "Brave"]
+    }
+}
+
+fn detect_browser() -> Option<PathBuf> {
+    for name in browser_order() {
+        if let Some(p) = browser_candidates(name).into_iter().find(|p| p.exists()) {
+            return Some(p);
         }
     }
     None
+}
+
+/// Resolve a specific browser by user-facing id ("edge"/"chrome"/"brave").
+fn browser_path_named(id: &str) -> Option<PathBuf> {
+    let name = match id.to_ascii_lowercase().as_str() {
+        "edge" => "Edge",
+        "chrome" => "Chrome",
+        "brave" => "Brave",
+        _ => return None,
+    };
+    browser_candidates(name).into_iter().find(|p| p.exists())
+}
+
+/// List installed browsers (lowercase ids) so the UI can offer a picker —
+/// Chrome avoids Edge's startup-boost handoff that yields the exit-0 error.
+#[tauri::command]
+pub fn site_login_browsers() -> Vec<String> {
+    ["Edge", "Chrome", "Brave"]
+        .iter()
+        .filter(|n| browser_candidates(n).into_iter().any(|p| p.exists()))
+        .map(|n| n.to_ascii_lowercase())
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -701,8 +746,8 @@ fn spawn_browser(
     // --enable-automation because those trigger anti-bot detection
     // on Google / Instagram / X login forms (the whole reason we
     // moved off the embedded webview).
-    let child = std::process::Command::new(exe)
-        .arg(format!(
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(format!(
             "--user-data-dir={}",
             profile_dir.to_string_lossy()
         ))
@@ -773,18 +818,46 @@ msEdgeWorkspaces"
         //    another flag.
         .arg("--new-window")
         .arg(login_url)
-        // Suppress Chromium's stderr — it's full of benign internal
-        // notes (fallback_task_provider missing renderer task, USB
-        // device enumeration failures on idle slots, GPU init chatter
-        // on machines without a discrete GPU, etc.) that the user
-        // shouldn't see. The browser is a black box from our point of
-        // view; we monitor its state via CDP, not its stderr.
-        // stdin too in case a build emits prompts on startup.
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
+        // stdin null in case a build emits prompts on startup.
+        .stdin(Stdio::null());
+    // Capture the browser's stdout+stderr to a log (truncated per launch).
+    // Chromium chatter is mostly benign, but when the process exits 0 before
+    // CDP comes up, this log is the ONLY place the real reason shows (profile
+    // in use / policy blocked / bad flag) — the exit-0 branch reads its tail.
+    // Best-effort: if the file can't be opened, fall back to discarding output.
+    match std::fs::File::create(sitelogin_log_path())
+        .and_then(|f| f.try_clone().map(|g| (f, g)))
+    {
+        Ok((out, err)) => {
+            cmd.stdout(Stdio::from(out)).stderr(Stdio::from(err));
+        }
+        Err(_) => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
+    let child = cmd.spawn()?;
     Ok(child)
+}
+
+/// Diagnostic log path for the spawned browser's stdout+stderr.
+fn sitelogin_log_path() -> PathBuf {
+    std::env::temp_dir().join("whatsub-sitelogin.log")
+}
+
+/// Tail of the browser log, for surfacing the real exit-0 reason. Empty string
+/// when the log is missing/empty (so it appends cleanly to the error message).
+fn read_sitelogin_log_tail() -> String {
+    let raw = match std::fs::read_to_string(sitelogin_log_path()) {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    // Last ~800 chars — enough for the relevant Chromium error line(s).
+    let tail: String = trimmed.chars().rev().take(800).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("\n\n浏览器输出（诊断用）:\n{tail}")
 }
 
 fn pick_free_port() -> Option<u16> {

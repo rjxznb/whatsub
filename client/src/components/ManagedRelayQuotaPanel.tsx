@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { RotateCw } from "lucide-react";
 import { useLicense } from "../store/license";
 import { llmQuota, type LlmQuota } from "../lib/api/quota";
 
@@ -25,32 +26,34 @@ export function ManagedRelayQuotaPanel() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        // TRIAL_ACTIVE → bearer = trialToken (relay-issued).
-        // ACTIVE / NEEDS_KEY → bearer = session token (handled inside llmQuota).
-        const override = mode === "TRIAL_ACTIVE" ? trial?.trialToken : undefined;
-        if (mode === "TRIAL_ACTIVE" && !override) {
-          throw new Error("trial token missing — 请重启应用刷新试用");
-        }
-        const q = await llmQuota(override);
-        if (!cancelled) setQuota(q);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (!cancelled) setError(msg);
-      } finally {
-        if (!cancelled) setLoading(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // TRIAL_ACTIVE → bearer = trialToken (relay-issued).
+      // ACTIVE / SUB_ACTIVE → bearer = session token (handled inside llmQuota).
+      const override = mode === "TRIAL_ACTIVE" ? trial?.trialToken : undefined;
+      if (mode === "TRIAL_ACTIVE" && !override) {
+        throw new Error("trial token missing — 请重启应用刷新试用");
       }
+      const q = await llmQuota(override);
+      setQuota(q);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
-    void load();
-    return () => {
-      cancelled = true;
-    };
   }, [mode, trial?.trialToken]);
+
+  // Fetch on mount/bearer-change, then poll while the panel is open. Tokens are
+  // consumed elsewhere (the global AI agent floats over Settings, plus video
+  // analysis) WHILE Settings stays mounted — a one-shot fetch would sit stale at
+  // whatever it read when Settings first opened (the "usage stuck at 0" report).
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => void load(), 8000);
+    return () => clearInterval(t);
+  }, [load]);
 
   return (
     <div className="space-y-2 mt-1">
@@ -70,12 +73,22 @@ export function ManagedRelayQuotaPanel() {
 
       {quota && (
         <div className="rounded border border-zinc-800 bg-zinc-900/60 p-3 space-y-2">
-          <div className="flex items-baseline justify-between">
+          <div className="flex items-baseline justify-between gap-2">
             <span className="text-sm font-medium text-zinc-100">
               {tierLabel(quota.tier)}
             </span>
-            <span className="text-[11px] text-zinc-400 font-mono">
-              {short(quota.used)} / {short(quota.limit)} tokens
+            <span className="flex items-center gap-1.5">
+              <span className="text-[11px] text-zinc-400 font-mono">
+                {short(quota.used)} / {short(quota.limit)} tokens
+              </span>
+              <button
+                type="button"
+                onClick={() => void load()}
+                title="刷新额度"
+                className="text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                <RotateCw className={"h-3 w-3 " + (loading ? "animate-spin" : "")} />
+              </button>
             </span>
           </div>
           <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">

@@ -729,6 +729,9 @@ export function SubtitleSelectionBubble({
 }
 
 function isProviderReady(settings: Settings): boolean {
+  // whatsub-managed relay needs no api key — the bearer is resolved at request
+  // time (trial / Pro). Eligibility is enforced server-side.
+  if (settings.vendorId === "whatsub-managed") return true;
   switch (settings.llmProvider) {
     case "openai-compatible":
       return !!settings.openaiCompatible.apiKey && !!settings.openaiCompatible.baseUrl;

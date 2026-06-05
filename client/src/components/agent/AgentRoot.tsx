@@ -51,6 +51,11 @@ const LEGACY_PANEL_OPEN_KEY = "agentPanelOpen";
  *  Matches the shape used elsewhere in the app (see Settings + Library import). */
 function isLlmConfigured(settings: Settings | null | undefined): boolean {
   if (!settings) return false;
+  // whatsub-managed relay needs NO api key — the bearer (Pro session / trial
+  // token) is resolved at request time, so trial & Pro users can use the agent
+  // zero-config. Eligibility (license_blocked etc.) is enforced by the relay
+  // and surfaced as a friendly error, not gated here.
+  if (settings.vendorId === "whatsub-managed") return true;
   if (settings.llmProvider === "claude") return !!settings.claude?.apiKey;
   if (settings.llmProvider === "gemini") return !!settings.gemini?.apiKey;
   if (settings.llmProvider === "openai-compatible")

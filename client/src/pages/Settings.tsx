@@ -123,7 +123,7 @@ export function Settings() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <header className="flex items-center gap-3 px-6 py-3 border-b border-zinc-800">
+      <header className="sticky top-0 z-20 flex items-center gap-3 px-6 py-3 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur">
         <Link
           to="/"
           title="返回 Library"
@@ -132,6 +132,23 @@ export function Settings() {
           <ArrowLeft className="h-5 w-5" />
         </Link>
         <h1 className="text-lg font-semibold">设置</h1>
+        <div className="ml-auto flex items-center gap-3">
+          {saveStatus && (
+            <span
+              className={
+                "text-sm " + (saveStatus.ok ? "text-green-400" : "text-red-400")
+              }
+            >
+              {saveStatus.msg}
+            </span>
+          )}
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-blue-500 hover:bg-blue-400 text-black font-medium rounded text-sm"
+          >
+            保存设置
+          </button>
+        </div>
       </header>
 
       <div className="max-w-2xl mx-auto p-6 space-y-8">
@@ -301,24 +318,6 @@ export function Settings() {
             )}
           </div>
         </section>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleSave}
-            className="px-4 py-2 bg-blue-500 text-black font-medium rounded text-sm"
-          >
-            保存设置
-          </button>
-          {saveStatus && (
-            <span
-              className={
-                "text-sm " + (saveStatus.ok ? "text-green-400" : "text-red-400")
-              }
-            >
-              {saveStatus.msg}
-            </span>
-          )}
-        </div>
 
         <AccountSection />
 

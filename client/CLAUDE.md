@@ -108,6 +108,8 @@ Conversational agent mounted globally over every route. ReAct loop with a 24-too
 - library write: `sync_to_cloud`, `materialize_from_cloud`, `import_video`
 - library HIGH (require user confirm): `delete_video`, `unsync_from_cloud`, `retranscribe_video`
 
+**Tool-arg path safety (2026-06-05):** the LLM supplies tool args, so any tool whose arg becomes a filesystem path is an injection surface. `delete_video` → `library_delete` → `paths::video_dir(id)` → `fs::remove_dir_all` would, for an id not matching a stored entry, fall back to `library_dir().join(id)` with no normalization — an id like `../../../Users/x/Documents` escaped the library dir and got recursively deleted (the same unvalidated id also reaches `load_analysis` / `load_transcript` / `retranscribe_video`). Fixed centrally: **`paths::video_dir` rejects any id containing a path separator, `..`, or an absolute path** before joining, so every caller is covered. Keep this guard when adding any tool that routes an LLM-supplied id into a path.
+
 `ToolDef.availableOn(page: PageContext)` lets each tool gate itself — e.g. `seek_to_time` only surfaces on `/player/*`. The runtime's tool list per turn is `listTools(currentPage)`, so the LLM only ever sees the tools it can actually invoke from the current page.
 
 **Page-context injection (`agent/context.ts`):** every turn's system prompt receives a fresh `PageContext` snapshot — pathname, active video id + currentTime + currentCueIdx (from `playerState`), library count, vocab count, and (when the learner profile is hydrated with data) the top weak patterns as `水平 B1 · 薄弱点: 过去式不规则×7 · 冠词缺失×5`. So "解释一下这一段" knows which cue the user is staring at, and "我哪儿弱" gets a grounded answer without the user spelling anything out.

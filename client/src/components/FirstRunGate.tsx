@@ -176,6 +176,39 @@ export function FirstRunGate({ children }: Props) {
     })();
   }, [loaded, settings.whisperModel]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Default trial / Pro (relay-eligible) users to the whatsub-managed vendor
+  // when they have no BYOK key — once, on load. The onboarding auto-enter also
+  // sets it, but that path is skipped once trialOnboarded is set, so a settings
+  // reset could otherwise leave the vendor on the default DeepSeek. One-shot
+  // (ref) so it never snaps back if the user later picks another vendor.
+  const ensuredManagedRef = useRef(false);
+  useEffect(() => {
+    if (!loaded || ensuredManagedRef.current) return;
+    const relayEligible = mode === "TRIAL_ACTIVE" || mode === "SUB_ACTIVE";
+    if (!relayEligible) return;
+    ensuredManagedRef.current = true;
+    const hasKey =
+      settings.llmProvider === "openai-compatible"
+        ? !!settings.openaiCompatible.apiKey
+        : settings.llmProvider === "claude"
+          ? !!settings.claude.apiKey
+          : !!settings.gemini.apiKey;
+    if (hasKey || settings.vendorId === "whatsub-managed") return;
+    const v = getVendor("whatsub-managed");
+    if (v) {
+      void save({
+        ...settings,
+        vendorId: v.id,
+        llmProvider: v.protocol,
+        openaiCompatible: {
+          ...settings.openaiCompatible,
+          baseUrl: v.baseUrl,
+          model: v.models[0] ?? settings.openaiCompatible.model,
+        },
+      });
+    }
+  }, [loaded, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Brief loading state while settings + model probe resolve. invoke() is
   // sub-100ms in real Tauri, so users barely register this; the long wait
   // (~7s) is the intro animation that follows when onboarding isn't done.

@@ -439,11 +439,13 @@ export function InputBox({
   );
 
   const sendBtn = streaming ? (
+    // While replying: same outline circle as the send button (no red fill), the
+    // arrow just swaps to a stop square. Click still aborts the turn.
     <button
       type="button"
       onClick={onStop}
       aria-label="停止"
-      className="h-9 w-9 shrink-0 grid place-items-center rounded-full bg-rose-500/80 hover:bg-rose-500 text-white transition-colors"
+      className="h-9 w-9 shrink-0 grid place-items-center rounded-full border bg-transparent border-zinc-400 text-zinc-100 hover:border-white hover:text-white transition-colors"
     >
       <Square size={14} />
     </button>

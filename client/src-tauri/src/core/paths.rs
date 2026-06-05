@@ -22,6 +22,13 @@ pub fn license_path() -> Result<PathBuf, String> {
     Ok(app_data_dir()?.join("license.json"))
 }
 
+/// 30-day cloud session bearer ({sessionToken, email, expiresAt}). Lives in
+/// the same `whatsub/` dir as everything else; `auth.rs` migrates legacy
+/// copies written by tauri-plugin-store under the bundle-identifier dir.
+pub fn auth_path() -> Result<PathBuf, String> {
+    Ok(app_data_dir()?.join("auth.json"))
+}
+
 /// Local copy of the trial registration returned by `/api/trial/start`.
 /// Presence = TRIAL_ACTIVE state; absence + no license = call the server.
 pub fn trial_path() -> Result<PathBuf, String> {

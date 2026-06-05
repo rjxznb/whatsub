@@ -24,7 +24,7 @@ export interface VendorPreset {
 export const VENDORS: VendorPreset[] = [
   {
     id: "whatsub-managed",
-    name: "whatSub 托管 (DeepSeek)",
+    name: "whatSub 托管 (Pro 订阅专用)",
     protocol: "openai-compatible",
     baseUrl: "https://whatsub.eversay.cc/api/llm/v1",
     // Server forces deepseek-v4-flash regardless of what we send; the

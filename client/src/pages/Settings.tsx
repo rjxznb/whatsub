@@ -4,6 +4,7 @@ import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, Che
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { notify, confirmDialog } from "../store/appDialog";
 import { exportLearnerProfile, resetLearnerProfile } from "../tutor/learnerProfile";
 import { useSettings } from "../store/settings";
@@ -319,7 +320,7 @@ export function Settings() {
           )}
         </div>
 
-        <LicenseSection />
+        <AccountSection />
 
         <UpdateSection />
 
@@ -904,42 +905,123 @@ function formatRelativeTime(ts: number): string {
   return `登录于 ${new Date(ts).toLocaleDateString()}`;
 }
 
-function LicenseSection() {
+/** Account / entitlement card. Covers all unlocked states so the user can see
+ *  WHICH path is active + the info available for it:
+ *   - ACTIVE      买断 license  → email + 授权码 + device + activation date
+ *   - SUB_ACTIVE  Pro 订阅       → email (from auth_me) + manage / logout
+ *   - TRIAL_ACTIVE 试用          → remaining hours + upgrade hint
+ *  Replaces the old fixed top-right "★ Pro 订阅中" pill (which overlapped the
+ *  settings button). */
+function AccountSection() {
   const license = useLicense();
   const email = useAuth((s) => s.email);
+  const refresh = useAuth((s) => s.refresh);
+  const logout = useAuth((s) => s.logout);
 
-  if (license.mode !== 'ACTIVE' || !license.state) return null;
+  // Subscription users have a session token but nothing else calls refresh()
+  // for them, so pull their email/status from auth_me here. (License users get
+  // it via authFromLicense; trial users have no session.)
+  useEffect(() => {
+    if (license.mode === 'SUB_ACTIVE') void refresh();
+  }, [license.mode, refresh]);
 
-  const fpTail = license.state.fingerprint.slice(-6);
-  const activatedDate = new Date(license.state.activatedAt);
   const formatDate = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-  return (
-    <section className="border-t border-zinc-800 pt-6">
-      <h2 className="font-semibold mb-3">软件授权</h2>
-      <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
-        <Row label="授权邮箱">
-          <span className="text-zinc-300">{email ?? '—'}</span>
-        </Row>
-        <Row label="授权码">
-          <span className="font-mono text-emerald-300">{license.state.key}</span>
-        </Row>
-        <Row label="本机标识">
-          <span>{license.state.deviceLabel}</span>
-          <span className="ml-2 font-mono text-zinc-500 text-xs">…{fpTail}</span>
-        </Row>
-        <Row label="激活时间">
-          <span className="text-zinc-300">{formatDate(activatedDate)}</span>
-        </Row>
-      </div>
-      <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
-        换电脑想转移授权？请联系客服并备注本机标识尾号
-        <span className="font-mono mx-1">{fpTail}</span>
-        ，客服会在后台释放设备槽位，您即可在新设备激活。
-      </p>
-    </section>
-  );
+  // ── 买断 / license ──
+  if (license.mode === 'ACTIVE' && license.state) {
+    const fpTail = license.state.fingerprint.slice(-6);
+    const activatedDate = new Date(license.state.activatedAt);
+    return (
+      <section className="border-t border-zinc-800 pt-6">
+        <h2 className="font-semibold mb-3">软件授权</h2>
+        <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
+          <Row label="状态">
+            <span className="text-emerald-300">买断已激活</span>
+          </Row>
+          <Row label="授权邮箱">
+            <span className="text-zinc-300">{email ?? '—'}</span>
+          </Row>
+          <Row label="授权码">
+            <span className="font-mono text-emerald-300">{license.state.key}</span>
+          </Row>
+          <Row label="本机标识">
+            <span>{license.state.deviceLabel}</span>
+            <span className="ml-2 font-mono text-zinc-500 text-xs">…{fpTail}</span>
+          </Row>
+          <Row label="激活时间">
+            <span className="text-zinc-300">{formatDate(activatedDate)}</span>
+          </Row>
+        </div>
+        <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
+          换电脑想转移授权？请联系客服并备注本机标识尾号
+          <span className="font-mono mx-1">{fpTail}</span>
+          ，客服会在后台释放设备槽位，您即可在新设备激活。
+        </p>
+      </section>
+    );
+  }
+
+  // ── Pro 订阅(无买断 license)──
+  if (license.mode === 'SUB_ACTIVE') {
+    return (
+      <section className="border-t border-zinc-800 pt-6">
+        <h2 className="font-semibold mb-3">账户</h2>
+        <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
+          <Row label="状态">
+            <span className="text-amber-300">★ Pro 订阅中</span>
+          </Row>
+          <Row label="邮箱">
+            <span className="text-zinc-300">{email ?? '…'}</span>
+          </Row>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void openUrl('https://whatsub.eversay.cc/mobile#pro').catch(() => {})}
+            className="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+          >
+            管理订阅
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              await logout();
+              await license.init();
+            }}
+            className="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+          >
+            退出登录
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // ── 试用 ──
+  if (license.mode === 'TRIAL_ACTIVE') {
+    const hoursLeft = license.trial
+      ? Math.max(0, Math.ceil((license.trial.expiresAt - Date.now()) / 3_600_000))
+      : 0;
+    return (
+      <section className="border-t border-zinc-800 pt-6">
+        <h2 className="font-semibold mb-3">账户</h2>
+        <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
+          <Row label="状态">
+            <span className="text-blue-300">试用中</span>
+          </Row>
+          <Row label="剩余">
+            <span className="text-zinc-300">约 {hoursLeft} 小时</span>
+          </Row>
+        </div>
+        <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
+          试用期间 AI 走 whatsub 托管，免费免配置。已订阅 Pro？可在激活页用邮箱登录解锁；也可激活买断永久授权。
+        </p>
+      </section>
+    );
+  }
+
+  return null;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

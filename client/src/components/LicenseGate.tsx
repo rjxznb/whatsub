@@ -66,36 +66,11 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     );
   }
 
-  if (mode === 'SUB_ACTIVE') {
-    return (
-      <>
-        <SubBadge />
-        {children}
-      </>
-    );
-  }
-
+  // SUB_ACTIVE (pure Pro subscriber) renders the app just like ACTIVE. The
+  // former fixed top-right "★ Pro 订阅中" pill was removed 2026-06-05 — it
+  // overlapped the top-right settings button. Subscription status now lives
+  // in Settings → 账户 (see AccountSection) instead.
   return <>{children}</>;
-}
-
-/** Tiny top-right "订阅中" pill. 2026-06-04 — adds a glanceable cue for
- *  SUB_ACTIVE users (no license file on disk, but Pro subscription
- *  active server-side) so they know which auth path is unlocking them
- *  without having to dig into Settings. */
-function SubBadge() {
-  return (
-    <div
-      className="fixed top-2 right-3 z-40 px-2 py-1 rounded-full text-[10px] font-semibold tracking-[0.05em]"
-      style={{
-        background: 'linear-gradient(135deg, #3b9bff22 0%, #fcd34d22 100%)',
-        border: '1px solid #3b9bff55',
-        color: '#fcd34d',
-        pointerEvents: 'none',
-      }}
-    >
-      ★ Pro 订阅中
-    </div>
-  );
 }
 
 /**

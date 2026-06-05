@@ -986,6 +986,11 @@ function AccountSection() {
           <button
             type="button"
             onClick={async () => {
+              const ok = await confirmDialog(
+                '退出后需要重新用邮箱登录（或输入授权码）才能继续使用，确定退出吗？',
+                { title: '退出登录', okText: '退出', cancelText: '取消', danger: true },
+              );
+              if (!ok) return;
               await logout();
               await license.init();
             }}

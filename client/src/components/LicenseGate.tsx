@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft, Mail, ChevronDown } from 'lucide-react';
+import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft, Mail, ChevronDown, KeyRound } from 'lucide-react';
 import { useLicense, type ActivateError } from '../store/license';
 import { TrialBanner } from './TrialBanner';
 
@@ -259,6 +259,9 @@ function ActivationScreen() {
   const { activate, activating, error, clearError, trial, trialFetchError, resumeTrial } =
     useLicense();
   const [key, setKey] = useState('');
+  // Which unlock method is expanded. Both start collapsed (just a button);
+  // clicking one animates it open and collapses the other (accordion).
+  const [expanded, setExpanded] = useState<'none' | 'buyout' | 'sub'>('none');
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -289,7 +292,7 @@ function ActivationScreen() {
           继续试用
         </button>
       )}
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-2xl">
         <div className="text-center mb-8">
           {trialExpired ? (
             <p className="text-zinc-400 text-sm mb-1">24 小时试用已结束</p>
@@ -304,15 +307,11 @@ function ActivationScreen() {
             <span className="text-white">what</span>
             <span className="text-blue-400">Sub</span>
           </div>
-          {trialExpired ? (
-            <p className="text-sm text-zinc-400">
-              输入授权码即可继续使用，所有数据都还在 💝
-            </p>
-          ) : (
-            <p className="text-sm text-zinc-400">
-              贴一下你的授权码，就可以使用啦 ~
-            </p>
-          )}
+          <p className="text-sm text-zinc-400">
+            {trialExpired
+              ? '选择一种方式继续使用，数据都还在 💝'
+              : '选择一种方式解锁完整版 ~'}
+          </p>
         </div>
 
         {trialNetworkError && (
@@ -324,73 +323,139 @@ function ActivationScreen() {
               </div>
               <div className="text-amber-300/70 mt-0.5">
                 请检查网络后重启 whatsub —— 系统会自动赠送你 24 小时试用。
-                如果你已经有授权码也可以直接输入下方激活。
+                如果你已经有授权码或订阅，也可以用下方任一方式解锁。
               </div>
             </div>
           </div>
         )}
 
-        <form
-          onSubmit={onSubmit}
-          className="bg-zinc-900 rounded-lg p-5 border border-zinc-800"
-        >
-          <label className="block text-xs text-zinc-400 mb-1.5">授权码</label>
-          <input
-            type="text"
-            value={key}
-            onChange={(e) => {
-              setKey(e.target.value);
-              if (error) clearError();
-            }}
-            placeholder="WHATSUB-XXXX-XXXX-XXXX-XXXX"
-            spellCheck={false}
-            autoComplete="off"
-            disabled={activating}
-            className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono uppercase tracking-wide focus:outline-none focus:border-blue-500 disabled:opacity-50"
-          />
-
-          {error && <ErrorDisplay error={error} />}
-
-          <button
-            type="submit"
-            disabled={activating || !key.trim()}
-            className="mt-4 w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:hover:bg-blue-500 text-black font-medium px-4 py-2 rounded text-sm flex items-center justify-center gap-2"
+        {/* Two unlock methods side by side, each a collapsed button that
+            animates open on click (accordion — opening one closes the other). */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+          <CollapseCard
+            icon={KeyRound}
+            title="输入授权码"
+            subtitle="买断 · 永久有效 · 3 台设备"
+            open={expanded === 'buyout'}
+            onToggle={() => setExpanded((e) => (e === 'buyout' ? 'none' : 'buyout'))}
           >
-            {activating ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                正在验证授权码...
-              </>
-            ) : (
-              '走起 →'
-            )}
-          </button>
-        </form>
+            <form onSubmit={onSubmit} className="space-y-3">
+              <input
+                type="text"
+                value={key}
+                onChange={(e) => {
+                  setKey(e.target.value);
+                  if (error) clearError();
+                }}
+                placeholder="WHATSUB-XXXX-XXXX-XXXX-XXXX"
+                spellCheck={false}
+                autoComplete="off"
+                disabled={activating}
+                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono uppercase tracking-wide focus:outline-none focus:border-blue-500 disabled:opacity-50"
+              />
+              {error && <ErrorDisplay error={error} />}
+              <button
+                type="submit"
+                disabled={activating || !key.trim()}
+                className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:hover:bg-blue-500 text-black font-medium px-4 py-2 rounded text-sm flex items-center justify-center gap-2"
+              >
+                {activating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    正在验证授权码...
+                  </>
+                ) : (
+                  '走起 →'
+                )}
+              </button>
+              <p className="text-[11px] text-zinc-500 leading-relaxed">
+                换电脑想转移？私信客服免费帮你挪一下设备槽位～
+              </p>
+            </form>
+          </CollapseCard>
 
-        <p className="text-[11px] text-zinc-500 mt-4 leading-relaxed text-center">
-          支持 <span className="text-zinc-300 font-medium">3 台设备</span>同时陪你使用，永久有效 💝
-          <br />
-          换电脑想转移？私信客服免费帮你挪一下设备槽位～
-        </p>
-
-        <SubLoginSection />
+          <CollapseCard
+            icon={Mail}
+            title="邮箱登录"
+            subtitle="已订阅 Pro · 用邮箱解锁"
+            open={expanded === 'sub'}
+            onToggle={() => setExpanded((e) => (e === 'sub' ? 'none' : 'sub'))}
+          >
+            <SubLoginForm />
+          </CollapseCard>
+        </div>
       </div>
     </div>
   );
 }
 
-/** 2026-06-04: collapsed "我已订阅 → 邮箱登录解锁" affordance below the
- *  buyout activation form. Lets pure subscribers (no buyout license)
- *  unlock the desktop via the same OTP login flow that previously was
- *  only wired for license-from-email. Successful verify triggers a
- *  full re-init of the license store → init() walks the SUB_ACTIVE
- *  branch via auth_me → gate dissolves. */
-function SubLoginSection() {
+/** Collapsible method card: an always-visible header button (icon + title +
+ *  subtitle + chevron) and a body that expands via a grid-rows 0fr↔1fr
+ *  transition. Used by ActivationScreen for the two unlock methods. */
+function CollapseCard({
+  icon: Icon,
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+}: {
+  icon: typeof KeyRound;
+  title: string;
+  subtitle: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={
+        'rounded-lg border bg-zinc-900 transition-colors ' +
+        (open ? 'border-blue-500/50' : 'border-zinc-800')
+      }
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left"
+      >
+        <span
+          className={
+            'shrink-0 grid place-items-center w-8 h-8 rounded-full transition-colors ' +
+            (open ? 'bg-blue-500/20 text-blue-300' : 'bg-zinc-800 text-zinc-400')
+          }
+        >
+          <Icon className="w-4 h-4" />
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-medium text-zinc-100">{title}</span>
+          <span className="block text-[11px] text-zinc-500 truncate">{subtitle}</span>
+        </span>
+        <ChevronDown
+          className={'w-4 h-4 text-zinc-500 transition-transform duration-300 ' + (open ? 'rotate-180' : '')}
+        />
+      </button>
+      <div
+        className={
+          'grid transition-all duration-300 ease-in-out ' +
+          (open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')
+        }
+      >
+        <div className="overflow-hidden min-h-0">
+          <div className="px-4 pb-4 pt-1">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Email-OTP login for pure Pro subscribers (no buyout license). 3 phases:
+ *  'email' → send code · 'code' → enter 6-digit code · 'verifying' → POSTing.
+ *  On success re-inits the license store → init() walks the SUB_ACTIVE branch
+ *  via auth_me → the gate dissolves. Rendered inside a CollapseCard, which owns
+ *  the expand/collapse, so this is just the inner form. */
+function SubLoginForm() {
   const { init } = useLicense();
-  const [open, setOpen] = useState(false);
-  // 3 phases: 'email' → fill email + send code · 'code' → enter 6-digit
-  // code · 'verifying' → POSTing /verify-code. Errors surface inline,
-  // never as toast / alert (the user is still inside the gate).
   const [phase, setPhase] = useState<'email' | 'code' | 'verifying'>('email');
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
@@ -441,9 +506,6 @@ function SubLoginSection() {
         setPhase('code');
         return;
       }
-      // Session persisted by Rust; re-run init() so the store re-checks
-      // auth_me, sees hasActiveSubscription=true, flips mode to
-      // SUB_ACTIVE → the gate dissolves and the app mounts.
       await init();
     } catch (e) {
       setError('登录失败：' + String(e));
@@ -451,39 +513,8 @@ function SubLoginSection() {
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="mt-5 w-full flex items-center justify-center gap-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
-      >
-        <Mail className="w-3 h-3" />
-        我已订阅 Pro · 用邮箱登录解锁
-        <ChevronDown className="w-3 h-3" />
-      </button>
-    );
-  }
-
   return (
-    <div className="mt-5 px-4 py-4 bg-zinc-900/50 border border-zinc-800 rounded-lg">
-      <div className="flex items-baseline justify-between mb-3">
-        <span className="text-xs font-medium text-zinc-300">订阅用户登录</span>
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(false);
-            setPhase('email');
-            setEmail('');
-            setCode('');
-            setError(null);
-          }}
-          className="text-[10px] text-zinc-500 hover:text-zinc-300"
-        >
-          收起
-        </button>
-      </div>
-
+    <div className="space-y-2">
       {phase === 'email' && (
         <form onSubmit={sendCode} className="space-y-2">
           <input
@@ -501,7 +532,7 @@ function SubLoginSection() {
           <button
             type="submit"
             disabled={sending || !email.trim()}
-            className="w-full bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-100 font-medium px-4 py-2 rounded text-sm flex items-center justify-center gap-2"
+            className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:hover:bg-blue-500 text-black font-medium px-4 py-2 rounded text-sm flex items-center justify-center gap-2"
           >
             {sending ? (
               <>
@@ -562,12 +593,10 @@ function SubLoginSection() {
         </form>
       )}
 
-      {error && (
-        <p className="mt-2 text-[11px] text-rose-300">{error}</p>
-      )}
+      {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
 
-      <p className="mt-3 text-[10px] text-zinc-600 leading-relaxed">
-        如果你订阅了 whatSub Pro（月度 ¥22 / 年度 ¥168），用同一个邮箱在这里登录即可解锁桌面端，无需买断授权码。
+      <p className="mt-2 text-[10px] text-zinc-600 leading-relaxed">
+        订阅了 whatSub Pro（月度 ¥22 / 年度 ¥168）？用同一邮箱登录即可解锁，无需买断授权码。
       </p>
     </div>
   );

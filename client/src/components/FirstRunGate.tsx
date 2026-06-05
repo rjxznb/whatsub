@@ -12,10 +12,16 @@ import {
   Play,
 } from "lucide-react";
 import { useSettings } from "../store/settings";
+import { useLicense } from "../store/license";
 import { VENDORS, getVendor, type VendorPreset } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { WelcomeIntro } from "./WelcomeIntro";
+
+// localStorage marker: the trial user clicked "开始使用" on the zero-config
+// ready screen at least once. Frontend-only (a re-show after a wipe is
+// harmless), so it doesn't warrant a settings-schema field.
+const TRIAL_ONBOARDED_KEY = "whatsub.trialOnboarded";
 
 interface Props {
   children: ReactNode;
@@ -120,6 +126,21 @@ export function FirstRunGate({ children }: Props) {
   const { settings, load, loaded, save } = useSettings();
   const [modelOk, setModelOk] = useState<boolean | null>(null);
 
+  // Trial users have a trial token → free managed-relay LLM, so they need no
+  // BYOK key. `relayEligible` gates the zero-config "已就绪" path below.
+  // (Licensed/买断 users are mode==='ACTIVE' and get license_blocked on the
+  // relay, so they keep the BYOK onboarding.)
+  const mode = useLicense((s) => s.mode);
+  const relayEligible = mode === "TRIAL_ACTIVE";
+  const [trialOnboarded, setTrialOnboarded] = useState(() => {
+    try {
+      return localStorage.getItem(TRIAL_ONBOARDED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [showByokCards, setShowByokCards] = useState(false);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -173,16 +194,61 @@ export function FirstRunGate({ children }: Props) {
     return Boolean(settings.gemini.apiKey);
   })();
 
-  // Onboarding complete → straight to app. The animated welcome screen is
-  // the entirety of the "you still have setup left" UI — finishing it just
-  // means we stop rendering it.
+  // BYOK configured → straight to app (any mode).
   if (hasLlmKey && modelOk) return <>{children}</>;
 
-  // Onboarding incomplete → animated headline + the two cards in one
-  // composition. Cards are pre-mounted from frame 0 (opacity 0) so their
-  // own state initializes during the intro, not the moment they appear.
-  // items-start so the model card collapses to its own content during
-  // download instead of stretching to the translation card's height.
+  // Trial users: free managed-relay LLM (no key) + bundled model = both
+  // onboarding steps already satisfied. Show a one-click "已就绪" screen the
+  // first time, then enter directly on subsequent launches.
+  const trialReady = relayEligible && modelOk;
+  if (trialReady && trialOnboarded) return <>{children}</>;
+
+  async function enterAsTrial() {
+    // Persist the managed vendor (no key — bearer resolved from the trial
+    // token at request time) so every LLM feature routes to the relay on
+    // entry. Skip if the user already configured something else.
+    if (settings.vendorId !== "whatsub-managed") {
+      const v = getVendor("whatsub-managed");
+      if (v) {
+        try {
+          await save({
+            ...settings,
+            vendorId: v.id,
+            llmProvider: v.protocol,
+            openaiCompatible: {
+              ...settings.openaiCompatible,
+              baseUrl: v.baseUrl,
+              model: v.models[0] ?? settings.openaiCompatible.model,
+            },
+          });
+        } catch {
+          /* best-effort — user can switch vendor in Settings if this fails */
+        }
+      }
+    }
+    try {
+      localStorage.setItem(TRIAL_ONBOARDED_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setTrialOnboarded(true);
+  }
+
+  if (trialReady && !showByokCards) {
+    return (
+      <WelcomeIntro>
+        <TrialReadyPanel
+          onEnter={enterAsTrial}
+          onUseOwnKey={() => setShowByokCards(true)}
+        />
+      </WelcomeIntro>
+    );
+  }
+
+  // Fall-through: a licensed (买断) user who needs BYOK, a trial user who
+  // chose "use my own key", or (dev builds) no bundled model. The original
+  // two-card flow. Cards pre-mount at opacity 0 so their state warms during
+  // the intro; items-start lets the model card collapse during download.
   return (
     <WelcomeIntro>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
@@ -190,6 +256,60 @@ export function FirstRunGate({ children }: Props) {
         <TranslationServiceCard settings={settings} save={save} done={hasLlmKey} />
       </div>
     </WelcomeIntro>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Zero-config ready screen (trial users — bundled model + free relay LLM)
+// ─────────────────────────────────────────────────────────────────
+
+function TrialReadyPanel({
+  onEnter,
+  onUseOwnKey,
+}: {
+  onEnter: () => Promise<void>;
+  onUseOwnKey: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+        <Card stepNum={1} title="字幕识别引擎" done>
+          <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0" /> 已内置识别模型，开箱即用
+          </div>
+        </Card>
+        <Card stepNum={2} title="AI 翻译" done>
+          <div className="px-4 py-3 bg-green-500/10 border border-green-500/30 rounded text-sm text-green-300 flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0" /> whatsub 托管已就绪 · 试用期免费，无需配置
+          </div>
+        </Card>
+      </div>
+      <div className="mt-6 flex flex-col items-center gap-3">
+        <button
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await onEnter();
+            } finally {
+              setBusy(false);
+            }
+          }}
+          disabled={busy}
+          className="px-8 py-3 bg-blue-500 hover:bg-blue-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-medium rounded text-base inline-flex items-center justify-center gap-2"
+        >
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          开始使用 →
+        </button>
+        <button
+          type="button"
+          onClick={onUseOwnKey}
+          className="text-xs text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline"
+        >
+          想用自己的 API key？点这里配置
+        </button>
+      </div>
+    </div>
   );
 }
 

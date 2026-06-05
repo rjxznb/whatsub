@@ -95,12 +95,35 @@ pub fn models_dir() -> Result<PathBuf, String> {
 /// This means changing `settings.libraryDir` does NOT relocate existing videos —
 /// each entry remembers where it was put.
 pub fn video_dir(video_id: &str) -> Result<PathBuf, String> {
+    // A video id is a YouTube / Bilibili-BV / sha256 handle — `[A-Za-z0-9_-]`,
+    // never a path. Reject anything that could escape the library directory.
+    // The AI agent's tools (delete_video → library_delete → remove_dir_all,
+    // read_video_analysis → load_analysis, etc.) pass an LLM-supplied id
+    // straight in; without this guard an id like `../../../Users/x/Documents`
+    // would `join` past library_dir() and the OS would resolve the `..` at
+    // remove/read time. Validate centrally so every caller is covered.
+    if !is_safe_video_id(video_id) {
+        return Err(format!("invalid video id: {video_id:?}"));
+    }
     if let Some(stored) = read_entry_video_dir(video_id) {
         if !stored.trim().is_empty() {
             return Ok(PathBuf::from(stored));
         }
     }
     Ok(library_dir()?.join(video_id))
+}
+
+/// True only for ids that cannot traverse out of the library directory.
+/// Rejects empty / `.` / `..`, any path separator, any embedded `..`, and
+/// absolute paths (e.g. `C:\...` or `/etc/...`).
+fn is_safe_video_id(id: &str) -> bool {
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains("..")
+        && !std::path::Path::new(id).is_absolute()
 }
 
 fn read_settings_string(key: &str) -> Option<String> {
@@ -148,5 +171,25 @@ mod tests {
         let l = library_dir().unwrap();
         assert!(v.starts_with(&l));
         assert!(v.ends_with("abc123"));
+    }
+
+    #[test]
+    fn video_dir_rejects_path_traversal() {
+        for hostile in [
+            "../../../etc",
+            "..\\..\\Windows",
+            "a/b",
+            "a\\b",
+            "..",
+            "",
+            "foo/../bar",
+        ] {
+            assert!(
+                video_dir(hostile).is_err(),
+                "expected {hostile:?} to be rejected"
+            );
+        }
+        // An absolute path must not be accepted as an id either.
+        assert!(video_dir("/etc/passwd").is_err());
     }
 }

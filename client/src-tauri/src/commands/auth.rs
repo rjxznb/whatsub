@@ -178,6 +178,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             authenticated: false,
             email: None,
             has_active_license: None,
+            has_active_subscription: None,
         })
     }
 }

@@ -904,7 +904,13 @@ fn load_saved_port() -> Option<u16> {
 
 async fn is_cdp_alive(port: u16) -> bool {
     let url = format!("http://127.0.0.1:{port}/json/version");
+    // .no_proxy() is CRITICAL: reqwest honors the system / env proxy by
+    // default, so for a user on a 梯子/VPN the localhost CDP request gets sent
+    // THROUGH the proxy (which can't reach their 127.0.0.1) and fails — even
+    // though the browser's debug port is up. That produced the false
+    // "exit code 0" while the log showed "DevTools listening on ws://...".
     let client = match reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_millis(1500))
         .build()
     {
@@ -922,7 +928,9 @@ async fn is_cdp_alive(port: u16) -> bool {
 async fn cdp_open_tab(port: u16, url: &str) -> Result<(), String> {
     let endpoint = format!("http://127.0.0.1:{port}/json/new?{url}");
     // Modern Chromium requires PUT; older accepted GET. Try PUT first.
+    // .no_proxy(): never route the localhost CDP call through a 梯子/VPN proxy.
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -952,7 +960,9 @@ struct CdpCookie {
 
 async fn cdp_get_all_cookies(port: u16) -> Result<Vec<CdpCookie>, String> {
     // 1. Get the browser-level WebSocket URL.
+    // .no_proxy(): localhost CDP must not go through a 梯子/VPN proxy.
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -1049,7 +1059,9 @@ async fn cdp_get_all_cookies(port: u16) -> Result<Vec<CdpCookie>, String> {
 /// tabs. Cleaner than killing the PID (we never kept a handle in
 /// `spawn_browser`) and works the same on Win / Mac / Linux.
 async fn cdp_close_browser(port: u16) -> Result<(), String> {
+    // .no_proxy(): localhost CDP must not go through a 梯子/VPN proxy.
     let client = reqwest::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(3))
         .build()
         .map_err(|e| e.to_string())?;

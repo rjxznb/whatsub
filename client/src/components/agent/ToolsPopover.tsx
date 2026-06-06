@@ -71,7 +71,7 @@ const GROUPS: Array<{ title: string; ids: string[] }> = [
   // category groups below (not duplicated) so each tool still appears once.
   {
     title: "⭐ 常用 · 精选",
-    ids: ["read_video_analysis", "start_lesson", "start_roleplay", "recommend_review", "youtube_search", "corpus_browse"],
+    ids: ["youtube_search", "read_video_analysis", "start_lesson", "start_roleplay", "recommend_review", "corpus_browse"],
   },
   {
     title: "发现 · 只读",

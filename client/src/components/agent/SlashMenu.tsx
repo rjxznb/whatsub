@@ -91,18 +91,18 @@ export function SlashMenu({
       data-no-drag
       data-agent-popover
       role="dialog"
-      aria-label="斜杠命令"
+      aria-label="快捷指令"
       className="fixed z-[120] flex flex-col overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/98 shadow-2xl backdrop-blur-xl"
       style={{ left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: "min(60vh, 440px)" }}
     >
       {mode.kind === "list" ? (
         <>
           <div className="shrink-0 border-b border-zinc-800 px-3 py-2 text-[12px] text-zinc-400">
-            斜杠命令 · 选中后补参数回车运行
+            快捷指令 · 选中后补参数回车运行
           </div>
           <div className="min-h-0 overflow-y-auto py-1">
             {items.length === 0 && (
-              <div className="px-3 py-2 text-[12px] text-zinc-500">没有匹配的命令</div>
+              <div className="px-3 py-2 text-[12px] text-zinc-500">没有匹配的快捷指令</div>
             )}
             {items.map((c, i) => (
               <div
@@ -144,7 +144,7 @@ export function SlashMenu({
             onClick={() => setMode({ kind: "form", editing: null })}
             className="flex shrink-0 items-center gap-1.5 border-t border-zinc-800 px-3 py-2 text-[12px] text-zinc-300 hover:bg-white/5"
           >
-            <Plus size={13} /> 新建命令
+            <Plus size={13} /> 新建快捷指令
           </button>
         </>
       ) : (
@@ -179,12 +179,12 @@ function CommandForm({
 
   return (
     <div className="space-y-2 p-3">
-      <div className="text-[12px] text-zinc-400">{editing ? "编辑命令" : "新建命令"}</div>
+      <div className="text-[12px] text-zinc-400">{editing ? "编辑快捷指令" : "新建快捷指令"}</div>
       <input
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value.replace(/[\s/]/g, ""))}
-        placeholder="命令名（无空格，如 找视频）"
+        placeholder="指令名（无空格，如 找视频）"
         className="w-full rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-[13px] text-zinc-100 focus:outline-none focus:border-zinc-500"
       />
       <input

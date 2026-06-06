@@ -177,9 +177,9 @@ export function ToolsPopover({ open, anchorEl, onClose, onPick }: Props) {
           >
             <span className="mt-px text-[13px] font-mono text-blue-300">/</span>
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] text-zinc-100">斜杠命令</div>
+              <div className="text-[13px] text-zinc-100">快捷指令</div>
               <div className="text-[11px] text-zinc-500 leading-snug">
-                调用 / 管理自定义指令（可复用的提示词模板）
+                打 / 调用·管理你的常用指令（可复用的提示词模板）
               </div>
             </div>
           </button>

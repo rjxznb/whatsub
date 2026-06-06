@@ -91,14 +91,14 @@ export function SlashMenu({
       data-no-drag
       data-agent-popover
       role="dialog"
-      aria-label="快捷指令"
+      aria-label="自定义快捷指令"
       className="fixed z-[120] flex flex-col overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900/98 shadow-2xl backdrop-blur-xl"
       style={{ left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: "min(60vh, 440px)" }}
     >
       {mode.kind === "list" ? (
         <>
           <div className="shrink-0 border-b border-zinc-800 px-3 py-2 text-[12px] text-zinc-400">
-            快捷指令 · 选中后补参数回车运行
+            自定义快捷指令 · 选中后补参数回车运行
           </div>
           <div className="min-h-0 overflow-y-auto py-1">
             {items.length === 0 && (

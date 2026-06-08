@@ -5,8 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { notify, confirmDialog } from "../store/appDialog";
-import { resetLearnerProfile } from "../tutor/learnerProfile";
+import { confirmDialog } from "../store/appDialog";
 import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
 import type { Settings, WhisperModelSize } from "../types/settings";
@@ -1508,40 +1507,12 @@ function FileField({
 }
 
 function TutorSection() {
-  const [resetting, setResetting] = useState(false);
-
-  async function handleReset() {
-    const ok = await confirmDialog(
-      "确认清空学习档案？所有错误事件 + 薄弱 pattern 都会删除，无法撤销。",
-      { title: "重置学习档案", okText: "清空", danger: true },
-    );
-    if (!ok) return;
-    setResetting(true);
-    try {
-      await resetLearnerProfile();
-    } catch (e) {
-      await notify(`重置失败：${String(e)}`);
-    } finally {
-      setResetting(false);
-    }
-  }
-
   return (
     <section className="border-t border-zinc-800 pt-6">
       <h2 className="font-semibold mb-3">私教模式</h2>
-      <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">
-        （私教使用你在「翻译服务」配置的同一个 LLM）
+      <p className="text-[11px] text-zinc-500 leading-relaxed">
+        （私教使用你在「翻译服务」配置的同一个模型）
       </p>
-      <div className="flex items-center gap-3 flex-wrap">
-        <button
-          type="button"
-          onClick={handleReset}
-          disabled={resetting}
-          className="px-3 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 text-rose-200 text-sm rounded disabled:opacity-50 transition-colors"
-        >
-          {resetting ? "重置中..." : "重置学习档案"}
-        </button>
-      </div>
     </section>
   );
 }

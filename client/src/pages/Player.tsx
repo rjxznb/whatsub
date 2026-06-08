@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, FileOutput, RefreshCw, Loader2 } from "lucide-react";
 import { LessonIcon } from "../components/LessonIcon";
+import { RoleplayIcon } from "../components/RoleplayIcon";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
@@ -885,6 +886,29 @@ export function Player() {
           className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
         >
           <LessonIcon className={`h-[18px] w-[18px] ${tutorPreparing ? "animate-pulse" : ""}`} />
+        </button>
+        <button
+          type="button"
+          disabled={tutorPreparing || analysis.subtitles.length === 0}
+          onClick={() => {
+            if (!videoId) return;
+            // Direct roleplay entry — no longer gated behind finishing a 精讲.
+            // Pause the video (the picker + voice-conversation overlay covers
+            // it) and open the picker in its loading state; RoleplayPickerHost
+            // in the tutor portal derives the scenarios (the same shared path
+            // the lesson-end and report「再来一个」buttons use).
+            usePlayerState.getState().pauseHandler?.();
+            useTutorRuntime.getState().setMode({
+              kind: "roleplay-picker",
+              scenarios: [],
+              sourceVideoId: videoId,
+              loading: true,
+            });
+          }}
+          title={analysis.subtitles.length === 0 ? "字幕分析完成后可开始角色扮演" : "和这个视频角色扮演"}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zinc-400"
+        >
+          <RoleplayIcon className="h-5 w-5" />
         </button>
         <button
           type="button"

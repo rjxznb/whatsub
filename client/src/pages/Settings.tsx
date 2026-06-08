@@ -5,7 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { confirmDialog } from "../store/appDialog";
+import { notify, confirmDialog } from "../store/appDialog";
+import { resetLearnerProfile } from "../tutor/learnerProfile";
 import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
 import type { Settings, WhisperModelSize } from "../types/settings";
@@ -1507,11 +1508,45 @@ function FileField({
 }
 
 function TutorSection() {
+  const [resetting, setResetting] = useState(false);
+
+  async function handleReset() {
+    const ok = await confirmDialog(
+      "确认清空学习档案？所有错误事件、薄弱点和水平估计都会删除，无法撤销。",
+      { title: "重置学习档案", okText: "清空", danger: true },
+    );
+    if (!ok) return;
+    setResetting(true);
+    try {
+      await resetLearnerProfile();
+    } catch (e) {
+      await notify(`重置失败：${String(e)}`);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <section className="border-t border-zinc-800 pt-6">
       <h2 className="font-semibold mb-3">私教模式</h2>
-      <p className="text-[11px] text-zinc-500 leading-relaxed">
+      <p className="text-[11px] text-zinc-500 mb-3 leading-relaxed">
         （私教使用你在「翻译服务」配置的同一个模型）
+      </p>
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={handleReset}
+          disabled={resetting}
+          className="px-3 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 text-rose-200 text-sm rounded disabled:opacity-50 transition-colors"
+        >
+          {resetting ? "重置中..." : "重置学习档案"}
+        </button>
+      </div>
+      <p className="text-[11px] text-zinc-500 mt-2 leading-relaxed">
+        学习档案记录你在精讲 / 角色扮演 / 专项练习里犯过的错误（出处视频、你的原话、正确改法），
+        并据此推断你的薄弱语法点和英语水平（CEFR 等级）。私教靠它判断「你哪里弱」、推荐你回去
+        复习真正出错的片段。重置会永久清空这些数据 —— 水平估计和薄弱点都会归零，相当于让私教把
+        对你的了解全部忘掉。
       </p>
     </section>
   );

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Download,
   ExternalLink,
@@ -10,6 +11,7 @@ import {
   Loader2,
   Pause,
   Play,
+  Crown,
 } from "lucide-react";
 import { useSettings } from "../store/settings";
 import { useLicense } from "../store/license";
@@ -23,6 +25,11 @@ import { WelcomeIntro } from "./WelcomeIntro";
 // ready screen at least once. Frontend-only (a re-show after a wipe is
 // harmless), so it doesn't warrant a settings-schema field.
 const TRIAL_ONBOARDED_KEY = "whatsub.trialOnboarded";
+
+// whatSub 托管 relay needs no BYOK key — entitlement is the Pro subscription,
+// resolved server-side from the session bearer. So instead of a key input we
+// deep-link to the subscription page (same target every other Pro upsell uses).
+const SUBSCRIBE_URL = "https://whatsub.eversay.cc/mobile#pro";
 
 interface Props {
   children: ReactNode;
@@ -275,9 +282,13 @@ export function FirstRunGate({ children }: Props) {
   }
 
   if (relayReady) {
+    // isPro covers BOTH a pure subscriber (SUB_ACTIVE) AND a 买断 user who also
+    // holds a Pro sub (ACTIVE && hasSub) — only a trial user is "免费试用".
+    // relayReady already implies relayEligible, so anything that isn't a trial
+    // here is Pro.
     return (
       <WelcomeIntro>
-        <AutoEnterWelcome isPro={mode === "SUB_ACTIVE"} onEnter={enterManaged} />
+        <AutoEnterWelcome isPro={mode !== "TRIAL_ACTIVE"} onEnter={enterManaged} />
       </WelcomeIntro>
     );
   }
@@ -380,6 +391,13 @@ function TranslationServiceCard({
   // deepseek would override their preference unexpectedly.
   const [vendorId, setVendorId] = useState(settings.vendorId ?? "deepseek");
   const vendor = getVendor(vendorId) ?? VENDORS[0];
+  // whatSub 托管 is gated on a Pro subscription (entitlement resolved
+  // server-side from the session bearer), so it has no API key. When it's the
+  // selected vendor we swap the key field + verify button for a subscription
+  // CTA — a 买断-without-sub user landing here can either subscribe or pick a
+  // BYOK vendor from the dropdown above. (A user who ALREADY has Pro never sees
+  // this card; they auto-enter via the relay-ready path in FirstRunGate.)
+  const isManaged = vendor.id === "whatsub-managed";
 
   const initialKey = (() => {
     if (vendor.protocol === "openai-compatible") return settings.openaiCompatible.apiKey;
@@ -479,7 +497,28 @@ function TranslationServiceCard({
         <p className="text-xs text-zinc-500 mb-3 leading-relaxed">{vendor.note}</p>
       )}
 
-      {vendor.id !== "ollama" && (
+      {isManaged && (
+        <div className="mt-2 mb-1 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="flex items-center gap-2 text-amber-200 text-sm font-medium">
+            <Crown className="h-4 w-4 shrink-0" />
+            whatSub 托管 · Pro 订阅专用
+          </div>
+          <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
+            托管服务无需密钥 —— 订阅 whatSub Pro 后用同一账号即可直接使用内置 AI，
+            开箱即用，不用自己折腾 API key。也可以在上方下拉里换成自带密钥的大模型。
+          </p>
+          <button
+            type="button"
+            onClick={() => void openUrl(SUBSCRIBE_URL).catch(() => {})}
+            className="mt-3 w-full px-4 py-2.5 bg-amber-500 hover:bg-amber-400 text-black font-medium rounded text-base flex items-center justify-center gap-2"
+          >
+            前往订阅 Pro
+            <ExternalLink className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {!isManaged && vendor.id !== "ollama" && (
         <>
           <div className="flex items-center justify-between mb-1.5 mt-2">
             <label className="text-sm text-zinc-400">密钥</label>
@@ -527,15 +566,17 @@ function TranslationServiceCard({
         </>
       )}
 
-      <button
-        onClick={saveAndTest}
-        disabled={busy}
-        className="w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-medium rounded text-base flex items-center justify-center gap-2"
-      >
-        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-        {busy ? "正在验证..." : "保存并验证"}
-      </button>
-      {result && (
+      {!isManaged && (
+        <button
+          onClick={saveAndTest}
+          disabled={busy}
+          className="w-full px-4 py-2.5 bg-blue-500 hover:bg-blue-400 disabled:bg-zinc-700 disabled:text-zinc-500 text-black font-medium rounded text-base flex items-center justify-center gap-2"
+        >
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {busy ? "正在验证..." : "保存并验证"}
+        </button>
+      )}
+      {!isManaged && result && (
         <p
           className={
             "text-sm mt-2 leading-relaxed " +

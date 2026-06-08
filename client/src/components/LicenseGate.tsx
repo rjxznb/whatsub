@@ -37,6 +37,26 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     prevModeRef.current = mode;
   }, [mode]);
 
+  // While the activation screen is up the BrowserRouter (children) is
+  // UNMOUNTED, but window.location still holds whatever route the user was on
+  // before the gate flipped to NEEDS_KEY — e.g. /settings, if they hit "激活
+  // 完整版" from the TrialBanner while on the Settings page. React Router reads
+  // window.location on mount, so when the user unlocks (license → ACTIVE, or
+  // email OTP → SUB_ACTIVE) the router would remount on that stale /settings
+  // path and drop them on Settings instead of /library — skipping the welcome
+  // intro entirely (FirstRunGate only wraps /library). Reset the URL to root
+  // NOW, while the router is unmounted, so any unlock path remounts on
+  // /library and the welcome animation plays.
+  useEffect(() => {
+    if (mode === 'NEEDS_KEY') {
+      try {
+        window.history.replaceState(null, '', '/');
+      } catch {
+        /* ignore — non-browser env or locked-down history API */
+      }
+    }
+  }, [mode]);
+
   if (mode === 'INITIALIZING') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-zinc-950">

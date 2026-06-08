@@ -507,6 +507,9 @@ function TranslationServiceCard({
             托管服务无需密钥 —— 订阅 whatSub Pro 后用同一账号即可直接使用内置 AI，
             开箱即用，不用自己折腾 API key。也可以在上方下拉里换成自带密钥的大模型。
           </p>
+          <p className="text-xs text-amber-300 mt-2 leading-relaxed font-medium">
+            🎁 买断用户专享 8 折优惠
+          </p>
           <button
             type="button"
             onClick={() => void openUrl(SUBSCRIBE_URL).catch(() => {})}

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useSettings } from "../store/settings";
 import { useLicense } from "../store/license";
+import { useAuth } from "../store/auth";
 import { VENDORS, getVendor, type VendorPreset } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import type { Settings, WhisperModelSize } from "../types/settings";
@@ -126,13 +127,20 @@ export function FirstRunGate({ children }: Props) {
   const { settings, load, loaded, save } = useSettings();
   const [modelOk, setModelOk] = useState<boolean | null>(null);
 
-  // Trial users (trial token) AND pure Pro subscribers (SUB_ACTIVE — session
-  // token from a prior email login) both get free managed-relay LLM, so they
-  // need no BYOK key. `relayEligible` gates the zero-config "已就绪" path below.
-  // (Licensed/买断 users are mode==='ACTIVE' and get license_blocked on the
-  // relay, so they keep the BYOK onboarding.)
+  // Trial users (trial token), pure Pro subscribers (SUB_ACTIVE), AND a 买断
+  // (ACTIVE) user who ALSO holds an active subscription (same email) all get
+  // free managed-relay LLM, so they need no BYOK key. `relayEligible` gates the
+  // zero-config "已就绪" path below. A 买断 user WITHOUT a sub is license_blocked
+  // on the relay, so they keep the BYOK onboarding.
   const mode = useLicense((s) => s.mode);
-  const relayEligible = mode === "TRIAL_ACTIVE" || mode === "SUB_ACTIVE";
+  // hasActiveSubscription is populated async by LicenseSessionGate's
+  // authFromLicense → useAuth.refresh() for ACTIVE users; the effect below
+  // re-runs when it flips so a license+sub user still gets defaulted to managed.
+  const hasSub = useAuth((s) => s.hasActiveSubscription);
+  const relayEligible =
+    mode === "TRIAL_ACTIVE" ||
+    mode === "SUB_ACTIVE" ||
+    (mode === "ACTIVE" && hasSub);
   const [trialOnboarded, setTrialOnboarded] = useState(() => {
     try {
       return localStorage.getItem(TRIAL_ONBOARDED_KEY) === "1";
@@ -184,8 +192,7 @@ export function FirstRunGate({ children }: Props) {
   const ensuredManagedRef = useRef(false);
   useEffect(() => {
     if (!loaded || ensuredManagedRef.current) return;
-    const relayEligible = mode === "TRIAL_ACTIVE" || mode === "SUB_ACTIVE";
-    if (!relayEligible) return;
+    if (!relayEligible) return; // re-runs when hasSub flips for ACTIVE users
     ensuredManagedRef.current = true;
     const hasKey =
       settings.llmProvider === "openai-compatible"
@@ -207,7 +214,7 @@ export function FirstRunGate({ children }: Props) {
         },
       });
     }
-  }, [loaded, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loaded, relayEligible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Brief loading state while settings + model probe resolve. invoke() is
   // sub-100ms in real Tauri, so users barely register this; the long wait

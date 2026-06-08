@@ -913,12 +913,13 @@ function AccountSection() {
   const email = useAuth((s) => s.email);
   const refresh = useAuth((s) => s.refresh);
   const logout = useAuth((s) => s.logout);
+  const hasSub = useAuth((s) => s.hasActiveSubscription);
 
-  // Subscription users have a session token but nothing else calls refresh()
-  // for them, so pull their email/status from auth_me here. (License users get
-  // it via authFromLicense; trial users have no session.)
+  // Pull email/sub-status from auth_me. SUB_ACTIVE: nothing else refreshes for
+  // them. ACTIVE: a 买断 user may ALSO hold a sub (same email) — refresh so we
+  // can surface "Pro 订阅中" + the fact that the managed LLM is available.
   useEffect(() => {
-    if (license.mode === 'SUB_ACTIVE') void refresh();
+    if (license.mode === 'SUB_ACTIVE' || license.mode === 'ACTIVE') void refresh();
   }, [license.mode, refresh]);
 
   const formatDate = (d: Date) =>
@@ -933,7 +934,10 @@ function AccountSection() {
         <h2 className="font-semibold mb-3">软件授权</h2>
         <div className="bg-zinc-900 border border-zinc-800 rounded p-4 space-y-2 text-sm">
           <Row label="状态">
-            <span className="text-emerald-300">买断已激活</span>
+            <span className="text-emerald-300">
+              买断已激活
+              {hasSub && <span className="text-amber-300"> · ★ Pro 订阅中</span>}
+            </span>
           </Row>
           <Row label="授权邮箱">
             <span className="text-zinc-300">{email ?? '—'}</span>
@@ -949,6 +953,11 @@ function AccountSection() {
             <span className="text-zinc-300">{formatDate(activatedDate)}</span>
           </Row>
         </div>
+        {hasSub && (
+          <p className="mt-3 text-[11px] text-amber-300/80 leading-relaxed">
+            你同时拥有 Pro 订阅 —— 可在「翻译服务」选「whatSub 托管 (Pro 订阅专用)」直接用托管 LLM，享受 Pro 配额，无需自己填 key。
+          </p>
+        )}
         <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
           换电脑想转移授权？请联系客服并备注本机标识尾号
           <span className="font-mono mx-1">{fpTail}</span>

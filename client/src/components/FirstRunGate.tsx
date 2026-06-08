@@ -28,8 +28,11 @@ const TRIAL_ONBOARDED_KEY = "whatsub.trialOnboarded";
 
 // whatSub 托管 relay needs no BYOK key — entitlement is the Pro subscription,
 // resolved server-side from the session bearer. So instead of a key input we
-// deep-link to the subscription page (same target every other Pro upsell uses).
-const SUBSCRIBE_URL = "https://whatsub.eversay.cc/mobile#pro";
+// deep-link to the DESKTOP subscription card at "/#pro" (the main site's
+// ProSubscriptionCard, which supports Alipay-web checkout AND the license-
+// holder 8 折). NOT "/mobile#pro" — that page is the iOS-only card (Apple
+// compliance hides the Alipay entry there).
+const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 
 interface Props {
   children: ReactNode;

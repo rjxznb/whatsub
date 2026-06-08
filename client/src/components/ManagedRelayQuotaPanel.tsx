@@ -4,8 +4,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useLicense } from "../store/license";
 import { llmQuota, type LlmQuota } from "../lib/api/quota";
 
-/** whatSub Pro subscription page (same deep-link the upsell CTAs use). */
-const SUBSCRIBE_URL = "https://whatsub.eversay.cc/mobile#pro";
+/** Desktop Pro subscription card (main site, Alipay-web checkout + 买断 8 折).
+ *  NOT "/mobile#pro" — that's the iOS-only card (Apple-compliance, no Alipay). */
+const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 
 /**
  * Settings → 模型厂商 → "whatSub 托管 (Pro 订阅专用)" — replaces the API key
@@ -89,7 +90,7 @@ export function ManagedRelayQuotaPanel() {
       {error && licenseBlocked && (
         <div className="text-[11px] bg-zinc-900/60 border border-zinc-800 rounded px-3 py-2.5 space-y-1.5">
           <div className="text-zinc-200">
-            whatSub 托管 LLM 仅 <span className="text-amber-300 font-medium">Pro 订阅会员</span> 可用。
+            whatSub 托管模型仅 <span className="text-amber-300 font-medium">Pro 订阅会员</span> 可用。
           </div>
           <div className="text-zinc-500 leading-relaxed">
             买断版请在上方改用自己的 API key，或订阅 Pro 解锁零配置托管。

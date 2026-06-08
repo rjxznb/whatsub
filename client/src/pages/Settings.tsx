@@ -983,7 +983,7 @@ function AccountSection() {
         <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
-            onClick={() => void openUrl('https://whatsub.eversay.cc/mobile#pro').catch(() => {})}
+            onClick={() => void openUrl('https://whatsub.eversay.cc/#pro').catch(() => {})}
             className="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
           >
             管理订阅

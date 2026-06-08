@@ -1,8 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAnalysis } from "../store/analysis";
 
-/** whatSub Pro subscription page (same deep-link SyncButton's upsell uses). */
-const SUBSCRIBE_URL = "https://whatsub.eversay.cc/mobile#pro";
+/** Desktop Pro subscription card (main site, not the iOS-only /mobile page). */
+const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 
 const PHASE_LABELS: Record<string, string> = {
   downloading: "下载视频",

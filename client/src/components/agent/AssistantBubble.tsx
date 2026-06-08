@@ -4,8 +4,8 @@ import { ToolCallCard } from "./ToolCallCard";
 import { MarkdownText } from "./markdown";
 import whatsubIcon from "../../assets/whatsub-icon.png";
 
-/** whatSub Pro subscription page (same deep-link SyncButton's upsell uses). */
-const SUBSCRIBE_URL = "https://whatsub.eversay.cc/mobile#pro";
+/** Desktop Pro subscription card (main site, not the iOS-only /mobile page). */
+const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 
 interface Props {
   msg: AssistantMessage;

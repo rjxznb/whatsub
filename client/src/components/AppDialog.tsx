@@ -36,6 +36,7 @@ export function AppDialog() {
 
   return createPortal(
     <div
+      data-agent-popover
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) resolveTop(!isConfirm);

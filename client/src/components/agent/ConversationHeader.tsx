@@ -161,9 +161,13 @@ export function ConversationHeader({ onClose }: Props) {
                     <span className="flex-1 truncate">{c.title}</span>
                     <button
                       type="button"
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        useAgent.getState().deleteConversation(c.id);
+                        const ok = await confirmDialog(
+                          `删除会话「${c.title}」？此操作不可撤销。`,
+                          { title: "删除会话", okText: "删除", cancelText: "取消", danger: true },
+                        );
+                        if (ok) useAgent.getState().deleteConversation(c.id);
                       }}
                       className="text-zinc-500 hover:text-rose-400 text-sm opacity-0 group-hover:opacity-100 transition-opacity leading-none"
                       aria-label={`删除会话 ${c.title}`}
@@ -223,18 +227,22 @@ export function ConversationHeader({ onClose }: Props) {
             className={FLOATING_MENU + " right-0 w-[200px] py-1"}
           >
             <MenuItem
-              onClick={() => {
-                if (history.activeConversationId) {
-                  useAgent
-                    .getState()
-                    .deleteConversation(history.activeConversationId);
-                  const pathname =
-                    typeof window !== "undefined"
-                      ? window.location.pathname
-                      : "/";
-                  useAgent.getState().createConversation({ pathname });
-                }
+              onClick={async () => {
                 setMenuOpen(false);
+                if (!history.activeConversationId) return;
+                const ok = await confirmDialog(
+                  "清空当前会话？此会话的消息将被删除，无法撤销。",
+                  { title: "清空当前会话", okText: "清空", cancelText: "取消", danger: true },
+                );
+                if (!ok) return;
+                useAgent
+                  .getState()
+                  .deleteConversation(history.activeConversationId);
+                const pathname =
+                  typeof window !== "undefined"
+                    ? window.location.pathname
+                    : "/";
+                useAgent.getState().createConversation({ pathname });
               }}
             >
               清空当前会话

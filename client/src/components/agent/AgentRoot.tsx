@@ -94,6 +94,10 @@ export function AgentRoot() {
     loadInitialMode(location.pathname),
   );
   const [streamingMsgId, setStreamingMsgId] = useState<string | null>(null);
+  // A turn is in flight (sent → final assistant message). When running but no
+  // text is streaming yet (streamingMsgId null), the model is "thinking" — the
+  // MessageList shows a loading animation instead of a static wait.
+  const [running, setRunning] = useState(false);
   const [unreadFlag, setUnreadFlag] = useState(false);
   const [suggestionToPrefill, setSuggestionToPrefill] = useState<
     string | undefined
@@ -189,6 +193,7 @@ export function AgentRoot() {
 
       const ac = new AbortController();
       abortRef.current = ac;
+      setRunning(true);
 
       try {
         await sendAgentMessage(text, {
@@ -209,6 +214,7 @@ export function AgentRoot() {
       } finally {
         abortRef.current = null;
         setStreamingMsgId(null);
+        setRunning(false);
       }
     },
     [noLlm, mode],
@@ -220,6 +226,7 @@ export function AgentRoot() {
       abortRef.current = null;
     }
     setStreamingMsgId(null);
+    setRunning(false);
   }, []);
 
   const handleSuggestionClick = useCallback((text: string) => {
@@ -237,7 +244,10 @@ export function AgentRoot() {
   const hasMessages = (activeConv?.messages.length ?? 0) > 0;
 
   const body = hasMessages ? (
-    <MessageList streamingMsgId={streamingMsgId} />
+    <MessageList
+      streamingMsgId={streamingMsgId}
+      thinking={running && streamingMsgId == null}
+    />
   ) : (
     <EmptyState
       noLlm={noLlm}

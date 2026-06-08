@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationHeader } from "./ConversationHeader";
 import { useAgent } from "../../store/agent";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn().mockResolvedValue(false),
+}));
+
+// Delete actions now go through the app's confirmDialog — auto-confirm in tests.
+vi.mock("../../store/appDialog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../store/appDialog")>()),
+  confirmDialog: vi.fn().mockResolvedValue(true),
 }));
 
 beforeEach(() => {
@@ -80,7 +86,7 @@ describe("ConversationHeader", () => {
     expect(newActive === a || newActive === b).toBe(true);
   });
 
-  it("clicking × on a conversation row deletes that conversation", () => {
+  it("clicking × on a conversation row deletes that conversation (after confirm)", async () => {
     useAgent.getState().createConversation({ pathname: "/library" });
     useAgent.getState().createConversation({ pathname: "/vocab" });
     render(<ConversationHeader onClose={vi.fn()} />);
@@ -89,7 +95,9 @@ describe("ConversationHeader", () => {
     const deleteBtns = dropdown.querySelectorAll("button[aria-label^='删除会话']");
     expect(deleteBtns.length).toBe(2);
     fireEvent.click(deleteBtns[0]);
-    expect(useAgent.getState().history.conversations).toHaveLength(1);
+    await waitFor(() =>
+      expect(useAgent.getState().history.conversations).toHaveLength(1),
+    );
   });
 
   it("opens menu with 清空当前会话, 清空所有历史, 导出为 JSON options", () => {

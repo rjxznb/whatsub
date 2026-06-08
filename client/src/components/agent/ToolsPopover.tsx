@@ -43,7 +43,7 @@ const TOOL_INFO: Record<string, ToolInfo> = {
   list_library: { label: "列视频库", desc: "列出本地库（可筛场景 / 状态）", tpl: `列出我视频库里${CARET}的视频` },
   read_video_analysis: { label: "读视频内容", desc: "读某视频的字幕全文 + 重点短语", tpl: `总结一下 @${CARET} 这个视频讲了什么` },
   list_vocab: { label: "列生词本", desc: "列出收藏的生词", tpl: `看看我的生词本里有哪些词` },
-  youtube_search: { label: "搜 YouTube", desc: "搜视频（只搜不下）", tpl: `在 YouTube 上搜索：${CARET}` },
+  youtube_search: { label: "搜 YouTube", desc: "搜视频，结果可一键下载", tpl: `在 YouTube 上搜索：${CARET}` },
   recommend_review: { label: "推荐复习", desc: "按薄弱点定位到「视频 + 几分几秒」", tpl: `我最近哪方面比较弱？给我推荐几处复习片段` },
   query_learner_profile: { label: "读学习档案", desc: "水平 / 薄弱点 / 最近错误", tpl: `看看我的学习档案（水平和薄弱点）` },
   open_video: { label: "打开视频", desc: "跳到播放页（可定位到秒）", tpl: `打开视频：${CARET}` },

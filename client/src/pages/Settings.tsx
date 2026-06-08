@@ -6,10 +6,9 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { notify, confirmDialog } from "../store/appDialog";
-import { exportLearnerProfile, resetLearnerProfile } from "../tutor/learnerProfile";
+import { resetLearnerProfile } from "../tutor/learnerProfile";
 import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
-import { useAgent } from "../store/agent";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
@@ -322,8 +321,6 @@ export function Settings() {
         <AccountSection />
 
         <UpdateSection />
-
-        <ClearAgentHistorySection />
 
         <TutorSection />
 
@@ -1086,44 +1083,6 @@ function UpdateSection() {
   );
 }
 
-function ClearAgentHistorySection() {
-  const [clearing, setClearing] = useState(false);
-
-  async function handleClear() {
-    try {
-      const ok = await confirmDialog("确认清空所有 AI 助手历史？此操作不可撤销。", {
-        title: "清空 AI 助手历史",
-        okText: "清空",
-        danger: true,
-      });
-      if (ok) {
-        setClearing(true);
-        useAgent.getState().clearAll();
-        setClearing(false);
-      }
-    } catch (e) {
-      console.warn("[Settings] clear agent history failed:", e);
-      setClearing(false);
-    }
-  }
-
-  return (
-    <section className="border-t border-zinc-800 pt-6">
-      <h2 className="font-semibold mb-3">AI 助手</h2>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={handleClear}
-          disabled={clearing}
-          className="px-3 py-1.5 bg-rose-900/30 hover:bg-rose-900/50 text-rose-200 text-sm rounded disabled:opacity-50 transition-colors"
-        >
-          {clearing ? "清空中..." : "清空 AI 助手历史"}
-        </button>
-      </div>
-    </section>
-  );
-}
-
 /**
  * Vendor preset dropdown + auto-filled fields.
  * The user picks a vendor (DeepSeek / OpenAI / Claude / etc.); we derive
@@ -1540,20 +1499,7 @@ function FileField({
 }
 
 function TutorSection() {
-  const [exporting, setExporting] = useState(false);
   const [resetting, setResetting] = useState(false);
-
-  async function handleExport() {
-    setExporting(true);
-    try {
-      const path = await exportLearnerProfile();
-      await notify(`学习档案已导出到\n${path}`);
-    } catch (e) {
-      await notify(`导出失败：${String(e)}`);
-    } finally {
-      setExporting(false);
-    }
-  }
 
   async function handleReset() {
     const ok = await confirmDialog(
@@ -1578,14 +1524,6 @@ function TutorSection() {
         （私教使用你在「翻译服务」配置的同一个 LLM）
       </p>
       <div className="flex items-center gap-3 flex-wrap">
-        <button
-          type="button"
-          onClick={handleExport}
-          disabled={exporting}
-          className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm rounded disabled:opacity-50 transition-colors"
-        >
-          {exporting ? "导出中..." : "导出学习档案"}
-        </button>
         <button
           type="button"
           onClick={handleReset}

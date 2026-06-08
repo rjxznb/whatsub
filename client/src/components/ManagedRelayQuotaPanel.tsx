@@ -29,6 +29,9 @@ export function ManagedRelayQuotaPanel() {
   const [quota, setQuota] = useState<LlmQuota | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Dedicated spin for the manual ↻ — the fetch (and the 8s poll) flip `loading`
+  // so fast you never see it spin. This keeps it spinning for a visible beat.
+  const [spinning, setSpinning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,6 +51,16 @@ export function ManagedRelayQuotaPanel() {
       setLoading(false);
     }
   }, [mode, trial?.trialToken]);
+
+  const manualRefresh = useCallback(async () => {
+    setSpinning(true);
+    try {
+      await load();
+    } finally {
+      // hold the spin a beat so an instant fetch still reads as "refreshing"
+      setTimeout(() => setSpinning(false), 600);
+    }
+  }, [load]);
 
   // Fetch on mount/bearer-change, then poll while the panel is open. Tokens are
   // consumed elsewhere (the global AI agent floats over Settings, plus video
@@ -109,11 +122,11 @@ export function ManagedRelayQuotaPanel() {
               </span>
               <button
                 type="button"
-                onClick={() => void load()}
+                onClick={() => void manualRefresh()}
                 title="刷新额度"
                 className="text-zinc-500 hover:text-zinc-300 transition-colors"
               >
-                <RotateCw className={"h-3 w-3 " + (loading ? "animate-spin" : "")} />
+                <RotateCw className={"h-3 w-3 " + (loading || spinning ? "animate-spin" : "")} />
               </button>
             </span>
           </div>

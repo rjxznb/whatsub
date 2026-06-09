@@ -16,8 +16,17 @@ use crate::commands::yt_dlp::resolve_appdata_yt_dlp;
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 use tauri::AppHandle;
 use tokio::process::Command;
+use tokio::time::timeout;
+
+/// Hard ceiling for a single search. yt-dlp's `--socket-timeout` only bounds
+/// individual socket ops, NOT the overall run — on a machine that can't reach
+/// YouTube (GFW / no proxy / DNS black hole) the process can hang far longer
+/// than the user is willing to wait, freezing the AI tool call indefinitely.
+const SEARCH_TIMEOUT_SECS: u64 = 45;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct YouTubeSearchHit {
@@ -131,8 +140,8 @@ pub async fn youtube_search(
     let n = limit.unwrap_or(10).clamp(1, 20);
     let yt_dlp_path = resolve_yt_dlp_path(&app)?;
     let search_query = format!("ytsearch{}:{}", n, trimmed);
-    let output = Command::new(&yt_dlp_path)
-        .arg(&search_query)
+    let mut cmd = Command::new(&yt_dlp_path);
+    cmd.arg(&search_query)
         .arg("--flat-playlist")
         .arg("--dump-json")
         .arg("--no-warnings")
@@ -142,9 +151,30 @@ pub async fn youtube_search(
         .arg("--retries")
         .arg("2")
         .arg("--no-call-home")
-        .output()
-        .await
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // If the timeout below fires, the wait_with_output() future is dropped,
+        // which drops the Child — kill_on_drop then reaps the yt-dlp process so
+        // a hung search doesn't linger after we've already returned an error.
+        .kill_on_drop(true);
+    let child = cmd
+        .spawn()
         .map_err(|e| AppError::Subprocess(format!("yt-dlp spawn failed: {}", e)))?;
+    let output = match timeout(
+        Duration::from_secs(SEARCH_TIMEOUT_SECS),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(res) => res.map_err(|e| AppError::Subprocess(format!("yt-dlp wait failed: {}", e)))?,
+        Err(_) => {
+            return Err(AppError::Subprocess(format!(
+                "YouTube 搜索超时（{} 秒未返回）。常见原因：当前网络无法访问 YouTube（需要科学上网），或 yt-dlp 需要在「设置 → 更新 yt-dlp」里更新。",
+                SEARCH_TIMEOUT_SECS
+            )));
+        }
+    };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(AppError::Subprocess(format!(

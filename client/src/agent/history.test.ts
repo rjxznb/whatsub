@@ -89,6 +89,61 @@ describe("prepareWireHistory — #3 trim past-turn tool results", () => {
   });
 });
 
+describe("prepareWireHistory — #2 answer dangling tool_calls", () => {
+  const assistantCall = (
+    callId: string,
+    name: string,
+    id = "a",
+  ): AssistantMessage => ({
+    role: "assistant",
+    id,
+    ts: 0,
+    blocks: [{ type: "tool_call", callId, name, args: {} }],
+    stopReason: "tool_use",
+    vendor: "deepseek",
+    model: "deepseek-v4-flash",
+  });
+
+  it("synthesizes an error tool result for a tool_call left unanswered (hung/aborted)", () => {
+    const msgs: Message[] = [
+      user("在 YouTube 上搜索 NBA", "u1"),
+      assistantCall("call_1", "youtube_search", "a1"), // tool hung → no result
+      user("你怎么了", "u2"),
+    ];
+    const out = prepareWireHistory(msgs, 10_000_000);
+    // A tool message answering call_1 must exist, right after the assistant.
+    const aIdx = out.findIndex((m) => m.id === "a1");
+    const next = out[aIdx + 1] as ToolMessage;
+    expect(next.role).toBe("tool");
+    expect(next.callId).toBe("call_1");
+    expect(next.status).toBe("error");
+    // Original user follow-up is preserved and still last.
+    expect(out[out.length - 1].id).toBe("u2");
+  });
+
+  it("does NOT add a synthetic result when the tool_call already has one", () => {
+    const answered: ToolMessage = {
+      role: "tool",
+      id: "t1",
+      ts: 0,
+      callId: "call_1",
+      name: "youtube_search",
+      status: "ok",
+      result: { hits: [] },
+      durationMs: 1,
+    };
+    const msgs: Message[] = [
+      user("搜一下", "u1"),
+      assistantCall("call_1", "youtube_search", "a1"),
+      answered,
+    ];
+    const out = prepareWireHistory(msgs, 10_000_000);
+    const toolMsgs = out.filter((m) => m.role === "tool");
+    expect(toolMsgs).toHaveLength(1); // no synthetic added
+    expect((toolMsgs[0] as ToolMessage).id).toBe("t1");
+  });
+});
+
 describe("prepareWireHistory — #1 token budget", () => {
   it("drops oldest messages when over budget, keeps the latest", () => {
     const msgs: Message[] = [

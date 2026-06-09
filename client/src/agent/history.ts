@@ -16,7 +16,7 @@
 // Token counting is a cheap char heuristic — we only need "are we near the
 // model's limit", not exact billing.
 
-import type { Message, ToolMessage } from "../types/agent";
+import type { Message, ToolMessage, AssistantMessage } from "../types/agent";
 
 /** Rough token estimate: CJK ≈ 1 tok/char, everything else ≈ 1 tok / 4 chars. */
 export function estimateTokens(text: string): number {
@@ -84,6 +84,53 @@ function trimOldToolResults(messages: Message[]): Message[] {
   });
 }
 
+// ── #2: answer dangling tool_calls ───────────────────────────────────────────
+
+/**
+ * Guarantee every assistant `tool_call` block is immediately followed by a
+ * matching tool-result message. A tool that HANGS (e.g. youtube_search on a
+ * machine that can't reach YouTube), is aborted mid-call (the user sends a new
+ * message while a tool is in flight), or hits one of the runtime's early
+ * `return` paths (confirm-reject, tool-cap) leaves the assistant message with a
+ * `tool_call` that has no result. OpenAI-compatible AND Claude providers
+ * HARD-REJECT that with HTTP 400 ("An assistant message with 'tool_calls' must
+ * be followed by tool messages responding to each 'tool_call_id'"), which
+ * wedges the WHOLE conversation — every subsequent turn 400s.
+ *
+ * So we synthesize a short error tool-result for each unanswered callId. The
+ * model sees "this call didn't finish" and can recover (retry or move on)
+ * instead of the conversation getting permanently stuck. Pure — returns a new
+ * array; never mutates input.
+ */
+function ensureToolCallsAnswered(messages: Message[]): Message[] {
+  // Every callId that already has SOME tool message (ok / error / cancelled).
+  const answered = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "tool") answered.add((m as ToolMessage).callId);
+  }
+  const out: Message[] = [];
+  for (const m of messages) {
+    out.push(m);
+    if (m.role !== "assistant") continue;
+    for (const b of (m as AssistantMessage).blocks) {
+      if (b.type !== "tool_call" || answered.has(b.callId)) continue;
+      answered.add(b.callId); // guard against a duplicated callId
+      const synthetic: ToolMessage = {
+        role: "tool",
+        id: `synthetic-${b.callId}`,
+        ts: m.ts,
+        callId: b.callId,
+        name: b.name,
+        status: "error",
+        errorMessage: "工具调用未完成（已中断、被取消或超时），未返回结果。",
+        durationMs: 0,
+      };
+      out.push(synthetic);
+    }
+  }
+  return out;
+}
+
 // ── #1: token budget ─────────────────────────────────────────────────────────
 
 /** Input-token budget for the wire history, derived from the model's context
@@ -110,7 +157,7 @@ export function prepareWireHistory(
 
   const toks = trimmed.map(estimateMessageTokens);
   let total = toks.reduce((a, b) => a + b, 0);
-  if (total <= maxTokens) return trimmed;
+  if (total <= maxTokens) return ensureToolCallsAnswered(trimmed);
 
   // Drop oldest messages until under budget (always keep the final message).
   let start = 0;
@@ -126,5 +173,7 @@ export function prepareWireHistory(
   while (cut < kept.length && kept[cut].role === "tool") cut++;
   if (cut > 0) kept = kept.slice(cut);
 
-  return kept;
+  // Finally, backfill any assistant tool_call left without a result (hung /
+  // aborted tool) so the provider doesn't 400 on the dangling tool_calls.
+  return ensureToolCallsAnswered(kept);
 }

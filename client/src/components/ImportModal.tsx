@@ -508,6 +508,11 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
             tab === "url" ? urlValue : undefined,
           );
           const act = fe.action;
+          // Local-file imports never run yt-dlp — the failure is in ffmpeg
+          // (corrupt/unsupported file, no audio track) or whisper, NOT a
+          // download/cookies/network problem. So a local failure gets its own
+          // checklist instead of the download one.
+          const isLocal = tab === "local";
           const startLogin = async () => {
             if (!act) return;
             try {
@@ -541,10 +546,12 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-zinc-800">
                   <div className="min-w-0">
                     <div className="text-base font-semibold text-zinc-100 mb-1">
-                      下载失败 — 排查清单
+                      {isLocal ? "解析失败 — 排查清单" : "下载失败 — 排查清单"}
                     </div>
                     <div className="text-xs leading-relaxed text-zinc-400">
-                      逐条对照检查，按相关性排序。多数情况是前两条之一。
+                      {isLocal
+                        ? "本地视频不走下载，失败多半出在文件本身或音轨解码。逐条对照检查。"
+                        : "逐条对照检查，按相关性排序。多数情况是前两条之一。"}
                     </div>
                   </div>
                   <button
@@ -558,6 +565,37 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 </div>
 
                 <div className="px-5 py-4 flex-1 min-h-0 overflow-y-auto space-y-2.5">
+                  {isLocal && (
+                    <>
+                      <ChecklistItem
+                        index="①"
+                        title="视频文件本身有问题"
+                        badge={{ text: "最常见", color: "rose" }}
+                      >
+                        文件没下完整、传输中断、或本来就损坏，都会让解析失败。先用系统播放器
+                        （VLC / PotPlayer 等）确认这个文件能完整播放、能听到声音 —— 能正常播放的
+                        完整文件才能识别；不行就换个文件再导。
+                      </ChecklistItem>
+
+                      <ChecklistItem
+                        index="②"
+                        title="没有音轨 / 编码不支持"
+                        badge={{ text: "无声 / 冷门编码", color: "amber" }}
+                      >
+                        字幕识别靠音频。纯画面、静音录屏、或音轨用了少见编码（ffmpeg / whisper
+                        解不出）都会失败。确认视频里能听到人说话；必要时先用剪辑软件转成常见的
+                        mp4（H.264 + AAC）再导入。
+                      </ChecklistItem>
+
+                      <ChecklistItem index="③" title="文件被占用 / 路径异常">
+                        文件正被别的程序打开、放在只读目录、或路径含特殊字符，都可能让 ffmpeg
+                        读不到。关掉占用它的程序，或把文件拷到桌面这种简单路径再试。
+                      </ChecklistItem>
+                    </>
+                  )}
+
+                  {!isLocal && (
+                  <>
                   <ChecklistItem
                     index="①"
                     title="国际站点需要梯子"
@@ -611,22 +649,29 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                       后台下载 →
                     </button>
                   </ChecklistItem>
+                  </>
+                  )}
 
-                  {/* Raw error tail — surfaces yt-dlp's actual stderr to
-                      power users without forcing them to dig into the
-                      log panel. Most useful when ① ② ③ above don't
-                      pinpoint the cause (e.g. format unavailable,
-                      ffmpeg merge error, signature extraction failed —
-                      stuff that's specific to a particular video). */}
+                  {/* Raw error tail — surfaces the actual stderr (yt-dlp for
+                      downloads, ffmpeg/whisper for local files) to power users
+                      without forcing them to dig into the log panel. Most
+                      useful when the items above don't pinpoint the cause
+                      (format unavailable, ffmpeg merge/decode error, signature
+                      extraction failed — stuff specific to a particular
+                      video). */}
                   {error && (
                     <ChecklistItem
                       index="④"
-                      title="详细错误信息（yt-dlp 原始输出）"
+                      title={
+                        isLocal
+                          ? "详细错误信息（ffmpeg / whisper 原始输出）"
+                          : "详细错误信息（yt-dlp 原始输出）"
+                      }
                     >
                       <div className="text-[10px] text-zinc-400 mb-1.5 leading-relaxed">
-                        以下是后台 yt-dlp 实际报的错(stderr 末尾)。
-                        遇到上面三条都不对症的情况下,这里通常能定位具体原因。
-                        长按选中可以拷贝。
+                        {isLocal
+                          ? "以下是 ffmpeg / whisper 实际报的错(stderr 末尾)。遇到上面三条都不对症时,这里通常能定位具体原因。长按选中可以拷贝。"
+                          : "以下是后台 yt-dlp 实际报的错(stderr 末尾)。遇到上面三条都不对症的情况下,这里通常能定位具体原因。长按选中可以拷贝。"}
                       </div>
                       <pre className="text-[10px] font-mono leading-relaxed bg-zinc-950 border border-zinc-800 rounded p-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-zinc-300 select-text">
                         {error}

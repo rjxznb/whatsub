@@ -375,6 +375,10 @@ fn spawn_close_watcher(app: AppHandle, my_gen: u64) {
         // needing live CDP. Refreshed every 2s, so worst-case
         // staleness is ~2s — fine, the user logs in over many seconds.
         let mut last_cookies: Vec<CdpCookie> = Vec::new();
+        // Latch: only treat "zero page targets" as "user closed the window"
+        // AFTER we've seen at least one page. Otherwise a startup race (watcher
+        // polls before the login tab registers) could finalize prematurely.
+        let mut saw_page = false;
 
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -412,20 +416,40 @@ fn spawn_close_watcher(app: AppHandle, my_gen: u64) {
             let Some(port) = port else { return };
 
             if is_cdp_alive(port).await {
-                // Browser still up — refresh the snapshot. On error,
-                // keep the previous snapshot (better stale than empty).
-                if let Ok(latest) = cdp_get_all_cookies(port).await {
-                    last_cookies = latest;
+                // Process is up — but that's NOT the same as "a window is
+                // open" (see cdp_count_pages). Check the page targets to tell
+                // a genuinely-open login window apart from a lingering
+                // background process whose windows the user already closed.
+                match cdp_count_pages(port).await {
+                    Some(0) if saw_page => {
+                        // The user closed the last login window but the
+                        // process is hanging around in the background. Treat
+                        // it as closed: terminate the lingering process so we
+                        // don't leave a headless browser running, then fall
+                        // through to the finalize path below.
+                        let _ = cdp_close_browser(port).await;
+                    }
+                    other => {
+                        if matches!(other, Some(n) if n > 0) {
+                            saw_page = true;
+                        }
+                        // Window still open (or count temporarily unknown) —
+                        // refresh the snapshot. On error keep the previous one
+                        // (better stale than empty).
+                        if let Ok(latest) = cdp_get_all_cookies(port).await {
+                            last_cookies = latest;
+                        }
+                        continue;
+                    }
                 }
-                continue;
             }
 
-            // CDP gone → user closed the browser. Try to save the
-            // most recent snapshot we captured. If it has cookies for
-            // this site's harvest domains, the user logged in before
-            // closing — emit success. Otherwise (empty profile / user
-            // closed without logging in), emit cancelled so the dialog
-            // falls back to the form.
+            // CDP gone (process exited) OR the last login window was closed
+            // while the process lingered. Try to save the most recent snapshot
+            // we captured. If it has cookies for this site's harvest domains,
+            // the user logged in before closing — emit success. Otherwise
+            // (empty profile / user closed without logging in), emit cancelled
+            // so the dialog falls back to the form.
             let pending = {
                 let mut p = match state.pending.lock() {
                     Ok(g) => g,
@@ -925,6 +949,50 @@ async fn is_cdp_alive(port: u16) -> bool {
         .unwrap_or(false)
 }
 
+/// Count the browser's currently-open `"type":"page"` targets via the CDP
+/// `/json/list` HTTP endpoint. Returns `None` on any error so the caller can
+/// treat it as "unknown — keep waiting" rather than "closed".
+///
+/// Why this exists: `is_cdp_alive` hits `/json/version`, which is answered by
+/// the browser PROCESS — it stays 200 even after the user closes every window,
+/// because on Windows Edge/Chrome routinely keeps a background process alive
+/// (background mode / startup boost / lingering profile process). So a CDP-only
+/// liveness check never detects "the user closed the login window" and the
+/// close-watcher would wait forever. Page targets DO disappear when their
+/// window/tab is closed, so a drop to zero is the reliable "window closed"
+/// signal even while the process lingers.
+async fn cdp_count_pages(port: u16) -> Option<usize> {
+    let url = format!("http://127.0.0.1:{port}/json/list");
+    // .no_proxy() for the same 梯子/VPN reason as is_cdp_alive.
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body = resp.text().await.ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    Some(count_page_targets(&v))
+}
+
+/// Pure core of [`cdp_count_pages`]: count array entries whose `type` is
+/// `"page"` (the user-facing tabs/windows). Background pages, service workers,
+/// `iframe`, etc. have other `type`s and don't count — so zero pages means the
+/// user closed the login window even if the browser process is still running.
+fn count_page_targets(targets: &serde_json::Value) -> usize {
+    targets
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|t| t.get("type").and_then(|x| x.as_str()) == Some("page"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 async fn cdp_open_tab(port: u16, url: &str) -> Result<(), String> {
     let endpoint = format!("http://127.0.0.1:{port}/json/new?{url}");
     // Modern Chromium requires PUT; older accepted GET. Try PUT first.
@@ -1154,4 +1222,49 @@ pub fn youtube_cookies_info() -> Result<CookiesInfo, String> {
         path: path.to_string_lossy().into_owned(),
         exists: path.exists(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_page_targets;
+    use serde_json::json;
+
+    #[test]
+    fn counts_only_page_type_targets() {
+        // A typical /json/list payload: one open login page plus
+        // non-page targets that must NOT be counted.
+        let v = json!([
+            { "type": "page", "url": "https://www.youtube.com/" },
+            { "type": "service_worker", "url": "https://www.youtube.com/sw.js" },
+            { "type": "background_page", "url": "chrome-extension://x" },
+            { "type": "page", "url": "https://accounts.google.com/" }
+        ]);
+        assert_eq!(count_page_targets(&v), 2);
+    }
+
+    #[test]
+    fn zero_pages_when_only_non_page_targets() {
+        // User closed every window: the process lingers and only a
+        // service worker remains → zero pages → "window closed" signal.
+        let v = json!([{ "type": "service_worker", "url": "x" }]);
+        assert_eq!(count_page_targets(&v), 0);
+    }
+
+    #[test]
+    fn empty_list_is_zero() {
+        assert_eq!(count_page_targets(&json!([])), 0);
+    }
+
+    #[test]
+    fn non_array_is_zero() {
+        // Malformed / unexpected shape must not panic or over-count.
+        assert_eq!(count_page_targets(&json!({ "error": "nope" })), 0);
+        assert_eq!(count_page_targets(&json!(null)), 0);
+    }
+
+    #[test]
+    fn missing_type_field_does_not_count() {
+        let v = json!([{ "url": "https://x" }, { "type": "page" }]);
+        assert_eq!(count_page_targets(&v), 1);
+    }
 }

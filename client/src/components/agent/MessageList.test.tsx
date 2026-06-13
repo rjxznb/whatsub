@@ -104,6 +104,31 @@ describe("MessageList", () => {
     expect(scroller.children.length).toBe(2);
   });
 
+  it("groups a multi-message assistant turn under a single avatar", () => {
+    // A ReAct turn: assistant says something + calls a tool, the tool result
+    // comes back, then a second assistant message finishes the answer. All of
+    // it must read as ONE reply → exactly one avatar, not one per message.
+    const a1: AssistantMessage = {
+      ...assistantMsg,
+      id: "a1",
+      blocks: [{ type: "text", text: "step one" }],
+      stopReason: "tool_use",
+    };
+    const a2: AssistantMessage = {
+      ...assistantMsg,
+      id: "a2",
+      blocks: [{ type: "text", text: "step two" }],
+    };
+    seedConversation([userMsg, a1, toolMsg, a2]);
+    const { container } = render(<MessageList />);
+    expect(screen.getByText("step one")).toBeTruthy();
+    expect(screen.getByText("step two")).toBeTruthy();
+    // Only the first assistant message draws the avatar; the second renders a
+    // spacer (aria-hidden, no <img>).
+    expect(container.querySelectorAll("img").length).toBe(1);
+    expect(container.querySelector('[aria-hidden="true"]')).toBeTruthy();
+  });
+
   it("passes streamingMsgId through to the matching assistant bubble", () => {
     seedConversation([userMsg, assistantMsg]);
     const { container } = render(<MessageList streamingMsgId="a1" />);

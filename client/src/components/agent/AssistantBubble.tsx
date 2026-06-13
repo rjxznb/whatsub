@@ -15,6 +15,11 @@ interface Props {
    *  streaming, while its tool_calls are executing). Lets a tool_call card show
    *  a running spinner during execution instead of a static "准备调用". */
   turnInFlight?: boolean;
+  /** False when this assistant message is a CONTINUATION of the same turn (an
+   *  earlier assistant message in this turn already drew the avatar). Renders a
+   *  spacer in the avatar column so the whole tool-using answer reads under one
+   *  avatar instead of stacking a new one per ReAct iteration. */
+  showAvatar?: boolean;
 }
 
 /** Index of the last text block, or -1 if none. */
@@ -29,14 +34,18 @@ function lastTextBlockIdx(blocks: AssistantBlock[]): number {
  * Claude.ai-inspired assistant row: small whatsub avatar at left, flat text body
  * (no bubble, no border). Tool calls are sub-rows in the same column.
  */
-export function AssistantBubble({ msg, streaming, turnInFlight }: Props) {
+export function AssistantBubble({ msg, streaming, turnInFlight, showAvatar = true }: Props) {
   const lastText = lastTextBlockIdx(msg.blocks);
   return (
-    <div className="flex gap-3 mb-4 px-4">
+    <div className={`flex gap-3 px-4 ${showAvatar ? "mb-4" : "mb-2"}`}>
       <div className="shrink-0 mt-0.5">
-        <div className="h-6 w-6 grid place-items-center rounded-full ring-1 ring-zinc-700 bg-zinc-900 overflow-hidden">
-          <img src={whatsubIcon} alt="" width={20} height={20} className="rounded-full" draggable={false} />
-        </div>
+        {showAvatar ? (
+          <div className="h-6 w-6 grid place-items-center rounded-full ring-1 ring-zinc-700 bg-zinc-900 overflow-hidden">
+            <img src={whatsubIcon} alt="" width={20} height={20} className="rounded-full" draggable={false} />
+          </div>
+        ) : (
+          <div className="h-6 w-6" aria-hidden />
+        )}
       </div>
       <div className="flex-1 min-w-0 text-[14px] text-zinc-100 leading-relaxed space-y-2">
         {msg.blocks.map((b, i) => {

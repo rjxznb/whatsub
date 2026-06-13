@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useAgent } from "../../store/agent";
 import { UserBubble } from "./UserBubble";
 import { AssistantBubble } from "./AssistantBubble";
@@ -24,6 +24,26 @@ export function MessageList({ streamingMsgId, thinking, turnInFlight }: Props) {
   const messages = activeConv?.messages ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Group a whole assistant turn — its 1+ assistant messages (one per ReAct
+  // iteration) plus interleaved tool messages — under a SINGLE avatar: only the
+  // first assistant message after a user message shows the avatar; later ones
+  // in the same turn render a spacer. So a tool-using answer reads as ONE reply,
+  // not several stacked avatars. `currentTurnHasAvatar` does the same for the
+  // trailing ThinkingBubble (a continuation, not a new turn).
+  const { avatarMsgIds, currentTurnHasAvatar } = useMemo(() => {
+    const ids = new Set<string>();
+    let turnHasAvatar = false;
+    for (const m of messages) {
+      if (m.role === "user") {
+        turnHasAvatar = false;
+      } else if (m.role === "assistant" && !turnHasAvatar) {
+        ids.add(m.id);
+        turnHasAvatar = true;
+      }
+    }
+    return { avatarMsgIds: ids, currentTurnHasAvatar: turnHasAvatar };
+  }, [messages]);
+
   // Auto-scroll to bottom on new message OR when the thinking loader appears.
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -47,27 +67,33 @@ export function MessageList({ streamingMsgId, thinking, turnInFlight }: Props) {
               msg={m}
               streaming={streamingMsgId === m.id}
               turnInFlight={turnInFlight}
+              showAvatar={avatarMsgIds.has(m.id)}
             />
           );
         }
         // role === "tool" → skipped; T23 will render via ToolCallCard
         return null;
       })}
-      {thinking && <ThinkingBubble />}
+      {thinking && <ThinkingBubble showAvatar={!currentTurnHasAvatar} />}
     </div>
   );
 }
 
 /** Loading row shown while the model is thinking (no text streaming yet):
  *  the whatsub avatar + three bouncing dots. Mirrors AssistantBubble's layout
- *  so it reads as "the reply is on its way". */
-function ThinkingBubble() {
+ *  so it reads as "the reply is on its way". `showAvatar` is false when this is
+ *  a continuation of an assistant turn that already showed its avatar. */
+function ThinkingBubble({ showAvatar = true }: { showAvatar?: boolean }) {
   return (
     <div className="flex gap-3 mb-4 px-4">
       <div className="shrink-0 mt-0.5">
-        <div className="h-6 w-6 grid place-items-center rounded-full ring-1 ring-zinc-700 bg-zinc-900 overflow-hidden">
-          <img src={whatsubIcon} alt="" width={20} height={20} className="rounded-full" draggable={false} />
-        </div>
+        {showAvatar ? (
+          <div className="h-6 w-6 grid place-items-center rounded-full ring-1 ring-zinc-700 bg-zinc-900 overflow-hidden">
+            <img src={whatsubIcon} alt="" width={20} height={20} className="rounded-full" draggable={false} />
+          </div>
+        ) : (
+          <div className="h-6 w-6" aria-hidden />
+        )}
       </div>
       <div className="flex items-center gap-1 mt-2.5">
         <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: "0ms" }} />

@@ -704,6 +704,35 @@ async fn upload_audio_sidecar(
     Some(auu.audio_key)
 }
 
+/// Stream an HTTP URL straight to a file. Used to pull the OSS-hosted mp4 +
+/// cover for a cloud video down to local during materialize, instead of
+/// re-downloading the original source via yt-dlp. Streams (doesn't buffer the
+/// whole video in memory); generous overall timeout for a 720p mp4 (the cover
+/// is tiny so the cap never bites it).
+async fn download_url_to_file(url: &str, dest: &std::path::Path) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(NET_TIMEOUT_SECS))
+        .timeout(std::time::Duration::from_secs(20 * 60))
+        .build()
+        .map_err(|e| format!("client build: {e}"))?;
+    let resp = client.get(url).send().await.map_err(|e| categorise(&e))?;
+    if !resp.status().is_success() {
+        return Err(format!("http {}", resp.status().as_u16()));
+    }
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| format!("create {}: {e}", dest.display()))?;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| format!("stream: {e}"))?;
+        file.write_all(&bytes).await.map_err(|e| format!("write: {e}"))?;
+    }
+    file.flush().await.map_err(|e| format!("flush: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Result<(), String> {
     let auth_state = auth::get_auth(&app).ok_or_else(|| "auth_required".to_string())?;
@@ -735,16 +764,82 @@ pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Resul
     let duration_sec_cloud = entry_json["durationSec"].as_f64().unwrap_or(0.0);
     let transcript = entry_json["transcriptSrt"].as_str().unwrap_or_default().to_string();
     let analysis = entry_json["analysisJson"].clone();
-    if source_url.is_empty() {
+    // Signed Aliyun CDN URL for the 720p mp4 we uploaded at sync time (2h TTL)
+    // + the synced cover. Both null when the original sync was captions-only or
+    // the video upload failed — in that case we fall back to a yt-dlp download.
+    let video_url = entry_json["videoUrl"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let thumb_url = entry_json["thumbUrl"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    if source_url.is_empty() && video_url.is_none() {
         return Err("missing sourceUrl".into());
     }
 
-    // 2. Download the video locally (reuse the import download path).
     let out_dir = crate::core::paths::video_dir(&id).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-    let dl = crate::pipeline::ytdlp::download(&app, &source_url, &out_dir, &id, "standard", true, None)
+    let thumb_path = out_dir.join("thumb.jpg");
+
+    // 2. Get the video locally. PREFER our own OSS copy (fast, no VPN/cookies,
+    //    can't 404 on a taken-down source); only re-download from the original
+    //    source via yt-dlp when there's no OSS video or the OSS fetch fails.
+    let mut used_oss = false;
+    let mut resolved_title = title.clone();
+    let mut resolved_duration = duration_sec_cloud;
+    let mut resolved_thumb = String::new();
+
+    if let Some(ref vurl) = video_url {
+        let mp4 = out_dir.join("source.mp4");
+        match download_url_to_file(vurl, &mp4).await {
+            Ok(_) => {
+                used_oss = true;
+                // Cover: prefer the synced thumbUrl (China-reachable
+                // /api/library/thumb/:id); else extract a frame from the mp4 so
+                // the library card always has a cover.
+                let mut got_thumb = false;
+                if let Some(ref turl) = thumb_url {
+                    if download_url_to_file(turl, &thumb_path).await.is_ok() {
+                        got_thumb = true;
+                    }
+                }
+                if !got_thumb {
+                    let _ = crate::pipeline::ffmpeg::extract_thumbnail(
+                        &app, &mp4, &thumb_path, &id, None,
+                    )
+                    .await;
+                }
+                if thumb_path.exists() {
+                    resolved_thumb = thumb_path.to_string_lossy().to_string();
+                }
+            }
+            Err(e) => {
+                // Partial/failed OSS download — clean up and fall through to yt-dlp.
+                let _ = std::fs::remove_file(&mp4);
+                eprintln!("[materialize] OSS download failed ({e}); falling back to yt-dlp");
+            }
+        }
+    }
+
+    if !used_oss {
+        if source_url.is_empty() {
+            return Err("missing sourceUrl".into());
+        }
+        let dl = crate::pipeline::ytdlp::download(
+            &app, &source_url, &out_dir, &id, "standard", true, None,
+        )
         .await
         .map_err(|e| e.to_string())?;
+        if !dl.title.is_empty() {
+            resolved_title = dl.title;
+        }
+        if dl.duration_sec > 0.0 {
+            resolved_duration = dl.duration_sec;
+        }
+        resolved_thumb = dl.thumb_path;
+    }
 
     // 3. Write transcript.srt + analysis.json from cloud data (NO re-whisper/re-LLM).
     std::fs::write(out_dir.join("transcript.srt"), &transcript).map_err(|e| e.to_string())?;
@@ -755,13 +850,12 @@ pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Resul
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    let duration_sec = if duration_sec_cloud > 0.0 { duration_sec_cloud } else { dl.duration_sec };
     let entry = crate::commands::library::LibraryEntry {
         id: id.clone(),
-        title: if dl.title.is_empty() { title } else { dl.title },
+        title: if resolved_title.is_empty() { "Untitled".into() } else { resolved_title },
         source: crate::commands::library::LibrarySource::Url { url: source_url },
-        duration_sec,
-        thumbnail_path: dl.thumb_path.clone(),
+        duration_sec: resolved_duration,
+        thumbnail_path: resolved_thumb,
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         status: crate::commands::library::LibraryStatus::Ready,
         last_error: None,

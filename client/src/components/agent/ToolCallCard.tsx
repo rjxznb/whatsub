@@ -10,6 +10,11 @@ interface Props {
   callBlock: Extract<AssistantBlock, { type: "tool_call" }>;
   /** True if the parent assistant message is still streaming (runtime mid-turn). */
   parentStreaming?: boolean;
+  /** True while the whole runtime turn is in flight — INCLUDING after the
+   *  parent message finished streaming, while this tool is actually executing.
+   *  Without it, a long tool (e.g. youtube_search's yt-dlp call) would show a
+   *  static "准备调用" with no spinner for its entire run. */
+  turnInFlight?: boolean;
 }
 
 /**
@@ -25,7 +30,7 @@ interface Props {
  *   - ToolMessage.status === "error"    → failed (expanded by default)
  *   - ToolMessage.status === "cancelled_by_user" → cancelled
  */
-export function ToolCallCard({ callBlock, parentStreaming }: Props) {
+export function ToolCallCard({ callBlock, parentStreaming, turnInFlight }: Props) {
   const toolMsg = useAgent((s) => {
     const conv = s.history.conversations.find(
       (c) => c.id === s.history.activeConversationId,
@@ -47,7 +52,11 @@ export function ToolCallCard({ callBlock, parentStreaming }: Props) {
 
   // ── No ToolMessage yet: queued or running (non-clickable rows) ────────────
   if (!toolMsg) {
-    if (parentStreaming) {
+    // Spin while the parent message is streaming OR while the turn is still in
+    // flight (the tool is executing after the message finished streaming) — a
+    // long yt-dlp search would otherwise sit at a static "准备调用" with no
+    // visible progress for its whole 45s run.
+    if (parentStreaming || turnInFlight) {
       return (
         <div className="my-1.5 flex items-center gap-2 text-xs text-zinc-500 px-2 -ml-2">
           <span className="inline-block animate-spin text-zinc-500">⟳</span>

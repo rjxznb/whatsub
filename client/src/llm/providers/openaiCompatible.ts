@@ -239,13 +239,24 @@ export async function* parseOpenAIStream(
         }
       }
       if (finishReason) {
+        let sawToolCall = false;
         for (const acc of toolCallAccumulator.values()) {
           if (acc.started) {
+            sawToolCall = true;
             yield { type: "tool_call_end", callId: acc.id };
           }
         }
+        // Map the OpenAI finish_reason. CRITICAL: some OpenAI-compatible
+        // providers (DeepSeek, and the whatSub managed relay proxying it)
+        // return finish_reason "stop" even when the turn emitted tool_calls.
+        // Taking that at face value would map to "end_turn" and the runtime
+        // would NEVER execute the tool (it returns when stopReason !=
+        // "tool_use") — the agent gets stuck at "准备调用 <tool>" with no
+        // loading and no error. So if we saw ANY tool_call this stream, the
+        // intent is tool_use regardless of the literal finish_reason (mirrors
+        // the Gemini adapter's `STOP && sawFunctionCall → tool_use`).
         const reason: "tool_use" | "max_tokens" | "end_turn" =
-          finishReason === "tool_calls"
+          finishReason === "tool_calls" || sawToolCall
             ? "tool_use"
             : finishReason === "length"
               ? "max_tokens"

@@ -247,6 +247,7 @@ export function AgentRoot() {
     <MessageList
       streamingMsgId={streamingMsgId}
       thinking={running && streamingMsgId == null}
+      turnInFlight={running}
     />
   ) : (
     <EmptyState

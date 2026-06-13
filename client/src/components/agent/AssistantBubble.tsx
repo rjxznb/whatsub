@@ -11,6 +11,10 @@ interface Props {
   msg: AssistantMessage;
   /** True if this message is still streaming (last assistant of the conversation, runtime in flight). */
   streaming?: boolean;
+  /** True while the runtime turn is in flight (incl. AFTER this message finished
+   *  streaming, while its tool_calls are executing). Lets a tool_call card show
+   *  a running spinner during execution instead of a static "准备调用". */
+  turnInFlight?: boolean;
 }
 
 /** Index of the last text block, or -1 if none. */
@@ -25,7 +29,7 @@ function lastTextBlockIdx(blocks: AssistantBlock[]): number {
  * Claude.ai-inspired assistant row: small whatsub avatar at left, flat text body
  * (no bubble, no border). Tool calls are sub-rows in the same column.
  */
-export function AssistantBubble({ msg, streaming }: Props) {
+export function AssistantBubble({ msg, streaming, turnInFlight }: Props) {
   const lastText = lastTextBlockIdx(msg.blocks);
   return (
     <div className="flex gap-3 mb-4 px-4">
@@ -50,6 +54,7 @@ export function AssistantBubble({ msg, streaming }: Props) {
               key={i}
               callBlock={b}
               parentStreaming={!!streaming}
+              turnInFlight={!!turnInFlight}
             />
           );
         })}

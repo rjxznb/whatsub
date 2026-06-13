@@ -126,6 +126,41 @@ describe("OpenAICompatible parseOpenAIStream", () => {
     expect(startCount).toBe(1);
   });
 
+  it("upgrades finish_reason 'stop' WITH tool_calls to tool_use (DeepSeek/relay)", async () => {
+    // Some OpenAI-compatible providers (DeepSeek, the whatSub managed relay
+    // proxying it) return finish_reason "stop" even when the turn emitted
+    // tool_calls. The runtime only executes tools on a tool_use stop_reason, so
+    // the adapter must upgrade "stop"→"tool_use" when a tool_call was seen —
+    // otherwise the agent gets stuck at "准备调用 <tool>" and never runs it.
+    async function* inline(): AsyncGenerator<string> {
+      yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"youtube_search","arguments":"{\\"query\\":\\"hi\\"}"}}]}}]}\n\n';
+      yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n';
+      yield "data: [DONE]\n\n";
+    }
+    const events: AgentEvent[] = [];
+    for await (const ev of parseOpenAIStream(inline())) events.push(ev);
+    expect(events.find((e) => e.type === "tool_call_start")).toMatchObject({
+      callId: "call_x",
+      name: "youtube_search",
+    });
+    expect(events.find((e) => e.type === "stop_reason")).toMatchObject({
+      reason: "tool_use",
+    });
+  });
+
+  it("keeps finish_reason 'stop' WITHOUT tool_calls as end_turn", async () => {
+    async function* inline(): AsyncGenerator<string> {
+      yield 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n';
+      yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n';
+      yield "data: [DONE]\n\n";
+    }
+    const events: AgentEvent[] = [];
+    for await (const ev of parseOpenAIStream(inline())) events.push(ev);
+    expect(events.find((e) => e.type === "stop_reason")).toMatchObject({
+      reason: "end_turn",
+    });
+  });
+
   it("handles chunk boundaries mid-line (buffer split)", async () => {
     const raw = fs.readFileSync(
       path.join(__dirname, "../../agent/__fixtures__/openai_simple_text.txt"),

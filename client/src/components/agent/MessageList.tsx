@@ -11,9 +11,12 @@ interface Props {
   /** Turn in flight but no text streaming yet → model is thinking. Shows an
    *  animated loading row instead of a static wait. */
   thinking?: boolean;
+  /** Whole runtime turn in flight (streaming OR executing tools). Threaded to
+   *  tool_call cards so they spin during execution, not just during streaming. */
+  turnInFlight?: boolean;
 }
 
-export function MessageList({ streamingMsgId, thinking }: Props) {
+export function MessageList({ streamingMsgId, thinking, turnInFlight }: Props) {
   const history = useAgent((s) => s.history);
   const activeConv = history.conversations.find(
     (c) => c.id === history.activeConversationId,
@@ -43,6 +46,7 @@ export function MessageList({ streamingMsgId, thinking }: Props) {
               key={m.id}
               msg={m}
               streaming={streamingMsgId === m.id}
+              turnInFlight={turnInFlight}
             />
           );
         }

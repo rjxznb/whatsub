@@ -254,6 +254,15 @@ pub async fn download(
         args.push(js);
     }
 
+    // Route through the user's proxy (Clash / V2Ray) when one is resolved. On a
+    // GFW machine YouTube is reachable only via the proxy; the installed app
+    // (launched from the Start menu) doesn't inherit the shell's HTTP_PROXY, so
+    // we pass it explicitly. None → direct. See core::proxy.
+    if let Some(proxy) = crate::core::proxy::resolve_yt_dlp_proxy() {
+        args.push("--proxy".into());
+        args.push(proxy);
+    }
+
     args.extend([
         // YouTube URLs frequently include &list=...&index=N when copied from a
         // playlist context. Without this flag yt-dlp would walk the WHOLE

@@ -149,9 +149,14 @@ pub async fn youtube_search(
         .arg("--socket-timeout")
         .arg("10")
         .arg("--retries")
-        .arg("2")
-        .arg("--no-call-home")
-        .stdin(Stdio::null())
+        .arg("2");
+    // Route through the user's proxy (Clash / V2Ray) when resolved — without it
+    // the installed app (no inherited HTTP_PROXY) can't reach YouTube on a GFW
+    // network and the search times out. See core::proxy.
+    if let Some(proxy) = crate::core::proxy::resolve_yt_dlp_proxy() {
+        cmd.arg("--proxy").arg(proxy);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // If the timeout below fires, the wait_with_output() future is dropped,

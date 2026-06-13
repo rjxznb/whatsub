@@ -1,4 +1,5 @@
 pub mod paths;
+pub mod proxy;
 pub mod ids;
 pub mod srt;
 pub mod progress;

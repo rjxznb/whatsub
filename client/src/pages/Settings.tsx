@@ -183,6 +183,26 @@ export function Settings() {
         </section>
 
         <section>
+          <h2 className="font-semibold mb-3">网络</h2>
+          <div className="space-y-1.5">
+            <div className="text-sm font-medium text-zinc-200">yt-dlp 代理</div>
+            <input
+              type="text"
+              value={draft.ytDlpProxy ?? ""}
+              onChange={(e) => setDraft({ ...draft, ytDlpProxy: e.target.value })}
+              placeholder="留空 = 自动检测（如 http://127.0.0.1:7890）"
+              className="w-full px-2.5 py-1.5 rounded bg-zinc-800 border border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 box-border"
+            />
+            <p className="text-[10px] text-zinc-500 leading-relaxed">
+              访问 / 搜索 YouTube 需要代理时填这里（Clash 默认{" "}
+              <code>http://127.0.0.1:7890</code>）。留空会自动用系统环境变量、或探测本机常见代理端口；
+              填 <code>off</code> 强制直连。<b>安装版从开始菜单启动时拿不到终端里的代理变量</b>，
+              如果搜索/导入一直「工具超时」，在这里显式填一次即可。
+            </p>
+          </div>
+        </section>
+
+        <section>
           <h2 className="font-semibold mb-3">字幕识别引擎</h2>
           {(() => {
             // Single-row dropdown + action, then description + (optional)

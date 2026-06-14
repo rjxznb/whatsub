@@ -340,11 +340,34 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
 
       // §8.3 — Args schema validation via ajv. Failure feeds error back as a
       // ToolMessage so the LLM can retry with corrected args on the next pass.
-      const validate = getValidator(tool);
-      if (!validate(call.args)) {
-        const errs = (validate.errors ?? [])
-          .map((e) => `${e.instancePath || "/"} ${e.message ?? "invalid"}`)
-          .join("; ");
+      //
+      // BEST-EFFORT: ajv compiles schemas with `new Function()` (codegen). The
+      // RELEASE build's CSP forbids 'unsafe-eval', so getValidator/validate
+      // throws `EvalError` there. Previously that propagated out of runTurn and
+      // aborted the WHOLE turn before the tool ran — the agent froze at
+      // "准备调用 <tool>" with no loading and no error (this is the entire
+      // release-only bug; dev's relaxed CSP allowed eval so it worked). If the
+      // validator can't run, skip it and execute: tools handle their own args
+      // and path-safety is enforced Rust-side (paths::video_dir). Dev keeps
+      // full validation.
+      let validationError: string | null = null;
+      try {
+        const validate = getValidator(tool);
+        if (!validate(call.args)) {
+          validationError = (validate.errors ?? [])
+            .map((e) => `${e.instancePath || "/"} ${e.message ?? "invalid"}`)
+            .join("; ");
+        }
+      } catch (e) {
+        dbg(
+          `validator-skipped name=${call.name} err=${String(
+            e instanceof Error ? e.message : e,
+          )}`,
+        );
+        // CSP blocked ajv's codegen — proceed without schema validation.
+        validationError = null;
+      }
+      if (validationError !== null) {
         const msg: ToolMessage = {
           role: "tool",
           id: genMsgId(),
@@ -352,7 +375,7 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
           callId: call.callId,
           name: call.name,
           status: "error",
-          errorMessage: `Invalid args for ${call.name}: ${errs}`,
+          errorMessage: `Invalid args for ${call.name}: ${validationError}`,
           durationMs: 0,
         };
         opts.onMessage(msg);

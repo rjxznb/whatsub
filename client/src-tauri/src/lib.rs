@@ -40,6 +40,7 @@ pub fn run() {
             commands::analysis::delete_analysis,
             commands::agent::agent_history_load,
             commands::agent::agent_history_save,
+            commands::agent::agent_debug_log,
             commands::analysis::load_transcript,
             commands::analysis::video_source_path,
             commands::analysis::write_text_file,

@@ -103,6 +103,18 @@ export async function sendAgentMessage(
     // runTurn never throws on signal abort; a thrown error is unexpected.
     // eslint-disable-next-line no-console
     console.warn("[agent/send] runTurn error:", e);
+    // Diagnostic (temporary): a thrown runTurn leaves any tool_call with no
+    // tool result → the UI sticks at "准备调用". Record it so we can see it.
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      void invoke("agent_debug_log", {
+        line: `${new Date().toISOString()} sendAgentMessage CAUGHT runTurn error: ${String(
+          e instanceof Error ? (e.stack ?? e.message) : e,
+        )}`,
+      }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
   }
 
   // Find the last assistant message and concatenate its text blocks.

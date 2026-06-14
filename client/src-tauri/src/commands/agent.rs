@@ -122,6 +122,26 @@ pub fn agent_history_save(history: AgentHistory) -> AppResult<usize> {
     agent_history_save_to(&path, history)
 }
 
+/// Append one diagnostic line to `<app_data>/agent-debug.log` (capped at ~1 MB
+/// so it can't grow unbounded). Used to trace the ReAct runtime's decisions in
+/// release builds where the WebView console isn't reachable. Best-effort — any
+/// error is swallowed so logging never affects a turn.
+#[tauri::command]
+pub fn agent_debug_log(line: String) {
+    let Ok(dir) = paths::app_data_dir() else { return };
+    let path = dir.join("agent-debug.log");
+    // Trim if it got large.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 1_000_000 {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -152,6 +152,37 @@ describe("runTurn ReAct loop", () => {
     expect(provider.streamWithTools).toHaveBeenCalledTimes(2);
   });
 
+  it("tool_calls execute even when provider returns end_turn (DeepSeek/relay quirk)", async () => {
+    // Some OpenAI-compatible providers/relays return finish_reason "stop"
+    // (→ end_turn) even when the turn emitted tool_calls. The runtime must
+    // still execute them (gating on stopReason left the agent stuck at
+    // "准备调用 <tool>" with no loading and no error).
+    TOOLS.push(noopTool("greet", { execute: async () => ({ message: "hello" }) }));
+    const provider = mockProvider([
+      [
+        { type: "text", delta: "调用工具" },
+        { type: "tool_call_start", callId: "c1", name: "greet" },
+        { type: "tool_call_args", callId: "c1", deltaJson: "{}" },
+        { type: "tool_call_end", callId: "c1" },
+        { type: "stop_reason", reason: "end_turn" }, // NOT tool_use
+      ],
+      [
+        { type: "text", delta: "完成" },
+        { type: "stop_reason", reason: "end_turn" },
+      ],
+    ]);
+    const opts = makeOpts(provider);
+    await runTurn(opts);
+
+    const calls = opts._spies.onMessage.mock.calls.map((c) => c[0] as Message);
+    // The tool still runs: user, assistant#1, tool, assistant#2.
+    expect(calls.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"]);
+    const tool = calls[2] as ToolMessage;
+    expect(tool.status).toBe("ok");
+    expect(tool.name).toBe("greet");
+    expect(provider.streamWithTools).toHaveBeenCalledTimes(2);
+  });
+
   it("5-tool cap: 6th tool call rejected with cap error, turn ends", async () => {
     // Register one tool used in every iteration
     TOOLS.push(noopTool("ping"));

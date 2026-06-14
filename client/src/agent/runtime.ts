@@ -254,13 +254,23 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
     opts.onMessage(assistantMsg);
     workingHistory = [...workingHistory, assistantMsg];
 
-    // Terminal states — turn ends here.
-    if (stopReason !== "tool_use") return;
+    // Stop the turn on a user abort or an adapter-level error.
+    if (stopReason === "cancelled" || stopReason === "error") return;
 
     // — Execute the tool_calls we collected this iteration. —
     const calls = assistantMsg.blocks.filter(
       (b): b is Extract<AssistantBlock, { type: "tool_call" }> => b.type === "tool_call",
     );
+
+    // Execute whenever the model emitted tool_calls, REGARDLESS of the literal
+    // stop_reason. Some OpenAI-compatible providers (DeepSeek, the whatSub
+    // managed relay) return finish_reason "stop" — or end the SSE without any
+    // finish_reason at all — even when the turn contained tool_calls. Gating
+    // strictly on stopReason === "tool_use" left those calls unexecuted and the
+    // agent stuck at "准备调用 <tool>" with no loading and no error. A tool_call
+    // block being present means the model wants it run; zero calls ⇒ the turn is
+    // genuinely terminal (plain text answer / max_tokens).
+    if (calls.length === 0) return;
 
     for (const call of calls) {
       if (opts.signal.aborted) return;

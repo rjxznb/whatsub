@@ -215,6 +215,44 @@ describe("runTurn ReAct loop", () => {
     expect(capMsgs[0].callId).toBe("c6");
   });
 
+  it("after the cap, runs a final NO-tools turn so the model summarizes", async () => {
+    TOOLS.push(noopTool("ping"));
+    const toolUseBatch = (callId: string): AgentEvent[] => [
+      { type: "tool_call_start", callId, name: "ping" },
+      { type: "tool_call_args", callId, deltaJson: "{}" },
+      { type: "tool_call_end", callId },
+      { type: "stop_reason", reason: "tool_use" },
+    ];
+    const provider = mockProvider([
+      toolUseBatch("c1"),
+      toolUseBatch("c2"),
+      toolUseBatch("c3"),
+      toolUseBatch("c4"),
+      toolUseBatch("c5"),
+      toolUseBatch("c6"), // hits cap → break to a final no-tools iteration
+      [
+        { type: "text", delta: "这是给你的总结" },
+        { type: "stop_reason", reason: "end_turn" },
+      ],
+    ]);
+    const opts = makeOpts(provider);
+    await runTurn(opts);
+
+    // The final provider call must offer NO tools.
+    const provCalls = provider.streamWithTools.mock.calls as unknown as Array<
+      [{ tools: unknown[] }]
+    >;
+    const lastArgs = provCalls[provCalls.length - 1][0];
+    expect(lastArgs.tools).toEqual([]);
+    // And the model produced a closing text summary.
+    const msgs = opts._spies.onMessage.mock.calls.map((c) => c[0] as Message);
+    const assts = msgs.filter((m) => m.role === "assistant") as AssistantMessage[];
+    const lastAsst = assts[assts.length - 1];
+    expect(
+      lastAsst.blocks.some((b) => b.type === "text" && b.text.includes("总结")),
+    ).toBe(true);
+  });
+
   it("unknown tool name → ToolMessage(error) with 'Unknown tool'", async () => {
     // Don't register anything.
     const provider = mockProvider([

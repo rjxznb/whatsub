@@ -85,7 +85,10 @@ const STATIC_SYSTEM_PROMPT = `你是 whatsub Agent —— whatsub 桌面 app 的
    • HIGH (删本地视频、取消云同步、重新解析视频)：app 会弹系统模态对话框。同上，调用前一句话说明。
 4. 工具失败时读错误信息再决定：重试 / 换参数 / 改问用户。绝不盲目用同样参数重试。
 5. 用户请求不需要任何工具（如"这个英语短语什么意思"、"解释一下连读"），直接回答即可。
-6. 一次响应里串调到 3 个工具还没收敛就停下来问用户，别无脑链式调用。
+6. 查询/搜索类工具（youtube_search、corpus_browse、list_* 等）：拿到结果就停下来展示给用户。
+   不要为同一个请求反复搜、也不要一次并行发起多个相同搜索；一次搜一个最贴切的关键词就够。
+   没搜到合适的，就把已有结果给用户、或请他换个说法，别自己狂搜到上限。
+   其它工具串调超过 3 个还没收敛，也停下来问用户，别无脑链式调用。
 7. 如果不需要工具，直接回答用户，不要硬塞一个工具调用进去。`;
 
 const REACT_TOOL_CAP = 5;
@@ -172,12 +175,18 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
   // iterations, not per-iteration. Hitting this cap injects an error
   // ToolMessage explaining why we stopped, then finalizes the turn.
   let toolCallsThisTurn = 0;
+  // Set once the per-turn tool cap is hit. The next (and final) provider call
+  // then runs with NO tools offered, forcing the model to summarize what it
+  // already found instead of dead-ending on a raw "已达上限" error card.
+  let capReached = false;
 
   // ReAct outer loop — each iteration = one LLM call.
   while (true) {
     if (opts.signal.aborted) return;
 
-    const tools = listTools(opts.page);
+    // After the tool cap, offer NO tools so the model must answer with text
+    // (a final summary of results so far) rather than calling yet another tool.
+    const tools = capReached ? [] : listTools(opts.page);
     // Reduce the history actually sent to the LLM (store keeps the full copy):
     // fold past-turn large tool results + drop oldest messages if we'd blow the
     // model's context budget. See agent/history.ts.
@@ -303,8 +312,11 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
 
       toolCallsThisTurn++;
       if (toolCallsThisTurn > REACT_TOOL_CAP) {
-        // §6.9 — synthesize an error ToolMessage explaining the cap and
-        // finalize the turn so the LLM doesn't keep grinding away.
+        // §6.9 — cap hit. Tell the model to STOP and answer from what it has,
+        // then break to a final NO-tools iteration (capReached) so it actually
+        // summarizes instead of the turn dead-ending on an error card. Any
+        // other calls in this batch become dangling tool_calls — history.ts
+        // ensureToolCallsAnswered backfills them so the next call won't 400.
         const msg: ToolMessage = {
           role: "tool",
           id: genMsgId(),
@@ -312,12 +324,13 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
           callId: call.callId,
           name: call.name,
           status: "error",
-          errorMessage: `已达本轮工具调用上限 (${REACT_TOOL_CAP})，请用户补充信息后继续。`,
+          errorMessage: `已达本轮工具调用上限 (${REACT_TOOL_CAP})。停止调用工具，直接根据已经拿到的结果回答用户。`,
           durationMs: 0,
         };
         opts.onMessage(msg);
         workingHistory = [...workingHistory, msg];
-        return;
+        capReached = true;
+        break;
       }
 
       const tool = getTool(call.name);

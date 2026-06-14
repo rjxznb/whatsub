@@ -66,6 +66,11 @@ export const youtubeSearchTool: ToolDef<YouTubeSearchArgs, YouTubeSearchResult> 
       if (args.maxDurationSec != null && d > args.maxDurationSec) return false;
       return true;
     });
-    return { hits: filtered, query: args.query };
+    // If the duration window filtered EVERYTHING out, fall back to the
+    // unfiltered hits. An empty result makes the model think the search failed
+    // and re-search with new params until it trips the per-turn tool cap; always
+    // handing back something to show breaks that loop.
+    const result = filtered.length > 0 ? filtered : hits;
+    return { hits: result, query: args.query };
   },
 };

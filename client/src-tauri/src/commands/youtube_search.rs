@@ -163,6 +163,13 @@ pub async fn youtube_search(
         // which drops the Child — kill_on_drop then reaps the yt-dlp process so
         // a hung search doesn't linger after we've already returned an error.
         .kill_on_drop(true);
+    // Windows: don't flash a console window for the yt-dlp child. The download
+    // pipeline avoids this by going through the shell-plugin sidecar(); this
+    // command spawns yt-dlp directly, so it must set CREATE_NO_WINDOW itself —
+    // otherwise every search (and there can be several per agent turn) pops a
+    // cmd window.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW (tokio Command native method)
     let child = cmd
         .spawn()
         .map_err(|e| AppError::Subprocess(format!("yt-dlp spawn failed: {}", e)))?;

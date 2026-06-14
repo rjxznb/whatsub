@@ -195,11 +195,15 @@ pub async fn run_external_with_callback<F>(
 where
     F: FnMut(&str),
 {
-    let mut child = tokio::process::Command::new(exe)
-        .args(args)
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Windows: don't flash a console window for the external (AppData) yt-dlp.
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let mut child = cmd
         .spawn()
         .map_err(|e| {
             AppError::Subprocess(format!("spawn {}: {e}", exe.display()))

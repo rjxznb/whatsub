@@ -40,20 +40,6 @@ import { getTool, listTools } from "./registry";
 import { ConfirmationGate } from "./gate";
 import { snapshot, render } from "./context";
 import { prepareWireHistory, modelContextBudget } from "./history";
-import { invoke } from "@tauri-apps/api/core";
-
-/** Fire-and-forget diagnostic line → `<app_data>/agent-debug.log` (Rust
- *  `agent_debug_log`). Best-effort; never throws into the turn. Temporary
- *  instrumentation to diagnose the release-only "stuck at 准备调用" report. */
-function dbg(line: string): void {
-  try {
-    void invoke("agent_debug_log", { line: `${new Date().toISOString()} ${line}` }).catch(
-      () => {},
-    );
-  } catch {
-    /* ignore */
-  }
-}
 
 // Spec §7.1: identity block, plus a private-tutor responsibility section.
 const STATIC_SYSTEM_PROMPT = `你是 whatsub Agent —— whatsub 桌面 app 的内置 AI 私教。
@@ -240,7 +226,6 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
         const acc = toolAccumulators.get(ev.callId);
         if (acc) acc.argsBuf += ev.deltaJson;
       } else if (ev.type === "tool_call_end") {
-        dbg(`ev tool_call_end callId=${ev.callId}`);
         const acc = toolAccumulators.get(ev.callId);
         if (!acc) continue;
         let parsedArgs: unknown;
@@ -258,7 +243,6 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
           args: parsedArgs,
         });
       } else if (ev.type === "stop_reason") {
-        dbg(`ev stop_reason=${ev.reason}`);
         // Map provider's stop reason. "tool_use" means the model wants the
         // runtime to execute tool_calls and re-invoke; everything else is
         // terminal for this turn.
@@ -266,7 +250,6 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
         else if (ev.reason === "max_tokens") stopReason = "max_tokens";
         else stopReason = "end_turn";
       } else if (ev.type === "error") {
-        dbg(`ev error msg=${ev.message ?? ""}`);
         // Spec §8.10 / §8.4 — adapter-level error (malformed response OR a
         // whatSub relay rejection carrying friendly copy). Mark error, keep
         // the message so AssistantBubble shows it instead of "连接中断".
@@ -279,23 +262,14 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
     assistantMsg.stopReason = stopReason;
     opts.onMessage(assistantMsg);
     workingHistory = [...workingHistory, assistantMsg];
-    dbg(
-      `turn-end stopReason=${stopReason} blocks=[${assistantMsg.blocks
-        .map((b) => b.type)
-        .join(",")}] aborted=${opts.signal.aborted}`,
-    );
 
     // Stop the turn on a user abort or an adapter-level error.
-    if (stopReason === "cancelled" || stopReason === "error") {
-      dbg(`return-no-exec reason=${stopReason}`);
-      return;
-    }
+    if (stopReason === "cancelled" || stopReason === "error") return;
 
     // — Execute the tool_calls we collected this iteration. —
     const calls = assistantMsg.blocks.filter(
       (b): b is Extract<AssistantBlock, { type: "tool_call" }> => b.type === "tool_call",
     );
-    dbg(`calls=${calls.length} names=[${calls.map((c) => c.name).join(",")}]`);
 
     // Execute whenever the model emitted tool_calls, REGARDLESS of the literal
     // stop_reason. Some OpenAI-compatible providers (DeepSeek, the whatSub
@@ -371,12 +345,7 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
             .map((e) => `${e.instancePath || "/"} ${e.message ?? "invalid"}`)
             .join("; ");
         }
-      } catch (e) {
-        dbg(
-          `validator-skipped name=${call.name} err=${String(
-            e instanceof Error ? e.message : e,
-          )}`,
-        );
+      } catch {
         // CSP blocked ajv's codegen — proceed without schema validation.
         validationError = null;
       }
@@ -448,7 +417,6 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
       const startTs = Date.now();
       const execCtx: ExecuteContext = { signal: opts.signal };
       let timer: ReturnType<typeof setTimeout> | null = null;
-      dbg(`exec-start name=${call.name} callId=${call.callId}`);
       try {
         const result = await Promise.race([
           tool.execute(call.args, execCtx),
@@ -493,10 +461,8 @@ export async function runTurn(opts: RunTurnOpts): Promise<void> {
         };
         opts.onMessage(msg);
         workingHistory = [...workingHistory, msg];
-        dbg(`exec-ok name=${call.name} durationMs=${Date.now() - startTs}`);
       } catch (err) {
         if (timer) clearTimeout(timer);
-        dbg(`exec-error name=${call.name} msg=${String(err instanceof Error ? err.message : err)}`);
         // §8.1 — tool execution failure. Propagate raw error string to the
         // LLM verbatim (no Chinese translation — LLMs handle the structured
         // Rust error tags better than rewritten copy).

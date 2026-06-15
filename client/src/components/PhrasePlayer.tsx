@@ -13,6 +13,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { VideoOff } from "lucide-react";
 
 interface Props {
   /** Library entry id (also the local-file lookup key). */
@@ -69,7 +70,18 @@ export function PhrasePlayer({ videoId, youtubeId, seekTo }: Props) {
     return <div className="aspect-video w-full grid place-items-center bg-zinc-900 text-xs text-zinc-500">加载视频…</div>;
   }
   if (res.state === "unavailable") {
-    return <div className="aspect-video w-full grid place-items-center bg-zinc-900 text-xs text-zinc-500">视频已不可用</div>;
+    // Reached when there's no local file AND no YouTube fallback — i.e. the
+    // source was a local/imported video that has since been deleted. The
+    // corpus phrase itself is kept; only the video clip is gone.
+    return (
+      <div className="aspect-video w-full grid place-items-center bg-zinc-900">
+        <div className="flex flex-col items-center gap-1.5 px-4 text-center">
+          <VideoOff size={22} className="text-zinc-600" />
+          <div className="text-xs text-zinc-400">源视频已删除</div>
+          <div className="text-[10px] text-zinc-600">短语已保留，但本地视频已不在，无法播放</div>
+        </div>
+      </div>
+    );
   }
   if (res.state === "local") {
     return (
@@ -78,6 +90,10 @@ export function PhrasePlayer({ videoId, youtubeId, seekTo }: Props) {
         src={res.fileSrc}
         controls
         className="aspect-video w-full bg-black"
+        // Defense-in-depth: if the local file fails to load (deleted between
+        // resolution and play, moved, corrupt), fall back to the placeholder
+        // instead of a black player.
+        onError={() => setRes({ state: "unavailable" })}
         onLoadedMetadata={(e) => {
           if (seekTo != null) e.currentTarget.currentTime = Math.max(0, seekTo);
         }}

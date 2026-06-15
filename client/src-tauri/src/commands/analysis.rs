@@ -55,6 +55,15 @@ pub fn load_transcript(video_id: String) -> AppResult<Option<String>> {
 #[tauri::command]
 pub fn video_source_path(video_id: String) -> AppResult<String> {
     let path = paths::video_dir(&video_id)?.join("source.mp4");
+    // Only report a path that actually exists. After a video is deleted the
+    // dir is gone, but callers (e.g. the corpus PhrasePlayer) would otherwise
+    // get a stale path and try to play a missing file → a black/broken player.
+    // Returning NotFound lets them show a proper "源视频已删除" placeholder.
+    if !path.exists() {
+        return Err(AppError::NotFound(format!(
+            "source video not found for {video_id}"
+        )));
+    }
     Ok(path.to_string_lossy().to_string())
 }
 

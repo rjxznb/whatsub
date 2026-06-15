@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { X, Trash2, Cloud, Download } from "lucide-react";
+import { X, Trash2, Cloud, Download, Loader2 } from "lucide-react";
 import { listSynced, unsyncFromCloud, friendlySyncError, type CloudLibraryEntry } from "../lib/api/librarySync";
 import { libraryQuota, type Quota } from "../lib/api/quota";
 import { useLibrary } from "../store/library";
@@ -212,24 +212,29 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
                     </div>
                   )}
                 </div>
-                {!isLocal && (
+                {/* Downloading takes priority over 已在本地: materialize inserts a
+                    placeholder library entry first (so isLocal flips true), but we
+                    must keep showing the spinner until the download actually
+                    finishes. materializeStatus lives in a module store, so closing
+                    + reopening this dialog mid-download still shows the spinner. */}
+                {isMaterializing ? (
+                  <span className="flex items-center gap-1 text-xs text-blue-400 px-2 py-1.5 flex-shrink-0">
+                    <Loader2 size={14} className="animate-spin" />
+                    正在下载…
+                  </span>
+                ) : isLocal ? (
+                  <span className="text-xs text-emerald-500 px-2 flex-shrink-0">已在本地</span>
+                ) : (
                   <button
                     onClick={() => materialize(e)}
-                    disabled={isMaterializing || busyIds.has(e.id)}
+                    disabled={busyIds.has(e.id)}
                     className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 disabled:opacity-40 px-2 py-1.5 rounded flex-shrink-0 transition-colors"
                     title="下载到本地（视频+字幕+分析）"
                     aria-label={`下载到本地 ${e.title}`}
                   >
-                    {isMaterializing ? (
-                      <span className="animate-spin">⟳</span>
-                    ) : (
-                      <Download size={14} />
-                    )}
-                    <span>{isMaterializing ? "正在后台下载…" : "下载到本地"}</span>
+                    <Download size={14} />
+                    <span>下载到本地</span>
                   </button>
-                )}
-                {isLocal && (
-                  <span className="text-xs text-emerald-500 px-2 flex-shrink-0">已在本地</span>
                 )}
                 <button
                   onClick={() => unsync(e.id, e.title)}

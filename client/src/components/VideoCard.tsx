@@ -75,7 +75,15 @@ export function VideoCard({
         {entry.thumbnailPath && (
           <img
             draggable={false}
-            src={convertFileSrc(entry.thumbnailPath)}
+            // A materialize placeholder carries a REMOTE thumbUrl
+            // (whatsub.eversay.cc/api/library/thumb/:id) until the local
+            // thumb.jpg lands — use it as-is. Local paths go through
+            // convertFileSrc → asset://. (CSP img-src allows the backend host.)
+            src={
+              /^https?:\/\//.test(entry.thumbnailPath)
+                ? entry.thumbnailPath
+                : convertFileSrc(entry.thumbnailPath)
+            }
             alt=""
             className="w-full h-full object-cover"
           />

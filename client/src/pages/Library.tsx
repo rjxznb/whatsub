@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { notify } from "../store/appDialog";
 import { motion } from "framer-motion";
-import { ChevronsLeft, ChevronsRight, Cloud } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Cloud, Loader2 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useLibrary } from "../store/library";
@@ -611,7 +611,7 @@ export function Library() {
                       <>
                         {materializeStatus[v.id] === "downloading" ? (
                           <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-blue-300 text-xs gap-1 pointer-events-none">
-                            <span className="animate-spin">⟳</span> 正在下载…
+                            <Loader2 size={14} className="animate-spin" /> 正在下载…
                           </div>
                         ) : v.status === "analyzing" ? (
                           isLive ? (
@@ -672,7 +672,7 @@ export function Library() {
                         <>
                           {materializeStatus[v.id] === "downloading" ? (
                             <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-blue-300 text-xs gap-1 pointer-events-none">
-                              <span className="animate-spin">⟳</span> 正在下载…
+                              <Loader2 size={14} className="animate-spin" /> 正在下载…
                             </div>
                           ) : v.status === "analyzing" ? (
                             isLive ? (

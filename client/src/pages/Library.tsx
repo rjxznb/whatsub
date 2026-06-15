@@ -873,8 +873,8 @@ export function Library() {
       )}
 
       {deleteCascade && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100]">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-5 w-[440px] space-y-3">
+        <div className="fixed inset-0 z-[100] grid place-items-center bg-black/60 backdrop-blur-sm">
+          <div className="w-[440px] max-w-[92vw] rounded-2xl bg-zinc-900 border border-white/10 shadow-2xl p-5 space-y-3">
             <h2 className="text-base font-semibold text-zinc-100">删除「{deleteCascade.entry.title}」</h2>
             <p className="text-sm text-zinc-400">
               这个条目已同步到云端（iOS 可见）。请选择删除范围：
@@ -921,7 +921,7 @@ export function Library() {
                     setDeleteCascade(null);
                   }
                 }}
-                className="w-full px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-sm rounded disabled:opacity-50 transition-colors"
+                className="w-full px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-sm rounded disabled:opacity-50 transition-colors"
               >
                 仅删本地（保留云端 + iOS 可见）
               </button>

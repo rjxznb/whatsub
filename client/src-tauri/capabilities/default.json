@@ -40,6 +40,7 @@
       "allow": [
         { "name": "yt-dlp", "sidecar": true, "args": true },
         { "name": "ffmpeg", "sidecar": true, "args": true },
+        { "name": "ffprobe", "sidecar": true, "args": true },
         { "name": "whisper-cli", "sidecar": true, "args": true },
         {
           "name": "open",

@@ -133,6 +133,34 @@ pub async fn downscale_jpeg(
     Ok(())
 }
 
+/// Probe a media file's duration in seconds via ffprobe. Best-effort: returns
+/// 0.0 if it can't be determined (a missing duration just hides the library
+/// card's duration line — it must never fail the import). yt-dlp gives URL
+/// imports their duration for free; LOCAL-file imports have none, so we probe.
+pub async fn probe_duration_secs(app: &AppHandle, path: &Path) -> f64 {
+    let p = path.to_string_lossy().to_string();
+    let out = run_sidecar(
+        app,
+        "ffprobe",
+        &[
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            &p,
+        ],
+        |_line: &str| {},
+        None,
+    )
+    .await;
+    match out {
+        Ok(s) => s.trim().parse::<f64>().unwrap_or(0.0).max(0.0),
+        Err(_) => 0.0,
+    }
+}
+
 /// Transcode a video to a mobile-friendly 720p H.264 MP4 (never upscales) with
 /// faststart (moov atom up front for progressive streaming). Used by library
 /// cloud-sync before uploading to OSS.

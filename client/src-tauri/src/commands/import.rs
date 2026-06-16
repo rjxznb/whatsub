@@ -173,12 +173,16 @@ async fn run_import(
             std::fs::copy(&req.source_value, &dest)?;
             let thumb = out_dir.join("thumb.jpg");
             ffmpeg::extract_thumbnail(app, &dest, &thumb, video_id, Some(cancel)).await?;
+            // Probe the duration (yt-dlp gives URL imports this for free; local
+            // files have none, so the card would render shorter without a
+            // duration line). Best-effort — 0.0 just hides the line.
+            let dur = ffmpeg::probe_duration_secs(app, &dest).await;
             let title = std::path::Path::new(&req.source_value)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Untitled")
                 .to_string();
-            (dest, thumb, title, 0.0)
+            (dest, thumb, title, dur)
         }
         _ => unreachable!(),
     };

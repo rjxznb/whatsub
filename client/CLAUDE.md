@@ -227,6 +227,12 @@ cd src-tauri && cargo test    # safe: tests use temp paths only
 
 > Dev mode: Tauri puts sidecars at `target/debug/<basename>.exe` (no triple). If you delete those during cleanup, dev spawn fails with `os error 2`.
 
+### Fresh checkout on a new machine (sidecars are NOT in the repo)
+
+`src-tauri/binaries/` is **gitignored** (`.exe`/`.dll`/`.dylib`/`.metallib` excluded — only `README.md` is committed). So a fresh `git clone` has an EMPTY `binaries/` and `pnpm tauri dev`/`build` fails until you populate it with: `yt-dlp` / `ffmpeg` / `ffprobe` / `node` / `whisper-cli` (all `-x86_64-pc-windows-msvc.exe` on Win) + the whisper/ggml DLLs (`whisper.dll`, `ggml*.dll`). The 3 MB IPA dict (`public/data/ipa-en-us.json`) IS committed; whisper models (`ggml-*.bin`) are downloaded in-app, not bundled. The app talks to the public prod backend (`whatsub.eversay.cc`) — no local backend/secrets needed for dev.
+
+**Windows bootstrap:** `scripts/setup-windows.ps1` checks prereqs (Git / Node / pnpm / Rust+MSVC), clones (or reuses the repo it's in), **downloads** the standard sidecars (yt-dlp/ffmpeg/ffprobe/node), **extracts** the custom whisper DLLs from a `whisper-win-bits.zip` placed next to it (the Vulkan-built `whisper.dll`/`whisper-cli`/`ggml*.dll` — these can't be auto-downloaded; zip them from a working machine's `binaries/`), then `pnpm install`. Fallback when downloads are GFW-blocked: copy the whole `client/src-tauri/binaries/` folder from a working machine and just run `pnpm install`. A release `pnpm tauri build` additionally needs the signing key (`%USERPROFILE%/.tauri/whatsub.key` + `TAURI_SIGNING_PRIVATE_KEY`); plain `tauri dev` does not. The CI (`.github/workflows/release.yml`) is the source of truth for which sidecar versions ship.
+
 ## Release workflow
 
 Three-repo dual-publish (private source / GitHub mirror / JiHu mirror) with minisign-signed updater. Step-by-step instructions, signing key handling, JiHu setup, and Updater UX live in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#release-workflow). The non-negotiables:

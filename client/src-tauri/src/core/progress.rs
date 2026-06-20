@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+/// One Vulkan compute device as reported by whisper-cli's startup log.
+/// `discrete` is derived from the `uma:` flag (integrated GPUs share system
+/// memory → `uma: 1`; discrete cards → `uma: 0`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuDevice {
+    pub index: u32,
+    pub name: String,
+    pub discrete: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "stage")]
 pub enum PipelineEvent {
@@ -84,6 +94,16 @@ pub enum PipelineEvent {
         /// Human-readable backend name, e.g. "Vulkan / NVIDIA GeForce RTX 4090"
         /// or "CPU".
         name: String,
+    },
+    /// Emitted once after an *unfiltered* transcribe run, listing every Vulkan
+    /// device whisper-cli enumerated. The frontend persists this inventory to
+    /// settings.json (`whisperGpus`) so the Settings page can show the user
+    /// which cards exist, and so the next run can pin the discrete GPU via
+    /// `GGML_VK_VISIBLE_DEVICES`. Only emitted when the run did NOT already pin
+    /// a device (a pinned run only sees 1 device, so the full list would be
+    /// lost) and at least one device was found.
+    GpuDevices {
+        devices: Vec<GpuDevice>,
     },
     /// Burn-in subtitle export progress (ffmpeg re-encode).
     Exporting {

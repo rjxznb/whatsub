@@ -20,6 +20,24 @@ pub async fn run_sidecar<F>(
     app: &AppHandle,
     bin_name: &str,
     args: &[&str],
+    on_stderr_line: F,
+    cancel: Option<&CancellationToken>,
+) -> AppResult<String>
+where
+    F: FnMut(&str),
+{
+    run_sidecar_env(app, bin_name, args, &[], on_stderr_line, cancel).await
+}
+
+/// Like [`run_sidecar`] but injects extra environment variables into the child
+/// process. Used by whisper.rs to pin the Vulkan device via
+/// `GGML_VK_VISIBLE_DEVICES`. Kept as a separate entry point so the ~9 other
+/// sidecar callers don't all have to pass an empty env slice.
+pub async fn run_sidecar_env<F>(
+    app: &AppHandle,
+    bin_name: &str,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
     mut on_stderr_line: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
@@ -31,6 +49,9 @@ where
         .sidecar(bin_name)
         .map_err(|e| AppError::Subprocess(format!("sidecar {bin_name}: {e}")))?
         .args(args);
+    for (k, v) in extra_env {
+        cmd = cmd.env(k, v);
+    }
 
     // Windows-only: bundle.resources puts our companion DLLs (whisper.dll,
     // ggml*.dll) at <install>/resources/binaries/, NOT next to the sidecar

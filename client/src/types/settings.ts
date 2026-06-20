@@ -31,6 +31,14 @@ export interface GeminiConfig {
   model: string;
 }
 
+/** One Vulkan compute device as reported by whisper-cli. `discrete` is derived
+ *  from the `uma:` flag (integrated GPUs report `uma: 1`). */
+export interface WhisperGpu {
+  index: number;
+  name: string;
+  discrete: boolean;
+}
+
 export interface Settings {
   llmProvider: LlmProvider;
   /** Vendor preset id (e.g. "deepseek", "openai", "claude", "kimi", "custom").
@@ -63,6 +71,16 @@ export interface Settings {
    *  Format: "Vulkan / NVIDIA GeForce RTX 4090" | "CUDA / ..." | "CPU".
    *  Empty until the first transcribe completes. */
   whisperBackend?: string;
+  /** Whether transcription should prefer the discrete GPU on a hybrid laptop.
+   *  Default true. When on, the app pins the detected discrete card via
+   *  GGML_VK_VISIBLE_DEVICES so whisper.cpp's Vulkan backend doesn't default to
+   *  the (slower) integrated GPU at device 0. Turn off to use whisper's default
+   *  device selection. */
+  preferDiscreteGpu?: boolean;
+  /** Vulkan device inventory detected on the last *unfiltered* transcribe run,
+   *  persisted so Settings can list the cards and the next run can pin the
+   *  discrete one. Populated by the GpuDevices pipeline event. */
+  whisperGpus?: WhisperGpu[];
   /** Optional proxy for yt-dlp (search + download), e.g.
    *  `http://127.0.0.1:7890` (Clash) or `socks5://127.0.0.1:1080`. Needed on a
    *  GFW network where YouTube is reachable only via a proxy: the installed app
@@ -111,6 +129,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cookieSource: "none",
   cookiesFile: "",
   whisperBackend: "",
+  preferDiscreteGpu: true,
   ytDlpProxy: "",
   vendorKeys: {},
   bridgeEnabled: true,

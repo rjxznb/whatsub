@@ -18,6 +18,7 @@ import { requestChatDictation } from "./agent/chatBarBridge";
 import { mountDownloadQueueListener } from "./store/downloadQueue";
 import { useTauriEvent } from "./hooks/useTauriEvent";
 import { useSettings } from "./store/settings";
+import type { WhisperGpu } from "./types/settings";
 import { useAuth } from "./store/auth";
 import { useLibrary } from "./store/library";
 import { startImportQueuePolling } from "./store/importQueue";
@@ -63,11 +64,22 @@ function BackendListener() {
   useEffect(() => {
     if (!loaded) void load();
   }, [loaded, load]);
-  useTauriEvent<{ stage: string; name?: string }>("pipeline-event", (e) => {
-    if (e.stage !== "BackendDetected" || !e.name) return;
-    if (settings.whisperBackend === e.name) return;
-    void save({ ...settings, whisperBackend: e.name });
-  });
+  useTauriEvent<{ stage: string; name?: string; devices?: WhisperGpu[] }>(
+    "pipeline-event",
+    (e) => {
+      if (e.stage === "BackendDetected" && e.name) {
+        if (settings.whisperBackend === e.name) return;
+        void save({ ...settings, whisperBackend: e.name });
+        return;
+      }
+      // Persist the Vulkan device inventory so Settings can list the cards and
+      // the next transcribe can pin the discrete GPU.
+      if (e.stage === "GpuDevices" && Array.isArray(e.devices)) {
+        if (JSON.stringify(settings.whisperGpus ?? []) === JSON.stringify(e.devices)) return;
+        void save({ ...settings, whisperGpus: e.devices });
+      }
+    },
+  );
   return null;
 }
 

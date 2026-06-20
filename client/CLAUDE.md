@@ -213,6 +213,8 @@ Critical: Win cmake passes `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGG
 
 `pipeline/whisper.rs` parses the first `ggml_<backend>: 0 = <gpu>` stderr line, persists as `settings.whisperBackend` so Settings shows "GPU 加速" status.
 
+**Discrete-GPU selection on hybrid laptops (2026-06-21).** whisper.cpp's Vulkan backend defaults to Vulkan **device 0**, which on a dual-GPU laptop is almost always the integrated GPU — so transcription ran on the iGPU instead of the faster dGPU. Fix is **learn-on-first-run**: `transcribe()` parses ALL `ggml_vulkan: <i> = <name> … | uma: <u>` device lines (`parse_vulkan_device`; `discrete = uma != 1`, with a name-heuristic fallback) and emits a `GpuDevices` pipeline event after any *unfiltered* run. The frontend (`App.tsx` BackendListener) persists that inventory to `settings.whisperGpus`. On the **next** run, `gpu_preference()` reads `settings.preferDiscreteGpu` (default true) + the cached inventory and, if a discrete card sits at index ≠ 0, pins it via `GGML_VK_VISIBLE_DEVICES=<idx>` (injected through `spawn::run_sidecar_env`, a thin env-capable wrapper over `run_sidecar`). A pinned run only sees its 1 selected device, so we DON'T re-emit `GpuDevices` then (would clobber the full list). Net: first transcribe after install uses the iGPU + logs "已检测到独立显卡 … 下次自动启用"; every run after uses the dGPU. Settings → 显卡加速 shows the device list + a "优先使用独立显卡转录" toggle (only on machines that actually have the choice). Escape hatch: toggle off → whisper's default device 0. Staleness caveat: if the cached index later points at a missing device (hardware/driver change), that run may fall back to CPU — user toggles off/on to re-learn.
+
 ## Build / dev
 
 ```bash

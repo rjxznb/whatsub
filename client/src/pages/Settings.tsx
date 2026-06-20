@@ -336,6 +336,46 @@ export function Settings() {
               </span>
             )}
           </div>
+          {(() => {
+            // Only surface the discrete-GPU control on machines that actually
+            // have a choice (a hybrid laptop). Single-GPU desktops never see it.
+            const gpus = draft.whisperGpus ?? [];
+            const discrete = gpus.find((g) => g.discrete && g.index !== 0);
+            if (gpus.length <= 1 && !discrete) return null;
+            const prefer = draft.preferDiscreteGpu !== false;
+            const usingIndex = prefer && discrete ? discrete.index : 0;
+            return (
+              <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="accent-emerald-500"
+                    checked={prefer}
+                    onChange={(e) =>
+                      setDraft({ ...draft, preferDiscreteGpu: e.target.checked })
+                    }
+                  />
+                  <span className="text-xs text-zinc-200">优先使用独立显卡转录</span>
+                </label>
+                <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
+                  混合显卡笔记本默认会用核显跑 whisper；开启后自动切到独显加速（更快）。改动在下次转录生效。
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {gpus.map((g) => (
+                    <li key={g.index} className="flex items-center gap-2 text-[11px]">
+                      <span className={g.discrete ? "text-emerald-400" : "text-zinc-400"}>
+                        {g.discrete ? "独显" : "核显"}
+                      </span>
+                      <span className="text-zinc-300 truncate">{g.name}</span>
+                      {g.index === usingIndex && (
+                        <span className="text-emerald-400 font-medium">✓ 使用中</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })()}
         </section>
 
         <AccountSection />

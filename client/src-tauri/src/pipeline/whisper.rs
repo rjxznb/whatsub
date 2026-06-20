@@ -1,7 +1,7 @@
 use crate::core::paths;
-use crate::core::progress::{emit, PipelineEvent};
+use crate::core::progress::{emit, GpuDevice, PipelineEvent};
 use crate::error::{AppError, AppResult};
-use crate::pipeline::spawn::run_sidecar;
+use crate::pipeline::spawn::run_sidecar_env;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager};
@@ -384,7 +384,24 @@ pub async fn transcribe(
     // we just don't surface it.
     let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
     let last_progress_clone = last_progress.clone();
-    run_sidecar(
+    // ── GPU device selection ─────────────────────────────────────────────
+    // On a hybrid laptop whisper.cpp's Vulkan backend defaults to device 0,
+    // which is usually the integrated GPU. If a discrete card was detected on
+    // a previous (unfiltered) run and the user hasn't opted out, pin it via
+    // GGML_VK_VISIBLE_DEVICES so transcription uses the faster dGPU. The very
+    // first run on a fresh install is unpinned (no inventory yet) → it learns
+    // the device list and the next run switches automatically.
+    let (prefer_discrete, pinned) = gpu_preference();
+    let pin_str = pinned.map(|i| i.to_string());
+    let env: Vec<(&str, &str)> = match pin_str.as_deref() {
+        Some(s) => vec![("GGML_VK_VISIBLE_DEVICES", s)],
+        None => vec![],
+    };
+    // Collect every Vulkan device line so we can persist the inventory after an
+    // unfiltered run (a pinned run only sees the 1 selected device).
+    let devices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<GpuDevice>::new()));
+    let devices_cb = devices.clone();
+    run_sidecar_env(
         app,
         "whisper-cli",
         &[
@@ -405,6 +422,7 @@ pub async fn transcribe(
             "-of", &out_base,
             "--print-progress",
         ],
+        &env,
         move |chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
             // multiple lines. emit_log / detect_backend already split
@@ -414,6 +432,15 @@ pub async fn transcribe(
             // silently dropped. Iterate per-line for complete coverage.
             emit_log(chunk);
             detect_backend(chunk);
+            for line in chunk.lines() {
+                if let Some(d) = parse_vulkan_device(line) {
+                    if let Ok(mut v) = devices_cb.lock() {
+                        if !v.iter().any(|x| x.index == d.index) {
+                            v.push(d);
+                        }
+                    }
+                }
+            }
             for line in chunk.lines() {
                 let Some(p) = parse_progress(line) else {
                     continue;
@@ -438,6 +465,33 @@ pub async fn transcribe(
     // back to CPU. Surface that explicitly so the UI doesn't say "未检测".
     if !backend_emitted.load(std::sync::atomic::Ordering::Relaxed) {
         emit(app, PipelineEvent::BackendDetected { name: "CPU".into() });
+    }
+
+    // Persist the device inventory after an unfiltered run so Settings can show
+    // the cards and the next run can pin the discrete GPU. A pinned run only
+    // sees its 1 selected device, so skip it (it would clobber the full list).
+    if pinned.is_none() {
+        let found = devices.lock().map(|v| v.clone()).unwrap_or_default();
+        if !found.is_empty() {
+            emit(app, PipelineEvent::GpuDevices { devices: found.clone() });
+            // A discrete card exists but this run used device 0 (the iGPU) —
+            // tell the user it'll switch automatically next time.
+            if prefer_discrete {
+                if let Some(d) = found.iter().find(|d| d.discrete && d.index != 0) {
+                    emit(
+                        app,
+                        PipelineEvent::Log {
+                            video_id: video_id.to_string(),
+                            source: "whisper-cli".into(),
+                            line: format!(
+                                "已检测到独立显卡 {} —— 下次转录将自动用它加速",
+                                d.name
+                            ),
+                        },
+                    );
+                }
+            }
+        }
     }
 
     Ok(out_dir.join("transcript.srt"))
@@ -485,6 +539,70 @@ fn detect_backend_line(line: &str) -> Option<String> {
     Some(format!("{backend_label} / {model}"))
 }
 
+/// Parse a whisper-cli Vulkan device-list line, e.g.
+///   `ggml_vulkan: 1 = NVIDIA GeForce RTX 4060 (NVIDIA) | uma: 0 | fp16: 1 ...`
+/// into a `GpuDevice`. `discrete` is true when `uma: 0` (integrated GPUs share
+/// system memory and report `uma: 1`); when the `uma:` flag is absent we fall
+/// back to a name heuristic. Returns `None` for the header line
+/// ("Found N Vulkan devices:") and any other non-device line.
+fn parse_vulkan_device(line: &str) -> Option<GpuDevice> {
+    let rest = line.trim().strip_prefix("ggml_vulkan:")?.trim();
+    let (idx_str, after) = rest.split_once('=')?;
+    let index: u32 = idx_str.trim().parse().ok()?;
+    let after = after.trim();
+    // Name = up to the first " (" (vendor) or " |" (flags).
+    let name_end = after
+        .find(" (")
+        .or_else(|| after.find(" |"))
+        .unwrap_or(after.len());
+    let name = after[..name_end].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let discrete = match after.find("uma:") {
+        Some(p) => !after[p + 4..].trim_start().starts_with('1'),
+        None => {
+            let lower = name.to_lowercase();
+            !(lower.contains("graphics")
+                || lower.contains("uhd")
+                || lower.contains("iris"))
+        }
+    };
+    Some(GpuDevice {
+        index,
+        name,
+        discrete,
+    })
+}
+
+/// Read the transcription GPU preference from settings.json. Returns
+/// `(prefer_discrete, pinned_index)`:
+/// - `prefer_discrete` — whether to auto-use the discrete GPU (default true).
+/// - `pinned_index` — the cached discrete device's index to pass to
+///   `GGML_VK_VISIBLE_DEVICES`, present only when preference is on, a discrete
+///   card was previously detected, and it isn't already device 0.
+fn gpu_preference() -> (bool, Option<u32>) {
+    let settings = crate::commands::settings::get_settings().unwrap_or(serde_json::Value::Null);
+    let prefer = settings
+        .get("preferDiscreteGpu")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    if !prefer {
+        return (false, None);
+    }
+    let pinned = settings
+        .get("whisperGpus")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter().find_map(|d| {
+                let idx = d.get("index")?.as_u64()? as u32;
+                let discrete = d.get("discrete")?.as_bool()?;
+                (discrete && idx != 0).then_some(idx)
+            })
+        });
+    (true, pinned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +645,40 @@ mod tests {
         assert_eq!(detect_backend_line("ggml_vulkan: Found 2 Vulkan devices:"), None);
         assert_eq!(detect_backend_line("whisper_init_state: ..."), None);
         assert_eq!(detect_backend_line("ggml_vulkan: 1 = AMD Radeon"), None);
+    }
+
+    #[test]
+    fn parses_vulkan_device_inventory() {
+        let dgpu = parse_vulkan_device(
+            "ggml_vulkan: 1 = NVIDIA GeForce RTX 4060 Laptop GPU (NVIDIA) | uma: 0 | fp16: 1",
+        )
+        .unwrap();
+        assert_eq!(dgpu.index, 1);
+        assert_eq!(dgpu.name, "NVIDIA GeForce RTX 4060 Laptop GPU");
+        assert!(dgpu.discrete);
+
+        let igpu = parse_vulkan_device(
+            "ggml_vulkan: 0 = Intel(R) Iris(R) Xe Graphics (Intel) | uma: 1 | fp16: 1",
+        )
+        .unwrap();
+        assert_eq!(igpu.index, 0);
+        assert!(!igpu.discrete);
+    }
+
+    #[test]
+    fn vulkan_device_parser_skips_noise() {
+        assert!(parse_vulkan_device("ggml_vulkan: Found 2 Vulkan devices:").is_none());
+        assert!(parse_vulkan_device("whisper_init: loading model").is_none());
+        assert!(parse_vulkan_device("ggml_vulkan: device memory = 8192 MB").is_none());
+    }
+
+    #[test]
+    fn vulkan_discrete_falls_back_to_name_when_uma_absent() {
+        // No "uma:" flag → name heuristic. NVIDIA card → discrete.
+        let d = parse_vulkan_device("ggml_vulkan: 1 = NVIDIA GeForce RTX 4060 (NVIDIA)").unwrap();
+        assert!(d.discrete);
+        // Integrated "... Graphics" → not discrete.
+        let i = parse_vulkan_device("ggml_vulkan: 0 = Intel(R) UHD Graphics (Intel)").unwrap();
+        assert!(!i.discrete);
     }
 }

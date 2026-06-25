@@ -401,6 +401,15 @@ pub async fn transcribe(
     // unfiltered run (a pinned run only sees the 1 selected device).
     let devices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<GpuDevice>::new()));
     let devices_cb = devices.clone();
+    // Stall watchdog: bump on each progress line so the spawn loop can kill a
+    // HUNG whisper-cli (e.g. the laptop slept mid-transcription and the GPU /
+    // process is wedged on wake) instead of the import hanging forever at
+    // "转录中". Armed only after progress first moves, so model-load silence is
+    // never killed. whisper.cpp can't resume mid-file, so a kill surfaces as a
+    // clean failure → the user re-runs via the Player's 重新转录 (which reuses
+    // the already-downloaded source.mp4 — no re-download).
+    let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let progress_count_cb = progress_count.clone();
     run_sidecar_env(
         app,
         "whisper-cli",
@@ -423,7 +432,7 @@ pub async fn transcribe(
             "--print-progress",
         ],
         &env,
-        None,
+        Some(progress_count.clone()),
         move |chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
             // multiple lines. emit_log / detect_backend already split
@@ -446,6 +455,10 @@ pub async fn transcribe(
                 let Some(p) = parse_progress(line) else {
                     continue;
                 };
+                // Liveness signal for the stall watchdog (count every progress
+                // line, even non-increasing ones — they still prove whisper is
+                // alive).
+                progress_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let prev = last_progress_clone.load(std::sync::atomic::Ordering::Relaxed);
                 if p > prev {
                     last_progress_clone.store(p, std::sync::atomic::Ordering::Relaxed);

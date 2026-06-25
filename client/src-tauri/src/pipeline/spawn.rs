@@ -8,9 +8,9 @@ use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 /// Shared progress counter for the stall watchdog. The caller's stderr callback
-/// bumps it once per download-progress line; the spawn loop kills the child if
-/// it stops advancing. `None` = watchdog disabled (the default for every
-/// caller except yt-dlp download).
+/// bumps it once per progress line (yt-dlp download % / whisper transcribe %);
+/// the spawn loop kills the child if it stops advancing. `None` = watchdog
+/// disabled (the default for ffmpeg + other sidecars).
 pub type StallCounter = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
 // Stall watchdog tuning. The watchdog ARMS only after the counter first moves
@@ -158,7 +158,7 @@ where
     }
     if stalled {
         return Err(AppError::Subprocess(format!(
-            "{bin_name} stalled — no download progress for ~{}s",
+            "{bin_name} stalled — no progress for ~{}s",
             STALL_TICK_SECS * STALL_MAX_TICKS as u64
         )));
     }
@@ -324,7 +324,7 @@ where
                     if stale_ticks >= STALL_MAX_TICKS {
                         let _ = child.kill().await;
                         return Err(AppError::Subprocess(format!(
-                            "{} stalled — no download progress for ~{}s",
+                            "{} stalled — no progress for ~{}s",
                             exe.display(),
                             STALL_TICK_SECS * STALL_MAX_TICKS as u64
                         )));

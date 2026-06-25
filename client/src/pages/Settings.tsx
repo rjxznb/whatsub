@@ -1025,25 +1025,29 @@ function AccountSection() {
           <span className="font-mono mx-1">{fpTail}</span>
           ，客服会在后台释放设备槽位，您即可在新设备激活。
         </p>
-        {!hasSub && (
-          <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3">
+        <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3">
+          {!hasSub ? (
             <p className="text-[11px] text-zinc-400 leading-relaxed">
               用<span className="text-zinc-200">其他邮箱</span>订阅了 whatSub Pro？买断授权只解锁软件，云端会员按邮箱计。用你的订阅邮箱登录，桌面端即可享受 Pro 配额、并和手机端同一个云库。
             </p>
-            <button
-              type="button"
-              onClick={() => setLoginOpen(true)}
-              className="mt-2 px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
-            >
-              切换 / 绑定订阅账号
-            </button>
-          </div>
-        )}
+          ) : (
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              当前云端账号 <span className="text-zinc-200">{email ?? '—'}</span>。想用另一个账号的云库 / 语料库？可切换账号 —— 同一时刻只有一个账号生效，云端数据与会员都归属当前账号。
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setLoginOpen(true)}
+            className="mt-2 px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+          >
+            {hasSub ? '切换账号' : '切换 / 绑定订阅账号'}
+          </button>
+        </div>
         <AccountLoginDialog
           open={loginOpen}
           onClose={() => setLoginOpen(false)}
-          title="切换订阅账号"
-          hint="用持有 Pro 订阅的邮箱登录。登录后云端身份与会员都归属该邮箱（同一时刻只有一个账号生效）。"
+          title={hasSub ? '切换账号' : '切换订阅账号'}
+          hint="用目标账号的邮箱登录。登录后云端身份与会员都归属该邮箱（同一时刻只有一个账号生效）。"
         />
       </section>
     );

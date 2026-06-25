@@ -280,10 +280,31 @@ pub fn reveal_in_explorer(path: String) -> AppResult<()> {
 
     #[cfg(target_os = "windows")]
     {
-        // explorer /select takes the path as a single arg; do not quote in CreateProcess form.
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{path}"))
-            .spawn()
+        use std::os::windows::process::CommandExt;
+        // explorer.exe is finicky: it needs BACKSLASH paths, and the file path
+        // must be its OWN quoted token after `/select,`. Rust's default `.arg()`
+        // wraps the WHOLE `/select,<path>` in quotes as soon as the path
+        // contains a space (or other char needing escaping) — e.g. a username
+        // like `C:\Users\John Doe\…` or a forward-slash path — which explorer
+        // can't parse, so it SILENTLY falls back to opening the Documents
+        // folder. Build the command line ourselves with `raw_arg`: `/select,`
+        // unquoted + the path backslash-normalized and quoted on its own.
+        let win_path = path.replace('/', "\\");
+        let mut cmd = std::process::Command::new("explorer");
+        if std::path::Path::new(&win_path).exists() {
+            cmd.raw_arg(format!("/select,\"{win_path}\""));
+        } else {
+            // File is gone — don't let explorer drop the user in Documents.
+            // Open the nearest existing ancestor directory instead.
+            let dir = std::path::Path::new(&win_path)
+                .ancestors()
+                .find(|p| p.exists())
+                .map(|p| p.to_string_lossy().replace('/', "\\"))
+                .unwrap_or_else(|| win_path.clone());
+            cmd.raw_arg(format!("\"{dir}\""));
+        }
+        // explorer.exe exits 1 even on success; we only care that spawn worked.
+        cmd.spawn()
             .map_err(|e| AppError::Subprocess(format!("explorer: {e}")))?;
     }
     #[cfg(target_os = "macos")]

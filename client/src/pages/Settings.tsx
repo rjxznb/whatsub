@@ -17,6 +17,7 @@ import { useUpdater } from "../hooks/useUpdater";
 import { useLicense } from "../store/license";
 import { SiteIcon } from "../components/SiteIcon";
 import { ManagedRelayQuotaPanel } from "../components/ManagedRelayQuotaPanel";
+import { AccountLoginDialog } from "../components/AccountLoginDialog";
 import { getVersion } from "@tauri-apps/api/app";
 
 export function Settings() {
@@ -974,6 +975,7 @@ function AccountSection() {
   const refresh = useAuth((s) => s.refresh);
   const logout = useAuth((s) => s.logout);
   const hasSub = useAuth((s) => s.hasActiveSubscription);
+  const [loginOpen, setLoginOpen] = useState(false);
 
   // Pull email/sub-status from auth_me. SUB_ACTIVE: nothing else refreshes for
   // them. ACTIVE: a 买断 user may ALSO hold a sub (same email) — refresh so we
@@ -1023,6 +1025,26 @@ function AccountSection() {
           <span className="font-mono mx-1">{fpTail}</span>
           ，客服会在后台释放设备槽位，您即可在新设备激活。
         </p>
+        {!hasSub && (
+          <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3">
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              用<span className="text-zinc-200">其他邮箱</span>订阅了 whatSub Pro？买断授权只解锁软件，云端会员按邮箱计。用你的订阅邮箱登录，桌面端即可享受 Pro 配额、并和手机端同一个云库。
+            </p>
+            <button
+              type="button"
+              onClick={() => setLoginOpen(true)}
+              className="mt-2 px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors"
+            >
+              切换 / 绑定订阅账号
+            </button>
+          </div>
+        )}
+        <AccountLoginDialog
+          open={loginOpen}
+          onClose={() => setLoginOpen(false)}
+          title="切换订阅账号"
+          hint="用持有 Pro 订阅的邮箱登录。登录后云端身份与会员都归属该邮箱（同一时刻只有一个账号生效）。"
+        />
       </section>
     );
   }
@@ -1084,9 +1106,46 @@ function AccountSection() {
             <span className="text-zinc-300">约 {hoursLeft} 小时</span>
           </Row>
         </div>
+        {license.mode === 'TRIAL_ACTIVE' && email ? (
+          <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3 text-sm">
+            <Row label="云端账号">
+              <span className="text-zinc-300">{email}</span>
+              {hasSub && <span className="text-amber-300"> · ★ Pro</span>}
+            </Row>
+            <button
+              type="button"
+              onClick={async () => {
+                await logout();
+                await license.init();
+              }}
+              className="mt-2 px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+            >
+              退出登录
+            </button>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3">
+            <p className="text-[11px] text-zinc-400 leading-relaxed">
+              已在手机端注册过账号？登录后即可使用<span className="text-zinc-200">语料库</span>、把视频<span className="text-zinc-200">云同步到手机</span>（免费额度 3 个视频）。无需订阅。
+            </p>
+            <button
+              type="button"
+              onClick={() => setLoginOpen(true)}
+              className="mt-2 px-3 py-1.5 text-xs rounded bg-blue-500 hover:bg-blue-400 text-black font-medium transition-colors"
+            >
+              登录账号
+            </button>
+          </div>
+        )}
         <p className="mt-3 text-[11px] text-zinc-500 leading-relaxed">
-          试用期间 AI 走 whatsub 托管，免费免配置。已订阅 Pro？可在激活页用邮箱登录解锁；也可激活买断永久授权。
+          试用期间 AI 走 whatsub 托管，免费免配置。已订阅 Pro？用邮箱登录即可解锁；也可激活买断永久授权。
         </p>
+        <AccountLoginDialog
+          open={loginOpen}
+          onClose={() => setLoginOpen(false)}
+          title="登录账号"
+          hint="用你在手机端使用的邮箱登录。登录后云同步、语料库按该邮箱的免费额度工作，同步的视频会出现在手机端。"
+        />
       </section>
     );
   }

@@ -7,6 +7,7 @@ import { CorpusTour } from '../components/CorpusTour';
 import { invalidateAll } from '../lib/corpusCache';
 import { useAuth } from '../store/auth';
 import { useLicense } from '../store/license';
+import { AccountLoginDialog } from '../components/AccountLoginDialog';
 
 type Mode = 'browse' | 'mine';
 
@@ -22,6 +23,7 @@ export function Corpus() {
   const licenseKey = useLicense((s) => s.state?.key ?? null);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState('');
+  const [loginOpen, setLoginOpen] = useState(false);
 
   // First-visit onboarding modal. localStorage gate so it only fires once
   // per machine; announces the plugin-sync feature with a demo clip.
@@ -128,26 +130,44 @@ export function Corpus() {
       ) : (
         <div className="flex flex-1 items-center justify-center p-8">
           <div className="max-w-sm p-6 bg-zinc-800 rounded-lg border border-zinc-700 space-y-3 text-center">
-            <h2 className="text-base font-semibold">云端未连接</h2>
+            <h2 className="text-base font-semibold">
+              {status === 'unknown' ? '云端连接中' : '登录后可用'}
+            </h2>
             <p className="text-xs text-zinc-400">
               {status === 'unknown'
                 ? '正在连接云端语料库…'
                 : retryError
                   ? `失败原因: ${retryError}`
-                  : '语料库需要连接云端才能加载，请点击重试。'}
+                  : '语料库需要登录账号才能加载。用你在手机端使用的邮箱登录即可（无需订阅）。'}
             </p>
             {status === 'unauthed' && (
-              <button
-                onClick={handleRetrySession}
-                disabled={retrying || !licenseKey}
-                className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded"
-              >
-                {retrying ? '重试中…' : '重试'}
-              </button>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  onClick={() => setLoginOpen(true)}
+                  className="px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-400 text-black font-medium rounded"
+                >
+                  登录账号
+                </button>
+                {licenseKey && (
+                  <button
+                    onClick={handleRetrySession}
+                    disabled={retrying}
+                    className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded"
+                  >
+                    {retrying ? '重试中…' : '重试'}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </div>
       )}
+      <AccountLoginDialog
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        title="登录账号"
+        hint="用你在手机端使用的邮箱登录。登录后即可浏览语料库、把视频云同步到手机。"
+      />
       {/* First-visit plugin-sync announcement modal. */}
       {showTour && status === 'authed' && (
         <CorpusTour onDismiss={dismissTour} />

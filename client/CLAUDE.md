@@ -81,7 +81,15 @@ Side streams: `ModelDownload` (model fetch), `Uploading{video_id,percent}` (OSS 
 
 Desktop never asks for an email/OTP. `LicenseSessionGate` (mounted once at app root) fires-and-forgets `useAuth.authFromLicense(licenseKey)` on mount — Rust command `auth_from_license` POSTs `/api/auth/from-license` with the activated license key, gets back a 30-day sessionToken, persists to `app_data_dir/auth.json`. Subsequent corpus calls (`corpus_browse` / `corpus_mine` / `corpus_tags` / `corpus_phrase_detail` / `corpus_versions`) attach the bearer.
 
-`LicenseSessionGate` is **non-blocking by design** — if the server call fails or the user is offline, the app still renders normally. Only the `/corpus` page reads `useAuth.status` and shows a 「云端未连接 + 重试」 inline UI when the session isn't ready.
+`LicenseSessionGate` is **non-blocking by design** — if the server call fails or the user is offline, the app still renders normally. Only the `/corpus` page reads `useAuth.status` and shows a 「登录后可用」 inline UI when the session isn't ready.
+
+### Identity is decoupled from the unlock mode (in-app account login, 2026-06-25)
+
+The cloud **identity** (a session = one email) is now separable from the app **unlock mode** (`ACTIVE` license / `SUB_ACTIVE` / `TRIAL_ACTIVE`). Three ways to get a session, all minting the same 30-day bearer keyed to ONE email: ① `auth_from_license` (auto, existing) ② **email-OTP login** (`useAuth.sendCode`/`verifyCode` → `auth_send_code`/`auth_verify_code` → `/auth/send-code`+`/auth/verify-code`; the backend already had this for mobile/web) ③ device-pairing (not built). The OTP login is surfaced in-app via `components/AccountLoginDialog.tsx` (portaled themed modal) from two places: Settings → 账户 (a 试用 user logs into their mobile account; a 买断 user without a sub gets 「切换/绑定订阅账号」) and the `/corpus` gate (「登录账号」 replacing the old license-only 「重试」).
+
+**Why this exists:** corpus + cloud-sync gate on session presence (`useAuth.status==='authed'`), not on license/subscription. A trial/free user previously had no way to obtain a session, so 云同步/语料库 were unreachable even though the backend grants every authenticated email a **free-tier quota** (sync 3 / corpus 50, `hasActiveSubscription ? 50 : 3`). Logging in with their mobile email makes sync-to-phone work (same identity across ends) under that free quota. A 买断 user who subscribed under a *different* email logs in with the sub email to pull Pro to the desktop.
+
+**The invariant that keeps this from being a subscription-sharing hole:** identity is always the single logged-in email — entitlement is NEVER summed across emails (no account-linking / union). So this is an identity *switch*, not a merge: logging into email B makes B the active cloud library + entitlement; A's data becomes inactive (still on the server, just not the current identity). Sharing a login = sharing the whole account (one library, one quota) → self-limiting, unlike a union which would let one sub feed N accounts. `LicenseSessionGate`'s `if (status==='authed') return` guard means a manual login is NOT clobbered by license auto-login on next launch; it reverts to the license email only if the manual session expires (30 d). No backend change — purely surfacing the existing OTP flow + decoupling the gate from license/sub.
 
 ## AI Agent
 

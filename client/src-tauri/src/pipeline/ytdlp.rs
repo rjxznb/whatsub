@@ -1,7 +1,7 @@
 use crate::commands::yt_dlp::resolve_appdata_yt_dlp;
 use crate::core::progress::{emit, PipelineEvent};
 use crate::error::AppResult;
-use crate::pipeline::spawn::{run_external_with_callback, run_sidecar};
+use crate::pipeline::spawn::{run_external_with_callback, run_sidecar_env};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
@@ -301,6 +301,11 @@ pub async fn download(
         if background { "10".into() } else { "1".into() },
         "--retry-sleep".into(),
         if background { "5".into() } else { "2".into() },
+        // Resume from the .part on a re-spawn — this is what makes the stall
+        // watchdog's kill-and-retry recover instead of restarting from 0.
+        // (It's yt-dlp's default, but set it explicitly so a future default
+        // flip can't silently break resume.)
+        "--continue".into(),
         "-f".into(),
         yt_dlp_format(quality).into(),
         "--merge-output-format".into(),
@@ -353,21 +358,17 @@ pub async fn download(
     // user fix cookies / VPN.
     //
     // Background: 3 attempts × ~50s + 5s/10s backoff = ~3 min total.
-    let max_attempts: u32 = if background { 3 } else { 1 };
-    for attempt in 1..=max_attempts {
-        if attempt > 1 {
-            emit(
-                app,
-                PipelineEvent::Log {
-                    video_id: video_id.to_string(),
-                    source: "yt-dlp".into(),
-                    line: format!(
-                        "[whatsub] network hiccup — retry {}/{}",
-                        attempt, max_attempts
-                    ),
-                },
-            );
-        }
+    // Base process-level retries for hard errors (no-VPN etc.). Stalls get a
+    // SEPARATE, larger budget (STALL_MAX_RETRIES): a stalled download resumes
+    // from the .part each time (--continue) so progress accumulates — cheap to
+    // retry, and the long-video hang is exactly this case. Applies even in
+    // foreground (which otherwise fails fast) because resuming is the right call.
+    let base_attempts: u32 = if background { 3 } else { 1 };
+    const STALL_MAX_RETRIES: u32 = 5;
+    let mut attempt: u32 = 0;
+    let mut stall_retries: u32 = 0;
+    loop {
+        attempt += 1;
 
         let id_cb = video_id.to_string();
         let app_cb = app.clone();
@@ -433,6 +434,11 @@ pub async fn download(
             );
         };
 
+        // Stall watchdog progress counter — bumped on each parsed progress
+        // line. The spawn loop arms a watchdog on it (once it first moves) and
+        // kills + we resume if it stops advancing mid-download.
+        let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let progress_count_cb = progress_count.clone();
         // Common stderr callback for both the bundled-sidecar path and
         // the AppData-direct path. Defined here so it's identical in
         // semantics (logs / progress / sub-step detection).
@@ -452,6 +458,7 @@ pub async fn download(
                     emit_step(step);
                 }
                 if let Some(p) = parse_progress(actual_line) {
+                    progress_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     emit(
                         &app_cb,
                         PipelineEvent::Downloading {
@@ -488,16 +495,32 @@ pub async fn download(
                 video_id: video_id.to_string(),
                 source: "whatsub".into(),
                 line: format!(
-                    "启动 yt-dlp ({source_label}) — 后台={}, attempt={}/{}",
-                    background, attempt, max_attempts
+                    "启动 yt-dlp ({source_label}) — 后台={}, attempt={}",
+                    background, attempt
                 ),
             },
         );
 
         let result = if let Some(appdata_path) = appdata {
-            run_external_with_callback(&appdata_path, &arg_refs, callback, cancel).await
+            run_external_with_callback(
+                &appdata_path,
+                &arg_refs,
+                Some(progress_count.clone()),
+                callback,
+                cancel,
+            )
+            .await
         } else {
-            run_sidecar(app, "yt-dlp", &arg_refs, callback, cancel).await
+            run_sidecar_env(
+                app,
+                "yt-dlp",
+                &arg_refs,
+                &[],
+                Some(progress_count.clone()),
+                callback,
+                cancel,
+            )
+            .await
         };
 
         match result {
@@ -510,11 +533,42 @@ pub async fn download(
             }
             Err(e) => {
                 let msg = e.to_string();
-                if attempt < max_attempts && is_transient_yt_dlp_error(&msg) {
+                // A stall = the watchdog killed a hung yt-dlp. Recoverable by
+                // resuming from the .part — give it its own larger budget,
+                // regardless of foreground/background.
+                if msg.contains("stalled") && stall_retries < STALL_MAX_RETRIES {
+                    stall_retries += 1;
+                    emit(
+                        app,
+                        PipelineEvent::Log {
+                            video_id: video_id.to_string(),
+                            source: "whatsub".into(),
+                            line: format!(
+                                "[whatsub] 下载卡住 — 从断点继续 (重试 {}/{})",
+                                stall_retries, STALL_MAX_RETRIES
+                            ),
+                        },
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    continue;
+                }
+                if attempt < base_attempts && is_transient_yt_dlp_error(&msg) {
                     // Backoff between fresh-process attempts: 5s → 10s.
                     // Shorter than yt-dlp's own retry cycle so we don't
                     // double-wait, but long enough to give DNS / GFW
                     // state a chance to flip before re-running.
+                    emit(
+                        app,
+                        PipelineEvent::Log {
+                            video_id: video_id.to_string(),
+                            source: "yt-dlp".into(),
+                            line: format!(
+                                "[whatsub] network hiccup — retry {}/{}",
+                                attempt + 1,
+                                base_attempts
+                            ),
+                        },
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64))
                         .await;
                     continue;

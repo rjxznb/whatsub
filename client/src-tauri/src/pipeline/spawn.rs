@@ -7,6 +7,21 @@ use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
+/// Shared progress counter for the stall watchdog. The caller's stderr callback
+/// bumps it once per download-progress line; the spawn loop kills the child if
+/// it stops advancing. `None` = watchdog disabled (the default for every
+/// caller except yt-dlp download).
+pub type StallCounter = std::sync::Arc<std::sync::atomic::AtomicU64>;
+
+// Stall watchdog tuning. The watchdog ARMS only after the counter first moves
+// (download actually started), so the legitimately-silent, sometimes
+// minutes-long sigsolver / 准备中 phase is never killed. Once armed, if the
+// counter doesn't advance for STALL_TICK_SECS × STALL_MAX_TICKS seconds the
+// child is killed and a "stalled" error returned, so the caller can re-spawn
+// and resume from the .part (yt-dlp --continue).
+const STALL_TICK_SECS: u64 = 15;
+const STALL_MAX_TICKS: u32 = 8; // 8 × 15s = 120s of zero progress → stalled
+
 /// Run a sidecar to completion, capturing stdout. Streams stderr to a callback
 /// for progress parsing AND retains a tail buffer that gets included in the
 /// error message on non-zero exit, so users see yt-dlp/ffmpeg/whisper's actual
@@ -26,7 +41,7 @@ pub async fn run_sidecar<F>(
 where
     F: FnMut(&str),
 {
-    run_sidecar_env(app, bin_name, args, &[], on_stderr_line, cancel).await
+    run_sidecar_env(app, bin_name, args, &[], None, on_stderr_line, cancel).await
 }
 
 /// Like [`run_sidecar`] but injects extra environment variables into the child
@@ -38,6 +53,7 @@ pub async fn run_sidecar_env<F>(
     bin_name: &str,
     args: &[&str],
     extra_env: &[(&str, &str)],
+    stall: Option<StallCounter>,
     mut on_stderr_line: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
@@ -80,45 +96,71 @@ where
     const TAIL_LINES: usize = 20;
     let mut exit_code: Option<i32> = None;
     let mut cancelled = false;
+    let mut stalled = false;
 
-    // Main event loop. Watch both child output AND the cancel token so a
-    // ✕ click in the UI kills the child immediately rather than waiting
-    // for the next stdio chunk to come through.
+    // Stall watchdog state (no-op unless `stall` is Some).
+    let stall_enabled = stall.is_some();
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(STALL_TICK_SECS));
+    ticker.tick().await; // consume the immediate first tick
+    let mut last_count = 0u64;
+    let mut stale_ticks = 0u32;
+
+    // Main event loop. Watch child output, the cancel token (so a ✕ click kills
+    // the child immediately), AND the stall watchdog tick.
     loop {
-        if let Some(token) = cancel {
-            tokio::select! {
-                biased;
-                _ = token.cancelled() => {
-                    // Best-effort kill — the child may already have exited.
-                    let _ = child.kill();
-                    cancelled = true;
-                    break;
-                }
-                ev = rx.recv() => {
-                    match ev {
-                        Some(event) => {
-                            if handle_event(event, &mut stdout, &mut stderr_tail, TAIL_LINES, &mut on_stderr_line, &mut exit_code) {
-                                break;
-                            }
-                        }
-                        None => break,
-                    }
-                }
+        let cancel_fut = async {
+            match cancel {
+                Some(t) => t.cancelled().await,
+                None => std::future::pending::<()>().await,
             }
-        } else {
-            match rx.recv().await {
-                Some(event) => {
-                    if handle_event(event, &mut stdout, &mut stderr_tail, TAIL_LINES, &mut on_stderr_line, &mut exit_code) {
+        };
+        tokio::select! {
+            biased;
+            _ = cancel_fut => {
+                // Best-effort kill — the child may already have exited.
+                let _ = child.kill();
+                cancelled = true;
+                break;
+            }
+            _ = ticker.tick(), if stall_enabled => {
+                let c = stall.as_ref().unwrap().load(std::sync::atomic::Ordering::Relaxed);
+                // Only arm once progress has started (c > 0) — never kill the
+                // silent sigsolver/准备中 phase.
+                if c > 0 {
+                    if c == last_count {
+                        stale_ticks += 1;
+                    } else {
+                        stale_ticks = 0;
+                        last_count = c;
+                    }
+                    if stale_ticks >= STALL_MAX_TICKS {
+                        let _ = child.kill();
+                        stalled = true;
                         break;
                     }
                 }
-                None => break,
+            }
+            ev = rx.recv() => {
+                match ev {
+                    Some(event) => {
+                        if handle_event(event, &mut stdout, &mut stderr_tail, TAIL_LINES, &mut on_stderr_line, &mut exit_code) {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
             }
         }
     }
 
     if cancelled {
         return Err(AppError::Cancelled);
+    }
+    if stalled {
+        return Err(AppError::Subprocess(format!(
+            "{bin_name} stalled — no download progress for ~{}s",
+            STALL_TICK_SECS * STALL_MAX_TICKS as u64
+        )));
     }
 
     match exit_code {
@@ -210,6 +252,7 @@ fn handle_event<F: FnMut(&str)>(
 pub async fn run_external_with_callback<F>(
     exe: &Path,
     args: &[&str],
+    stall: Option<StallCounter>,
     mut on_stderr_line: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
@@ -243,6 +286,13 @@ where
     let mut stdout_done = false;
     let mut stderr_done = false;
 
+    // Stall watchdog state (no-op unless `stall` is Some). See STALL_* above.
+    let stall_enabled = stall.is_some();
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(STALL_TICK_SECS));
+    ticker.tick().await; // consume the immediate first tick
+    let mut last_count = 0u64;
+    let mut stale_ticks = 0u32;
+
     // Read both pipes concurrently, watch for cancellation, until both
     // are EOF (which happens when the child exits). Then child.wait()
     // gives us the exit code.
@@ -261,6 +311,25 @@ where
             _ = cancel_fut => {
                 let _ = child.kill().await;
                 return Err(AppError::Cancelled);
+            }
+            _ = ticker.tick(), if stall_enabled => {
+                let c = stall.as_ref().unwrap().load(std::sync::atomic::Ordering::Relaxed);
+                if c > 0 {
+                    if c == last_count {
+                        stale_ticks += 1;
+                    } else {
+                        stale_ticks = 0;
+                        last_count = c;
+                    }
+                    if stale_ticks >= STALL_MAX_TICKS {
+                        let _ = child.kill().await;
+                        return Err(AppError::Subprocess(format!(
+                            "{} stalled — no download progress for ~{}s",
+                            exe.display(),
+                            STALL_TICK_SECS * STALL_MAX_TICKS as u64
+                        )));
+                    }
+                }
             }
             r = stdout.read(&mut buf_out), if !stdout_done => {
                 match r {

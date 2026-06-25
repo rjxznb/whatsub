@@ -423,6 +423,7 @@ pub async fn transcribe(
             "--print-progress",
         ],
         &env,
+        None,
         move |chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
             // multiple lines. emit_log / detect_backend already split

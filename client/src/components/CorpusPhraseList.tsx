@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, List, Layers, ChevronDown } from 'lucide-react';
+import { Plus, Trash2, Loader2, List, Layers, Tags, ChevronDown } from 'lucide-react';
+import { SCENE_ORDER, SCENE_LABELS } from '../lib/scenes';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { corpusQuota, type Quota } from '../lib/api/quota';
 import { corpusDelete } from '../lib/api/corpus';
@@ -28,6 +29,9 @@ interface MineItem {
 // ── 按来源 grouping (mirrors the mobile GroupedMineView) ──────────────────────
 type MineLayout = 'flat' | 'grouped';
 const LAYOUT_KEY = 'corpus.mine.layout';
+// Public list has three arrangements: flat / by video source / by scene-tag.
+type BrowseLayout = 'flat' | 'source' | 'tag';
+const BROWSE_LAYOUT_KEY = 'corpus.browse.layout';
 
 function hostOf(url?: string): string | null {
   if (!url) return null;
@@ -96,6 +100,21 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     setLayout(l);
     try {
       localStorage.setItem(LAYOUT_KEY, l);
+    } catch {
+      /* ignore */
+    }
+  };
+  const [browseLayout, setBrowseLayout] = useState<BrowseLayout>(() => {
+    try {
+      return (localStorage.getItem(BROWSE_LAYOUT_KEY) as BrowseLayout) ?? 'flat';
+    } catch {
+      return 'flat';
+    }
+  });
+  const setBrowseLayoutPersist = (l: BrowseLayout) => {
+    setBrowseLayout(l);
+    try {
+      localStorage.setItem(BROWSE_LAYOUT_KEY, l);
     } catch {
       /* ignore */
     }
@@ -197,7 +216,37 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
         </button>
       </div>
     </div>
-  ) : null;
+  ) : (
+    <div className="flex items-center justify-end gap-2 px-3 py-2 border-b border-zinc-800 text-xs text-zinc-400 shrink-0">
+      {/* Layout: 平铺 (flat) / 按视频来源 (source) / 按场景标签 (tag). */}
+      <div className="flex items-center rounded bg-zinc-800/60 p-0.5">
+        <button
+          type="button"
+          onClick={() => setBrowseLayoutPersist('flat')}
+          title="平铺：每条短语一行"
+          className={'grid h-5 w-5 place-items-center rounded ' + (browseLayout === 'flat' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+        >
+          <List size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setBrowseLayoutPersist('source')}
+          title="按视频来源分组"
+          className={'grid h-5 w-5 place-items-center rounded ' + (browseLayout === 'source' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+        >
+          <Layers size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setBrowseLayoutPersist('tag')}
+          title="按场景 / 标签分组"
+          className={'grid h-5 w-5 place-items-center rounded ' + (browseLayout === 'tag' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+        >
+          <Tags size={12} />
+        </button>
+      </div>
+    </div>
+  );
 
   const toggleGroup = (k: string) =>
     setCollapsed((prev) => {
@@ -264,8 +313,8 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
       return <div className="p-4 text-zinc-500 text-sm">暂无</div>;
     }
 
-    // 按来源分组（仅「我的」）：group key = libraryEntryId → youtubeId → host → manual.
-    if (isMine && layout === 'grouped') {
+    // 按来源分组（「我的」grouped 或 公共 source）：group key = libraryEntryId → youtubeId → host → manual.
+    if ((isMine && layout === 'grouped') || (!isMine && browseLayout === 'source')) {
       const order: string[] = [];
       const buckets = new Map<string, MineItem[]>();
       for (const it of data.items as MineItem[]) {
@@ -296,6 +345,51 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
               </div>
             );
           })}
+        </div>
+      );
+    }
+
+    // 按场景/标签分组（仅公共）：一条短语出现在它的每个标签下；18 个官方场景
+    // 按 SCENE_ORDER 在前，自定义标签按字母在后，无标签的归到「未分类」。
+    if (!isMine && browseLayout === 'tag') {
+      const buckets = new Map<string, PublicItem[]>();
+      const untagged: PublicItem[] = [];
+      for (const it of data.items as PublicItem[]) {
+        const itags = it.tags ?? [];
+        if (itags.length === 0) {
+          untagged.push(it);
+          continue;
+        }
+        for (const t of itags) {
+          if (!buckets.has(t)) buckets.set(t, []);
+          buckets.get(t)!.push(it);
+        }
+      }
+      const officialSet = SCENE_ORDER as readonly string[];
+      const official = SCENE_ORDER.filter((s) => buckets.has(s));
+      const custom = [...buckets.keys()].filter((t) => !officialSet.includes(t)).sort();
+      const order = [...official, ...custom];
+      const renderGroup = (k: string, title: string, grp: PublicItem[]) => {
+        const isCollapsed = collapsed.has(k);
+        return (
+          <div key={k}>
+            <button
+              type="button"
+              onClick={() => toggleGroup(k)}
+              className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-zinc-400 hover:bg-zinc-800/60 border-b border-zinc-800/60"
+            >
+              <ChevronDown size={12} className={isCollapsed ? '-rotate-90 transition-transform' : 'transition-transform'} />
+              <span className="flex-1 truncate text-zinc-300">{title}</span>
+              <span className="text-zinc-500">{grp.length}</span>
+            </button>
+            {!isCollapsed && <ul>{grp.map((it, i) => renderRow(it, i))}</ul>}
+          </div>
+        );
+      };
+      return (
+        <div>
+          {order.map((t) => renderGroup(`tag:${t}`, SCENE_LABELS[t] ?? t, buckets.get(t)!))}
+          {untagged.length > 0 && renderGroup('tag:__untagged', '未分类', untagged)}
         </div>
       );
     }

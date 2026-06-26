@@ -31,6 +31,11 @@ pub struct BrowseItem {
     pub tags: serde_json::Value,
     #[serde(rename(deserialize = "contribution_count", serialize = "contributionCount"), default)]
     pub contribution_count: i64,
+    // Representative source (most-recent curator contribution's source) — lets
+    // the public list group "by video source". Passes through verbatim as
+    // `source` for the JS layer (same shape as the personal list's source).
+    #[serde(default)]
+    pub source: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

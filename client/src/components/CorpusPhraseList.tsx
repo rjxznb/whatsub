@@ -100,11 +100,13 @@ interface Props {
    *  this only on the currently-visible list so we don't auto-select on
    *  the parked sibling. */
   autoSelectFirst?: boolean;
-  /** Browse-only: in 按视频来源 the list becomes a video picker; clicking a video
-   *  row calls this with its YouTube id so the parent shows the video-detail. */
-  onSelectVideo?: (videoId: string) => void;
-  /** Browse-only: highlights the selected video row. */
-  selectedVideo?: string | null;
+  /** Browse-only: in 按视频来源 the list becomes a source picker; clicking a row
+   *  calls this with that source's GROUP KEY (yt:<id> | url:<host> | lib:<id> |
+   *  manual) so the parent shows the source detail (player for videos, plain
+   *  phrase list otherwise). */
+  onSelectSource?: (sourceKey: string) => void;
+  /** Browse-only: highlights the selected source row. */
+  selectedSource?: string | null;
   /** Browse-only: notify the parent of the current layout (fires on mount + on
    *  every change) so it can choose the right detail panel. */
   onBrowseLayoutChange?: (layout: BrowseLayout) => void;
@@ -116,8 +118,8 @@ export function CorpusPhraseList({
   selected,
   onSelect,
   autoSelectFirst,
-  onSelectVideo,
-  selectedVideo,
+  onSelectSource,
+  selectedSource,
   onBrowseLayoutChange,
 }: Props) {
   const { data, error, refreshing, refresh } = useCorpusList<BrowseResp | MineResp>(
@@ -214,14 +216,8 @@ export function CorpusPhraseList({
     const items = data?.items;
     if (!items || items.length === 0) return;
     if (!isMine && browseLayout === 'source') {
-      if (selectedVideo) return;
-      for (const it of items as PublicItem[]) {
-        const k = groupKey(it.source);
-        if (k.startsWith('yt:')) {
-          onSelectVideo?.(k.slice(3));
-          return;
-        }
-      }
+      if (selectedSource) return;
+      onSelectSource?.(groupKey((items[0] as PublicItem).source));
       return;
     }
     if (selected) return;
@@ -229,12 +225,12 @@ export function CorpusPhraseList({
   }, [
     autoSelectFirst,
     selected,
-    selectedVideo,
+    selectedSource,
     browseLayout,
     isMine,
     data,
     onSelect,
-    onSelectVideo,
+    onSelectSource,
   ]);
 
   const quotaFull = quota ? quota.used >= quota.limit : false;
@@ -395,12 +391,11 @@ export function CorpusPhraseList({
         <ul>
           {order.map((k) => {
             const grp = buckets.get(k)!;
-            const vid = k.startsWith('yt:') ? k.slice(3) : null;
-            const isSel = vid != null && selectedVideo === vid;
+            const isSel = selectedSource === k;
             return (
               <li
                 key={k}
-                onClick={() => (vid ? onSelectVideo?.(vid) : onSelect(grp[0].phraseNormalized))}
+                onClick={() => onSelectSource?.(k)}
                 className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
                   isSel ? 'bg-zinc-800' : ''
                 }`}

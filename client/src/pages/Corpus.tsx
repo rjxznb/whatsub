@@ -16,9 +16,10 @@ export function Corpus() {
   const [mode, setMode] = useState<Mode>('browse');
   const [tags, setTags] = useState<string[]>([]);
   const [phrase, setPhrase] = useState<string | null>(null);
-  // 按视频来源: the selected video for the video-detail panel + a mirror of the
-  // browse layout (reported up by CorpusPhraseList) so we pick the right panel.
-  const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
+  // 按视频来源: the selected source GROUP KEY (yt:<id> | url:<host> | manual) for
+  // the source-detail panel + a mirror of the browse layout (reported up by
+  // CorpusPhraseList) so we pick the right panel.
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [browseLayout, setBrowseLayout] = useState<BrowseLayout>('flat');
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -66,19 +67,19 @@ export function Corpus() {
   function toggleTag(t: string) {
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
     setPhrase(null);
-    setSelectedVideo(null);
+    setSelectedSource(null);
   }
 
   function clearTags() {
     setTags([]);
     setPhrase(null);
-    setSelectedVideo(null);
+    setSelectedSource(null);
   }
 
   function switchMode(next: Mode) {
     setMode(next);
     setPhrase(null);
-    setSelectedVideo(null);
+    setSelectedSource(null);
     setTags([]); // tag namespaces don't overlap between scopes
   }
 
@@ -118,27 +119,27 @@ export function Corpus() {
                   selected={mode === 'browse' ? phrase : null}
                   onSelect={(p) => {
                     setPhrase(p);
-                    setSelectedVideo(null);
+                    setSelectedSource(null);
                   }}
                   autoSelectFirst={mode === 'browse'}
-                  onSelectVideo={setSelectedVideo}
-                  selectedVideo={selectedVideo}
+                  onSelectSource={setSelectedSource}
+                  selectedSource={selectedSource}
                   onBrowseLayoutChange={(l) => {
                     setBrowseLayout(l);
-                    if (l !== 'source') setSelectedVideo(null);
+                    if (l !== 'source') setSelectedSource(null);
                   }}
                 />
               </div>
               <div className="flex-1 min-w-0 h-full">
                 {mode === 'browse' && browseLayout === 'source' ? (
-                  selectedVideo ? (
+                  selectedSource ? (
                     <CorpusVideoDetail
-                      videoId={selectedVideo}
+                      sourceKey={selectedSource}
                       tags={mode === 'browse' ? tags : []}
                     />
                   ) : (
                     <div className="h-full p-6 text-zinc-500">
-                      选择左侧的一个视频，查看它的播放器和全部语料
+                      选择左侧的一个来源，查看它的语料（视频来源会带播放器）
                     </div>
                   )
                 ) : (

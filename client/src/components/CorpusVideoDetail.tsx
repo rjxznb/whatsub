@@ -1,15 +1,16 @@
 import { useState } from 'react';
-import { Play, ExternalLink, Volume2 } from 'lucide-react';
+import { Play, ExternalLink, Volume2, Link as LinkIcon } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { YouTubeEmbed, parseYouTubeUrl } from './YouTubeEmbed';
 import { ttsSpeak } from '../tutor/tts';
 
-/** One source video shown as a single page: ONE player on top, then every
- *  public-corpus phrase that came from that video listed below — each row a
- *  ▶ MM:SS button that re-seeks the single player to that phrase's timestamp.
- *  Replaces the "one embedded player per phrase" experience when browsing the
- *  public corpus 按视频来源. */
+/** One source shown as a single page: for a YouTube source, ONE player on top
+ *  then every phrase from that video with ▶ MM:SS jumps that re-seek the single
+ *  player. For a NON-video source (webpage link / manual), no player — just the
+ *  phrase list, each with a 🔗 link to its source URL. Driven by a source
+ *  *group key* (yt:<id> | url:<host> | lib:<id> | manual), matching the
+ *  CorpusPhraseList 按视频来源 picker. */
 
 interface VideoSource {
   kind?: string;
@@ -17,6 +18,7 @@ interface VideoSource {
   title?: string;
   timestampSec?: number;
   youtubeId?: string;
+  libraryEntryId?: string;
 }
 interface BrowseItem {
   phraseNormalized: string;
@@ -42,11 +44,27 @@ function ytIdOf(url?: string): string | null {
   }
 }
 
-function videoIdOf(s?: VideoSource): string | null {
-  return s?.youtubeId ?? ytIdOf(s?.url);
+function hostOf(url?: string): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
 }
 
-/** Seek-to second for a phrase: explicit timestampSec, else parsed from the URL. */
+/** Must match CorpusPhraseList.groupKey so the filter picks exactly the picker's
+ *  group. */
+function groupKeyOf(s?: VideoSource): string {
+  if (s?.libraryEntryId) return `lib:${s.libraryEntryId}`;
+  if (s?.youtubeId) return `yt:${s.youtubeId}`;
+  const yid = ytIdOf(s?.url);
+  if (yid) return `yt:${yid}`;
+  const h = hostOf(s?.url);
+  if (h) return `url:${h}`;
+  return 'manual';
+}
+
 function startSecOf(s?: VideoSource): number | null {
   if (typeof s?.timestampSec === 'number' && s.timestampSec > 0) {
     return Math.floor(s.timestampSec);
@@ -64,7 +82,7 @@ function formatTime(sec: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-export function CorpusVideoDetail({ videoId, tags }: { videoId: string; tags: string[] }) {
+export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags: string[] }) {
   const { data, error } = useCorpusList<BrowseResp>({ mode: 'browse', tags });
   // seekSec + nonce key the embed; bumping the nonce re-seeks even to the same
   // second (so re-clicking a row replays from its timestamp).
@@ -81,11 +99,21 @@ export function CorpusVideoDetail({ videoId, tags }: { videoId: string; tags: st
     return <div className="h-full p-6 text-zinc-500">加载中…</div>;
   }
 
+  const videoId = sourceKey.startsWith('yt:') ? sourceKey.slice(3) : null;
   const items = data.items
-    .filter((it) => videoIdOf(it.source) === videoId)
+    .filter((it) => groupKeyOf(it.source) === sourceKey)
     .sort((a, b) => (startSecOf(a.source) ?? 0) - (startSecOf(b.source) ?? 0));
 
-  const title = items.find((it) => it.source?.title)?.source?.title ?? `YouTube · ${videoId}`;
+  const fallbackTitle = videoId
+    ? `YouTube · ${videoId}`
+    : sourceKey.startsWith('url:')
+      ? sourceKey.slice(4)
+      : sourceKey.startsWith('lib:')
+        ? '库内视频'
+        : '手动添加';
+  const title = items.find((it) => it.source?.title)?.source?.title ?? fallbackTitle;
+  // A representative external URL for the non-video "open in browser" action.
+  const groupUrl = items.find((it) => it.source?.url)?.source?.url ?? null;
 
   function jump(it: BrowseItem) {
     const sec = startSecOf(it.source) ?? 0;
@@ -101,37 +129,51 @@ export function CorpusVideoDetail({ videoId, tags }: { videoId: string; tags: st
           {title}
         </h2>
         <span className="text-xs text-zinc-500 shrink-0">{items.length} 条语料</span>
-        <button
-          type="button"
-          onClick={() =>
-            void openUrl(`https://www.youtube.com/watch?v=${videoId}`).catch(() => {})
-          }
-          title="在浏览器打开"
-          className="shrink-0 flex h-7 w-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-blue-300"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </button>
+        {(videoId || groupUrl) && (
+          <button
+            type="button"
+            onClick={() =>
+              void openUrl(
+                videoId ? `https://www.youtube.com/watch?v=${videoId}` : groupUrl!,
+              ).catch(() => {})
+            }
+            title="在浏览器打开"
+            className="shrink-0 flex h-7 w-7 items-center justify-center rounded text-zinc-400 hover:bg-zinc-800 hover:text-blue-300"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
-      <YouTubeEmbed key={`${videoId}:${seekSec}:${seekNonce}`} videoId={videoId} startSec={seekSec} />
+      {videoId ? (
+        <YouTubeEmbed key={`${videoId}:${seekSec}:${seekNonce}`} videoId={videoId} startSec={seekSec} />
+      ) : (
+        <div className="text-[11px] text-zinc-500 bg-zinc-900 border border-zinc-800 rounded px-3 py-2">
+          该来源不是 YouTube 视频，无法内嵌播放器。下面是它的语料，点击 🔗 可在浏览器打开原文。
+        </div>
+      )}
 
       {items.length === 0 ? (
-        <div className="text-zinc-500 text-sm">这个视频暂无语料（可能需要点右上角 ↻ 刷新）。</div>
+        <div className="text-zinc-500 text-sm">这个来源暂无语料（可能需要点右上角 ↻ 刷新）。</div>
       ) : (
         <ul className="space-y-1">
           {items.map((it) => {
             const sec = startSecOf(it.source);
             const isActive = active === it.phraseNormalized;
+            const url = it.source?.url;
             return (
               <li
                 key={it.phraseNormalized}
-                onClick={() => jump(it)}
+                onClick={() => {
+                  if (videoId) jump(it);
+                  else if (url) void openUrl(url).catch(() => {});
+                }}
                 className={`group px-3 py-2 rounded cursor-pointer hover:bg-zinc-800 ${
                   isActive ? 'bg-zinc-800' : 'bg-zinc-900'
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  {sec !== null && (
+                  {videoId && sec !== null && (
                     <button
                       type="button"
                       onClick={(e) => {
@@ -144,6 +186,9 @@ export function CorpusVideoDetail({ videoId, tags }: { videoId: string; tags: st
                       <Play className="h-2.5 w-2.5 fill-current" />
                       {formatTime(sec)}
                     </button>
+                  )}
+                  {!videoId && url && (
+                    <LinkIcon className="h-3 w-3 text-zinc-500 shrink-0" />
                   )}
                   <span className="text-sm font-medium flex-1 min-w-0">{it.phraseRaw}</span>
                   <button

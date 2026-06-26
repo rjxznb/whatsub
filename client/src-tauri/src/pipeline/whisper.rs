@@ -333,6 +333,75 @@ pub async fn transcribe(
     // whisper-cli writes <out_base>.srt
     let out_base = out_dir.join("transcript").to_string_lossy().to_string();
 
+    // GPU device selection — invariant across stall retries.
+    let (prefer_discrete, pinned) = gpu_preference();
+    let pin_str = pinned.map(|i| i.to_string());
+    let env: Vec<(&str, &str)> = match pin_str.as_deref() {
+        Some(s) => vec![("GGML_VK_VISIBLE_DEVICES", s)],
+        None => vec![],
+    };
+
+    // Stall auto-recovery: a sleep-wedged whisper-cli (hung process / lost GPU
+    // context on wake) gets killed by the spawn watchdog ("stalled"). whisper.cpp
+    // has no mid-file resume, so re-run from scratch on the SAME audio.wav (no
+    // re-download / re-extract — the GPU is healthy again after wake). Bounded so
+    // a persistently-broken GPU surfaces a real error instead of looping forever.
+    const WHISPER_STALL_RETRIES: u32 = 2;
+    let mut stall_retries: u32 = 0;
+    loop {
+        match run_whisper_once(
+            app, &audio_str, &model_str, &out_base, &env, prefer_discrete, pinned, video_id, cancel,
+        )
+        .await
+        {
+            Ok(()) => return Ok(out_dir.join("transcript.srt")),
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(e)
+                if e.to_string().contains("stalled") && stall_retries < WHISPER_STALL_RETRIES =>
+            {
+                stall_retries += 1;
+                emit(
+                    app,
+                    PipelineEvent::Log {
+                        video_id: video_id.to_string(),
+                        source: "whatsub".into(),
+                        line: format!(
+                            "[whatsub] 转录卡住（可能是休眠中断）— 自动重新转录 ({}/{})",
+                            stall_retries, WHISPER_STALL_RETRIES
+                        ),
+                    },
+                );
+                // Restart the bar from 0 instead of leaving it frozen at the old %.
+                emit(
+                    app,
+                    PipelineEvent::Transcribing {
+                        video_id: video_id.to_string(),
+                        percent: 0,
+                    },
+                );
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// One whisper-cli transcription attempt: builds the progress / backend / device
+/// callbacks, runs whisper, and on success emits the CPU-fallback notice + the
+/// Vulkan device inventory. Returns `Err(... "stalled" ...)` when the spawn
+/// watchdog killed a wedged process — `transcribe` retries those from scratch.
+#[allow(clippy::too_many_arguments)]
+async fn run_whisper_once(
+    app: &AppHandle,
+    audio_str: &str,
+    model_str: &str,
+    out_base: &str,
+    env: &[(&str, &str)],
+    prefer_discrete: bool,
+    pinned: Option<u32>,
+    video_id: &str,
+    cancel: Option<&CancellationToken>,
+) -> AppResult<()> {
     let id = video_id.to_string();
     let app_clone = app.clone();
     let id_for_log = video_id.to_string();
@@ -384,19 +453,6 @@ pub async fn transcribe(
     // we just don't surface it.
     let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
     let last_progress_clone = last_progress.clone();
-    // ── GPU device selection ─────────────────────────────────────────────
-    // On a hybrid laptop whisper.cpp's Vulkan backend defaults to device 0,
-    // which is usually the integrated GPU. If a discrete card was detected on
-    // a previous (unfiltered) run and the user hasn't opted out, pin it via
-    // GGML_VK_VISIBLE_DEVICES so transcription uses the faster dGPU. The very
-    // first run on a fresh install is unpinned (no inventory yet) → it learns
-    // the device list and the next run switches automatically.
-    let (prefer_discrete, pinned) = gpu_preference();
-    let pin_str = pinned.map(|i| i.to_string());
-    let env: Vec<(&str, &str)> = match pin_str.as_deref() {
-        Some(s) => vec![("GGML_VK_VISIBLE_DEVICES", s)],
-        None => vec![],
-    };
     // Collect every Vulkan device line so we can persist the inventory after an
     // unfiltered run (a pinned run only sees the 1 selected device).
     let devices = std::sync::Arc::new(std::sync::Mutex::new(Vec::<GpuDevice>::new()));
@@ -414,8 +470,8 @@ pub async fn transcribe(
         app,
         "whisper-cli",
         &[
-            "-m", &model_str,
-            "-f", &audio_str,
+            "-m", model_str,
+            "-f", audio_str,
             "-l", "en",
             // Disable text-context carryover between 30s windows (whisper.cpp
             // default is -1 = carry as much prior transcript as fits). With it
@@ -428,10 +484,10 @@ pub async fn transcribe(
             // downstream LLM translation normalizes anyway.
             "-mc", "0",
             "-osrt",
-            "-of", &out_base,
+            "-of", out_base,
             "--print-progress",
         ],
-        &env,
+        env,
         Some(progress_count.clone()),
         move |chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
@@ -508,7 +564,7 @@ pub async fn transcribe(
         }
     }
 
-    Ok(out_dir.join("transcript.srt"))
+    Ok(())
 }
 
 fn parse_progress(line: &str) -> Option<u8> {

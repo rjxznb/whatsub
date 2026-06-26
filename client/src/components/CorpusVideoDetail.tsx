@@ -3,6 +3,7 @@ import { Play, ExternalLink, Volume2, Link as LinkIcon } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { YouTubeEmbed, parseYouTubeUrl } from './YouTubeEmbed';
+import { PhrasePlayer } from './PhrasePlayer';
 import { ttsSpeak } from '../tutor/tts';
 
 /** One source shown as a single page: for a YouTube source, ONE player on top
@@ -82,8 +83,16 @@ function formatTime(sec: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags: string[] }) {
-  const { data, error } = useCorpusList<BrowseResp>({ mode: 'browse', tags });
+export function CorpusVideoDetail({
+  sourceKey,
+  tags,
+  scope = 'browse',
+}: {
+  sourceKey: string;
+  tags: string[];
+  scope?: 'browse' | 'mine';
+}) {
+  const { data, error } = useCorpusList<BrowseResp>({ mode: scope, tags });
   // seekSec + nonce key the embed; bumping the nonce re-seeks even to the same
   // second (so re-clicking a row replays from its timestamp).
   const [seekSec, setSeekSec] = useState(0);
@@ -100,15 +109,24 @@ export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags
   }
 
   const videoId = sourceKey.startsWith('yt:') ? sourceKey.slice(3) : null;
+  // Personal-corpus sources are often LOCAL Library videos (lib:<entryId>) —
+  // play those with PhrasePlayer (local file → YouTube fallback), same single
+  // player + timestamp-jump UX.
+  const libId = sourceKey.startsWith('lib:') ? sourceKey.slice(4) : null;
+  const hasPlayer = !!(videoId || libId);
   const items = data.items
     .filter((it) => groupKeyOf(it.source) === sourceKey)
     .sort((a, b) => (startSecOf(a.source) ?? 0) - (startSecOf(b.source) ?? 0));
+
+  // A YouTube id fallback for PhrasePlayer when the local file is gone.
+  const ytFallback =
+    items.map((it) => it.source?.youtubeId ?? ytIdOf(it.source?.url)).find(Boolean) ?? undefined;
 
   const fallbackTitle = videoId
     ? `YouTube · ${videoId}`
     : sourceKey.startsWith('url:')
       ? sourceKey.slice(4)
-      : sourceKey.startsWith('lib:')
+      : libId
         ? '库内视频'
         : '手动添加';
   const title = items.find((it) => it.source?.title)?.source?.title ?? fallbackTitle;
@@ -145,11 +163,18 @@ export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags
         )}
       </div>
 
-      {videoId ? (
+      {libId ? (
+        <PhrasePlayer
+          key={`${libId}:${seekSec}:${seekNonce}`}
+          videoId={libId}
+          youtubeId={ytFallback}
+          seekTo={seekSec}
+        />
+      ) : videoId ? (
         <YouTubeEmbed key={`${videoId}:${seekSec}:${seekNonce}`} videoId={videoId} startSec={seekSec} />
       ) : (
         <div className="text-[11px] text-zinc-500 bg-zinc-900 border border-zinc-800 rounded px-3 py-2">
-          该来源不是 YouTube 视频，无法内嵌播放器。下面是它的语料，点击 🔗 可在浏览器打开原文。
+          该来源没有可播放的视频。下面是它的语料，点击 🔗 可在浏览器打开原文。
         </div>
       )}
 
@@ -157,15 +182,15 @@ export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags
         <div className="text-zinc-500 text-sm">这个来源暂无语料（可能需要点右上角 ↻ 刷新）。</div>
       ) : (
         <ul className="space-y-1">
-          {items.map((it) => {
+          {items.map((it, i) => {
             const sec = startSecOf(it.source);
             const isActive = active === it.phraseNormalized;
             const url = it.source?.url;
             return (
               <li
-                key={it.phraseNormalized}
+                key={`${it.phraseNormalized}-${i}`}
                 onClick={() => {
-                  if (videoId) jump(it);
+                  if (hasPlayer) jump(it);
                   else if (url) void openUrl(url).catch(() => {});
                 }}
                 className={`group px-3 py-2 rounded cursor-pointer hover:bg-zinc-800 ${
@@ -173,7 +198,7 @@ export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  {videoId && sec !== null && (
+                  {hasPlayer && sec !== null && (
                     <button
                       type="button"
                       onClick={(e) => {
@@ -187,7 +212,7 @@ export function CorpusVideoDetail({ sourceKey, tags }: { sourceKey: string; tags
                       {formatTime(sec)}
                     </button>
                   )}
-                  {!videoId && url && (
+                  {!hasPlayer && url && (
                     <LinkIcon className="h-3 w-3 text-zinc-500 shrink-0" />
                   )}
                   <span className="text-sm font-medium flex-1 min-w-0">{it.phraseRaw}</span>

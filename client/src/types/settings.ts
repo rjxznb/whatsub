@@ -81,13 +81,6 @@ export interface Settings {
    *  persisted so Settings can list the cards and the next run can pin the
    *  discrete one. Populated by the GpuDevices pipeline event. */
   whisperGpus?: WhisperGpu[];
-  /** Optional proxy for yt-dlp (search + download), e.g.
-   *  `http://127.0.0.1:7890` (Clash) or `socks5://127.0.0.1:1080`. Needed on a
-   *  GFW network where YouTube is reachable only via a proxy: the installed app
-   *  doesn't inherit the shell's HTTP_PROXY, so set it here. Empty = auto
-   *  (env HTTP_PROXY → probe common local ports). `off` / `direct` forces a
-   *  direct connection. */
-  ytDlpProxy?: string;
   /** Per-vendor api-key + model stash. Lets DeepSeek / Kimi / 智谱 / Qwen /
    *  MiniMax etc. each remember their own credentials so switching vendors
    *  no longer wipes the previous one's key. The currently-active vendor's
@@ -130,7 +123,6 @@ export const DEFAULT_SETTINGS: Settings = {
   cookiesFile: "",
   whisperBackend: "",
   preferDiscreteGpu: true,
-  ytDlpProxy: "",
   vendorKeys: {},
   bridgeEnabled: true,
   captionFontColor: "#FFFFFF",

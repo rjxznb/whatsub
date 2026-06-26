@@ -21,6 +21,8 @@ export function Corpus() {
   // CorpusPhraseList) so we pick the right panel.
   const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [browseLayout, setBrowseLayout] = useState<BrowseLayout>('flat');
+  const [mineLayout, setMineLayout] = useState<BrowseLayout>('flat');
+  const activeLayout = mode === 'mine' ? mineLayout : browseLayout;
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -124,18 +126,16 @@ export function Corpus() {
                   autoSelectFirst={mode === 'browse'}
                   onSelectSource={setSelectedSource}
                   selectedSource={selectedSource}
-                  onBrowseLayoutChange={(l) => {
-                    setBrowseLayout(l);
-                    if (l !== 'source') setSelectedSource(null);
-                  }}
+                  onLayoutChange={setBrowseLayout}
                 />
               </div>
               <div className="flex-1 min-w-0 h-full">
-                {mode === 'browse' && browseLayout === 'source' ? (
+                {activeLayout === 'source' ? (
                   selectedSource ? (
                     <CorpusVideoDetail
                       sourceKey={selectedSource}
-                      tags={mode === 'browse' ? tags : []}
+                      scope={mode}
+                      tags={tags}
                     />
                   ) : (
                     <div className="h-full p-6 text-zinc-500">
@@ -151,8 +151,14 @@ export function Corpus() {
                   mode="mine"
                   tags={mode === 'mine' ? tags : []}
                   selected={mode === 'mine' ? phrase : null}
-                  onSelect={setPhrase}
+                  onSelect={(p) => {
+                    setPhrase(p);
+                    setSelectedSource(null);
+                  }}
                   autoSelectFirst={mode === 'mine'}
+                  onSelectSource={setSelectedSource}
+                  selectedSource={selectedSource}
+                  onLayoutChange={setMineLayout}
                 />
               </div>
             </div>

@@ -27,7 +27,6 @@ interface MineItem {
 }
 
 // ── 按来源 grouping (mirrors the mobile GroupedMineView) ──────────────────────
-type MineLayout = 'flat' | 'grouped';
 const LAYOUT_KEY = 'corpus.mine.layout';
 // Public list has three arrangements: flat / by video source / by scene-tag.
 export type BrowseLayout = 'flat' | 'source' | 'tag';
@@ -109,7 +108,7 @@ interface Props {
   selectedSource?: string | null;
   /** Browse-only: notify the parent of the current layout (fires on mount + on
    *  every change) so it can choose the right detail panel. */
-  onBrowseLayoutChange?: (layout: BrowseLayout) => void;
+  onLayoutChange?: (layout: BrowseLayout) => void;
 }
 
 export function CorpusPhraseList({
@@ -120,7 +119,7 @@ export function CorpusPhraseList({
   autoSelectFirst,
   onSelectSource,
   selectedSource,
-  onBrowseLayoutChange,
+  onLayoutChange,
 }: Props) {
   const { data, error, refreshing, refresh } = useCorpusList<BrowseResp | MineResp>(
     mode === 'mine' ? { mode: 'mine', tags } : { mode: 'browse', tags },
@@ -128,33 +127,23 @@ export function CorpusPhraseList({
   const isMine = mode === 'mine';
   const [addOpen, setAddOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [layout, setLayout] = useState<MineLayout>(() => {
+  // Unified layout for BOTH lists: 平铺 / 按视频来源 / 按场景标签. Persisted per
+  // scope (mine vs browse). The legacy mine value 'grouped' migrates to 'source'.
+  const layoutKey = isMine ? LAYOUT_KEY : BROWSE_LAYOUT_KEY;
+  const [layout, setLayout] = useState<BrowseLayout>(() => {
     try {
-      return (localStorage.getItem(LAYOUT_KEY) as MineLayout) ?? 'flat';
+      const raw = localStorage.getItem(layoutKey);
+      if (raw === 'grouped') return 'source';
+      return (raw as BrowseLayout) ?? 'flat';
     } catch {
       return 'flat';
     }
   });
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const setMineLayout = (l: MineLayout) => {
+  const setLayoutPersist = (l: BrowseLayout) => {
     setLayout(l);
     try {
-      localStorage.setItem(LAYOUT_KEY, l);
-    } catch {
-      /* ignore */
-    }
-  };
-  const [browseLayout, setBrowseLayout] = useState<BrowseLayout>(() => {
-    try {
-      return (localStorage.getItem(BROWSE_LAYOUT_KEY) as BrowseLayout) ?? 'flat';
-    } catch {
-      return 'flat';
-    }
-  });
-  const setBrowseLayoutPersist = (l: BrowseLayout) => {
-    setBrowseLayout(l);
-    try {
-      localStorage.setItem(BROWSE_LAYOUT_KEY, l);
+      localStorage.setItem(layoutKey, l);
     } catch {
       /* ignore */
     }
@@ -205,8 +194,8 @@ export function CorpusPhraseList({
   // Tell the parent which browse layout is active (so it can pick the phrase-
   // detail vs the video-detail panel). Fires on mount + every change.
   useEffect(() => {
-    if (!isMine) onBrowseLayoutChange?.(browseLayout);
-  }, [isMine, browseLayout, onBrowseLayoutChange]);
+    onLayoutChange?.(layout);
+  }, [layout, onLayoutChange]);
 
   // Auto-select on entering the page / refresh so users don't land on a blank
   // detail panel. In 按视频来源 we auto-select the first VIDEO, otherwise the
@@ -215,9 +204,9 @@ export function CorpusPhraseList({
     if (!autoSelectFirst) return;
     const items = data?.items;
     if (!items || items.length === 0) return;
-    if (!isMine && browseLayout === 'source') {
+    if (layout === 'source') {
       if (selectedSource) return;
-      onSelectSource?.(groupKey((items[0] as PublicItem).source));
+      onSelectSource?.(groupKey((items[0] as MineItem).source));
       return;
     }
     if (selected) return;
@@ -226,8 +215,7 @@ export function CorpusPhraseList({
     autoSelectFirst,
     selected,
     selectedSource,
-    browseLayout,
-    isMine,
+    layout,
     data,
     onSelect,
     onSelectSource,
@@ -247,11 +235,11 @@ export function CorpusPhraseList({
         )}
       </span>
       <div className="flex items-center gap-1">
-        {/* Layout: 平铺 (flat) vs 按来源分组 (grouped). */}
+        {/* Layout: 平铺 / 按视频来源 / 按场景标签 (same as the public list). */}
         <div className="flex items-center rounded bg-zinc-800/60 p-0.5">
           <button
             type="button"
-            onClick={() => setMineLayout('flat')}
+            onClick={() => setLayoutPersist('flat')}
             title="平铺：每条短语一行"
             className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'flat' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
           >
@@ -259,11 +247,19 @@ export function CorpusPhraseList({
           </button>
           <button
             type="button"
-            onClick={() => setMineLayout('grouped')}
-            title="按来源分组"
-            className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'grouped' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+            onClick={() => setLayoutPersist('source')}
+            title="按视频来源分组"
+            className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'source' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
           >
             <Layers size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setLayoutPersist('tag')}
+            title="按场景 / 标签分组"
+            className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'tag' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+          >
+            <Tags size={12} />
           </button>
         </div>
         <button
@@ -283,25 +279,25 @@ export function CorpusPhraseList({
       <div className="flex items-center rounded bg-zinc-800/60 p-0.5">
         <button
           type="button"
-          onClick={() => setBrowseLayoutPersist('flat')}
+          onClick={() => setLayoutPersist('flat')}
           title="平铺：每条短语一行"
-          className={'grid h-5 w-5 place-items-center rounded ' + (browseLayout === 'flat' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+          className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'flat' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
         >
           <List size={12} />
         </button>
         <button
           type="button"
-          onClick={() => setBrowseLayoutPersist('source')}
+          onClick={() => setLayoutPersist('source')}
           title="按视频来源分组"
-          className={'grid h-5 w-5 place-items-center rounded ' + (browseLayout === 'source' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+          className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'source' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
         >
           <Layers size={12} />
         </button>
         <button
           type="button"
-          onClick={() => setBrowseLayoutPersist('tag')}
+          onClick={() => setLayoutPersist('tag')}
           title="按场景 / 标签分组"
-          className={'grid h-5 w-5 place-items-center rounded ' + (browseLayout === 'tag' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
+          className={'grid h-5 w-5 place-items-center rounded ' + (layout === 'tag' ? 'bg-white/10 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300')}
         >
           <Tags size={12} />
         </button>
@@ -374,9 +370,9 @@ export function CorpusPhraseList({
       return <div className="p-4 text-zinc-500 text-sm">暂无</div>;
     }
 
-    // 公共「按视频来源」：每个视频一行的选择器；点击 → 父组件展示该视频的播放器
-    // + 该视频下所有语料（带时间戳跳转），而不是每条语料各自一个播放器。
-    if (!isMine && browseLayout === 'source') {
+    // 「按视频来源」：每个来源一行的选择器；点击 → 父组件展示该视频的播放器 + 该
+    // 视频下所有语料（带时间戳跳转），而不是每条语料各自一个播放器。公共/我的通用。
+    if (layout === 'source') {
       const order: string[] = [];
       const buckets = new Map<string, PublicItem[]>();
       for (const it of data.items as PublicItem[]) {
@@ -412,45 +408,9 @@ export function CorpusPhraseList({
       );
     }
 
-    // 按来源分组（仅「我的」）：group key = libraryEntryId → youtubeId → host → manual.
-    if (isMine && layout === 'grouped') {
-      const order: string[] = [];
-      const buckets = new Map<string, MineItem[]>();
-      for (const it of data.items as MineItem[]) {
-        const k = groupKey(it.source);
-        if (!buckets.has(k)) {
-          buckets.set(k, []);
-          order.push(k);
-        }
-        buckets.get(k)!.push(it);
-      }
-      return (
-        <div>
-          {order.map((k) => {
-            const grp = buckets.get(k)!;
-            const isCollapsed = collapsed.has(k);
-            return (
-              <div key={k}>
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(k)}
-                  className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] text-zinc-400 hover:bg-zinc-800/60 border-b border-zinc-800/60"
-                >
-                  <ChevronDown size={12} className={isCollapsed ? '-rotate-90 transition-transform' : 'transition-transform'} />
-                  <span className="flex-1 truncate text-zinc-300">{groupTitle(grp[0].source, k)}</span>
-                  <span className="text-zinc-500">{grp.length}</span>
-                </button>
-                {!isCollapsed && <ul>{grp.map((it, i) => renderRow(it, i))}</ul>}
-              </div>
-            );
-          })}
-        </div>
-      );
-    }
-
-    // 按场景/标签分组（仅公共）：一条短语出现在它的每个标签下；18 个官方场景
-    // 按 SCENE_ORDER 在前，自定义标签按字母在后，无标签的归到「未分类」。
-    if (!isMine && browseLayout === 'tag') {
+    // 按场景/标签分组：一条短语出现在它的每个标签下；18 个官方场景按 SCENE_ORDER
+    // 在前，自定义标签按字母在后，无标签的归到「未分类」。公共/我的通用。
+    if (layout === 'tag') {
       const buckets = new Map<string, PublicItem[]>();
       const untagged: PublicItem[] = [];
       for (const it of data.items as PublicItem[]) {

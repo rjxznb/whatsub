@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { CorpusPhraseList } from '../components/CorpusPhraseList';
+import { CorpusPhraseList, type BrowseLayout } from '../components/CorpusPhraseList';
 import { CorpusPhraseDetail } from '../components/CorpusPhraseDetail';
+import { CorpusVideoDetail } from '../components/CorpusVideoDetail';
 import { CorpusNav } from '../components/CorpusNav';
 import { CorpusTagChips } from '../components/CorpusTagChips';
 import { CorpusTour } from '../components/CorpusTour';
@@ -15,6 +16,10 @@ export function Corpus() {
   const [mode, setMode] = useState<Mode>('browse');
   const [tags, setTags] = useState<string[]>([]);
   const [phrase, setPhrase] = useState<string | null>(null);
+  // 按视频来源: the selected video for the video-detail panel + a mirror of the
+  // browse layout (reported up by CorpusPhraseList) so we pick the right panel.
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
+  const [browseLayout, setBrowseLayout] = useState<BrowseLayout>('flat');
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -61,16 +66,19 @@ export function Corpus() {
   function toggleTag(t: string) {
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
     setPhrase(null);
+    setSelectedVideo(null);
   }
 
   function clearTags() {
     setTags([]);
     setPhrase(null);
+    setSelectedVideo(null);
   }
 
   function switchMode(next: Mode) {
     setMode(next);
     setPhrase(null);
+    setSelectedVideo(null);
     setTags([]); // tag namespaces don't overlap between scopes
   }
 
@@ -108,12 +116,34 @@ export function Corpus() {
                   mode="browse"
                   tags={mode === 'browse' ? tags : []}
                   selected={mode === 'browse' ? phrase : null}
-                  onSelect={setPhrase}
+                  onSelect={(p) => {
+                    setPhrase(p);
+                    setSelectedVideo(null);
+                  }}
                   autoSelectFirst={mode === 'browse'}
+                  onSelectVideo={setSelectedVideo}
+                  selectedVideo={selectedVideo}
+                  onBrowseLayoutChange={(l) => {
+                    setBrowseLayout(l);
+                    if (l !== 'source') setSelectedVideo(null);
+                  }}
                 />
               </div>
               <div className="flex-1 min-w-0 h-full">
-                <CorpusPhraseDetail phraseNormalized={phrase} />
+                {mode === 'browse' && browseLayout === 'source' ? (
+                  selectedVideo ? (
+                    <CorpusVideoDetail
+                      videoId={selectedVideo}
+                      tags={mode === 'browse' ? tags : []}
+                    />
+                  ) : (
+                    <div className="h-full p-6 text-zinc-500">
+                      选择左侧的一个视频，查看它的播放器和全部语料
+                    </div>
+                  )
+                ) : (
+                  <CorpusPhraseDetail phraseNormalized={phrase} />
+                )}
               </div>
               <div className="w-64 shrink-0 h-full border-l border-zinc-800">
                 <CorpusPhraseList

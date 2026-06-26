@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Loader2, List, Layers, Tags, ChevronDown } from 'lucide-react';
+import { Plus, Trash2, Loader2, List, Layers, Tags, Film, ChevronDown } from 'lucide-react';
 import { SCENE_ORDER, SCENE_LABELS } from '../lib/scenes';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { corpusQuota, type Quota } from '../lib/api/quota';
@@ -30,7 +30,7 @@ interface MineItem {
 type MineLayout = 'flat' | 'grouped';
 const LAYOUT_KEY = 'corpus.mine.layout';
 // Public list has three arrangements: flat / by video source / by scene-tag.
-type BrowseLayout = 'flat' | 'source' | 'tag';
+export type BrowseLayout = 'flat' | 'source' | 'tag';
 const BROWSE_LAYOUT_KEY = 'corpus.browse.layout';
 
 function hostOf(url?: string): string | null {
@@ -100,9 +100,26 @@ interface Props {
    *  this only on the currently-visible list so we don't auto-select on
    *  the parked sibling. */
   autoSelectFirst?: boolean;
+  /** Browse-only: in 按视频来源 the list becomes a video picker; clicking a video
+   *  row calls this with its YouTube id so the parent shows the video-detail. */
+  onSelectVideo?: (videoId: string) => void;
+  /** Browse-only: highlights the selected video row. */
+  selectedVideo?: string | null;
+  /** Browse-only: notify the parent of the current layout (fires on mount + on
+   *  every change) so it can choose the right detail panel. */
+  onBrowseLayoutChange?: (layout: BrowseLayout) => void;
 }
 
-export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFirst }: Props) {
+export function CorpusPhraseList({
+  mode,
+  tags,
+  selected,
+  onSelect,
+  autoSelectFirst,
+  onSelectVideo,
+  selectedVideo,
+  onBrowseLayoutChange,
+}: Props) {
   const { data, error, refreshing, refresh } = useCorpusList<BrowseResp | MineResp>(
     mode === 'mine' ? { mode: 'mine', tags } : { mode: 'browse', tags },
   );
@@ -183,15 +200,42 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
     return () => { cancelled = true; };
   }, [isMine, data]);
 
-  // Auto-select the first phrase when entering the page or when the active
-  // list refreshes — so users don't land on a blank detail panel.
+  // Tell the parent which browse layout is active (so it can pick the phrase-
+  // detail vs the video-detail panel). Fires on mount + every change.
   useEffect(() => {
-    if (!autoSelectFirst || selected) return;
+    if (!isMine) onBrowseLayoutChange?.(browseLayout);
+  }, [isMine, browseLayout, onBrowseLayoutChange]);
+
+  // Auto-select on entering the page / refresh so users don't land on a blank
+  // detail panel. In 按视频来源 we auto-select the first VIDEO, otherwise the
+  // first phrase.
+  useEffect(() => {
+    if (!autoSelectFirst) return;
     const items = data?.items;
-    if (items && items.length > 0) {
-      onSelect(items[0].phraseNormalized);
+    if (!items || items.length === 0) return;
+    if (!isMine && browseLayout === 'source') {
+      if (selectedVideo) return;
+      for (const it of items as PublicItem[]) {
+        const k = groupKey(it.source);
+        if (k.startsWith('yt:')) {
+          onSelectVideo?.(k.slice(3));
+          return;
+        }
+      }
+      return;
     }
-  }, [autoSelectFirst, selected, data, onSelect]);
+    if (selected) return;
+    onSelect(items[0].phraseNormalized);
+  }, [
+    autoSelectFirst,
+    selected,
+    selectedVideo,
+    browseLayout,
+    isMine,
+    data,
+    onSelect,
+    onSelectVideo,
+  ]);
 
   const quotaFull = quota ? quota.used >= quota.limit : false;
   const header = isMine ? (
@@ -334,8 +378,47 @@ export function CorpusPhraseList({ mode, tags, selected, onSelect, autoSelectFir
       return <div className="p-4 text-zinc-500 text-sm">暂无</div>;
     }
 
-    // 按来源分组（「我的」grouped 或 公共 source）：group key = libraryEntryId → youtubeId → host → manual.
-    if ((isMine && layout === 'grouped') || (!isMine && browseLayout === 'source')) {
+    // 公共「按视频来源」：每个视频一行的选择器；点击 → 父组件展示该视频的播放器
+    // + 该视频下所有语料（带时间戳跳转），而不是每条语料各自一个播放器。
+    if (!isMine && browseLayout === 'source') {
+      const order: string[] = [];
+      const buckets = new Map<string, PublicItem[]>();
+      for (const it of data.items as PublicItem[]) {
+        const k = groupKey(it.source);
+        if (!buckets.has(k)) {
+          buckets.set(k, []);
+          order.push(k);
+        }
+        buckets.get(k)!.push(it);
+      }
+      return (
+        <ul>
+          {order.map((k) => {
+            const grp = buckets.get(k)!;
+            const vid = k.startsWith('yt:') ? k.slice(3) : null;
+            const isSel = vid != null && selectedVideo === vid;
+            return (
+              <li
+                key={k}
+                onClick={() => (vid ? onSelectVideo?.(vid) : onSelect(grp[0].phraseNormalized))}
+                className={`flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-zinc-800 ${
+                  isSel ? 'bg-zinc-800' : ''
+                }`}
+              >
+                <Film size={14} className="shrink-0 text-zinc-500" />
+                <span className="flex-1 truncate text-sm text-zinc-200">
+                  {groupTitle(grp[0].source, k)}
+                </span>
+                <span className="text-[11px] text-zinc-500 shrink-0">{grp.length}</span>
+              </li>
+            );
+          })}
+        </ul>
+      );
+    }
+
+    // 按来源分组（仅「我的」）：group key = libraryEntryId → youtubeId → host → manual.
+    if (isMine && layout === 'grouped') {
       const order: string[] = [];
       const buckets = new Map<string, MineItem[]>();
       for (const it of data.items as MineItem[]) {

@@ -48,8 +48,11 @@ export function AccountLoginDialog({
     setSending(false);
   }
 
+  // Preserve the typed email/code on close — an accidental backdrop/✕ click
+  // mid-flow shouldn't wipe an in-progress login (which then reaches verify
+  // with an empty email → backend `invalid_input`). State is reset only after
+  // a successful login.
   function close() {
-    reset();
     onClose();
   }
 
@@ -76,6 +79,14 @@ export function AccountLoginDialog({
   async function submitCode(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (!email.trim()) {
+      // Defensive: if the email state was somehow lost, go back to step 1
+      // rather than POSTing an empty email (which the backend 400s as
+      // `invalid_input`).
+      setError('邮箱信息丢失了，请重新输入邮箱获取验证码');
+      setPhase('email');
+      return;
+    }
     if (!/^\d{6}$/.test(code.trim())) {
       setError('验证码应为 6 位数字');
       return;
@@ -90,7 +101,8 @@ export function AccountLoginDialog({
       }
       // Re-evaluate app-unlock mode (a subscriber → SUB_ACTIVE). Best-effort.
       await initLicense().catch(() => {});
-      close();
+      reset();
+      onClose();
     } catch (err) {
       setError('登录失败：' + String(err));
       setPhase('code');
@@ -213,6 +225,10 @@ function reasonToChinese(reason?: string): string {
   switch (reason) {
     case 'invalid_email':
       return '邮箱格式不对';
+    case 'invalid_input':
+      return '邮箱或验证码无效，请重新获取验证码后再试';
+    case 'invalid_json':
+      return '请求格式有误，请重试';
     case 'no_code':
       return '请先获取验证码';
     case 'wrong_code':

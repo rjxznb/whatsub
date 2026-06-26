@@ -42,10 +42,30 @@ function hostOf(url?: string): string | null {
   }
 }
 
-/** Stable group key: Library entry → YouTube → URL host → "manual". */
+/** Extract the YouTube video id from a watch / youtu.be URL, so phrases from
+ *  the SAME video group together. Curator sources carry only `url` (no
+ *  `youtubeId` field), so without this every YouTube phrase collapsed into one
+ *  `url:youtube.com` bucket. */
+function ytIdOf(url?: string): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    if (host === 'youtu.be') return u.pathname.slice(1) || null;
+    if (host.endsWith('youtube.com')) return u.searchParams.get('v');
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Stable group key: Library entry → YouTube video → URL host → "manual".
+ *  YouTube is keyed by the individual video id (one group per video). */
 function groupKey(s?: MineSource): string {
   if (s?.libraryEntryId) return `lib:${s.libraryEntryId}`;
   if (s?.youtubeId) return `yt:${s.youtubeId}`;
+  const yid = ytIdOf(s?.url);
+  if (yid) return `yt:${yid}`;
   const h = hostOf(s?.url);
   if (h) return `url:${h}`;
   return 'manual';
@@ -54,7 +74,8 @@ function groupKey(s?: MineSource): string {
 function groupTitle(s: MineSource | undefined, key: string): string {
   if (s?.title) return s.title;
   if (key.startsWith('lib:')) return '库内视频';
-  if (key.startsWith('yt:')) return 'YouTube';
+  // No title on curator sources — show the video id so each video is distinct.
+  if (key.startsWith('yt:')) return `YouTube · ${key.slice(3)}`;
   if (key.startsWith('url:')) return key.slice(4);
   return '手动添加';
 }

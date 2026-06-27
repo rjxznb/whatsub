@@ -19,18 +19,18 @@ interface Slide {
 
 const SLIDES: Slide[] = [
   {
-    badge: "功能一",
-    icon: "🎬",
-    title: "YouTube 双语字幕 · AI 解析重点",
-    desc: "导入 YouTube 视频，自动生成中英双语字幕；AI 标注重点词汇和短语，点一下就能查义、记笔记。",
-    media: "/help/feature-subtitles.mp4",
+    badge: "公共语料库",
+    icon: "📚",
+    title: "精选生活场景语料",
+    desc: "18 个真实生活场景的高频英语短语，可按场景、视频来源或标签浏览；每条带中文释义和重点笔记，点 ▶ 时间戳就能跳到原视频对应位置听原声。",
+    media: "/help/corpus-browse.mp4",
   },
   {
-    badge: "功能二",
-    icon: "🧩",
-    title: "划词同步 · 多端语料库",
-    desc: "浏览器插件在任意英文网页划词一键保存，桌面端立刻同步——多设备共享你的私人语料库。",
-    media: "/help/feature-plugin-sync.mp4",
+    badge: "我的语料库",
+    icon: "⭐",
+    title: "随手收藏 · 多端同步",
+    desc: "在桌面端字幕里、或用浏览器插件在任意英文网页划词，一键收藏到你的个人语料库，多设备自动同步、随时回看。",
+    media: "/help/corpus-mine.mp4",
   },
 ];
 
@@ -40,10 +40,10 @@ interface Props {
 }
 
 /**
- * Left/right paging onboarding for the corpus page. Two slides, each
- * announcing a core feature with its own demo clip:
- *   1. YouTube bilingual subtitles + AI key-vocab analysis
- *   2. Highlight-to-sync multi-device corpus (the plugin)
+ * Left/right paging onboarding for the corpus page. Two slides introducing
+ * what the 语料库 IS (not the plugin / subtitle pitch it used to show):
+ *   1. 公共语料库 — browse curated phrases by scene / video source / tag
+ *   2. 我的语料库 — save phrases (desktop or plugin) → multi-device sync
  *
  * Slides translate horizontally on a flex track (same pattern as the
  * corpus mode switcher). Prev/next arrows + dot indicators drive paging.
@@ -71,7 +71,7 @@ export function CorpusTour({ onDismiss }: Props) {
         {/* Top bar */}
         <div className="flex items-center justify-between px-6 pt-5 pb-1">
           <span className="text-[11px] uppercase tracking-wide text-amber-300/80 font-medium">
-            新功能介绍
+            语料库介绍
           </span>
           <button
             type="button"
@@ -171,14 +171,22 @@ export function CorpusTour({ onDismiss }: Props) {
           </button>
         </div>
 
-        {/* Action — single CTA to the plugin website (✕ / backdrop dismiss). */}
-        <div className="px-6 py-5">
+        {/* Action — primary 知道了 dismisses; the plugin (one way to fill 我的
+            语料库) is a secondary link, not the headline. */}
+        <div className="px-6 py-5 space-y-2">
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="w-full px-4 py-2 bg-amber-400/15 border border-amber-400/50 text-amber-100 rounded-lg hover:bg-amber-400/25 transition-colors text-sm font-medium"
+          >
+            知道了
+          </button>
           <button
             type="button"
             onClick={openPluginSite}
-            className="w-full px-4 py-2 bg-amber-400/15 border border-amber-400/50 text-amber-100 rounded-lg hover:bg-amber-400/25 transition-colors text-sm font-medium"
+            className="w-full text-[11px] text-zinc-500 hover:text-amber-300 transition-colors"
           >
-            下载插件
+            想在网页上划词收藏？下载浏览器插件 →
           </button>
         </div>
       </div>

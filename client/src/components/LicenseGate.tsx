@@ -218,9 +218,12 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
             transform="rotate(-90 56 56)"
             className="seal-ring"
           />
-          {/* Checkmark — three-point polyline, length ≈ 38. Drawn after
-              ring finishes. strokeLinecap=round so the tips look hand-
-              engraved rather than blocky. */}
+          {/* Checkmark — three-point polyline. Actual path length is ≈55.2
+              (18.4 + 36.8), NOT the ~38 an earlier comment claimed: the
+              dash/offset MUST be ≥ that or the draw animation stops short and
+              the long-stroke tip is clipped ("对勾显示不全"). 60 gives margin.
+              Drawn after the ring finishes; strokeLinecap=round so the tips
+              look hand-engraved rather than blocky. */}
           <path
             d="M 38 57 L 51 70 L 76 43"
             fill="none"
@@ -228,8 +231,8 @@ function CelebrationOverlay({ onDone }: { onDone: () => void }) {
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
-            strokeDasharray="50"
-            strokeDashoffset="50"
+            strokeDasharray="60"
+            strokeDashoffset="60"
             className="seal-check"
           />
         </svg>

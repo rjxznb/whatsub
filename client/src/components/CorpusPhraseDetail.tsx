@@ -56,20 +56,6 @@ function formatTime(sec: number): string {
  *  `source.timestampSec` (set at save time), falls back to parsing it out
  *  of the URL's `t=` param. Returns null when neither carries one — the
  *  jump button is hidden in that case rather than silently jumping to 0. */
-// Mirror of CorpusTagChips' label map so scene tag chips render as the
-// Chinese label (not the raw key like "medical"). Free-form admin tags
-// fall through to their literal string.
-const SCENE_LABELS: Record<string, string> = {
-  immigration: '入境通关', housing: '住房安家', medical: '医疗健康',
-  campus: '校园学习', banking: '银行财务', shopping: '日常购物',
-  transport: '交通出行', social: '社交日常', dining: '餐饮',
-  emergency: '紧急情况', job: '求职职场', phone: '电话沟通',
-  salon: '美容美发', driving: '驾照开车', travel: '旅游度假',
-  fitness: '运动健身', mental_health: '心理健康', maintenance: '搬家维修',
-};
-function tagLabel(t: string): string {
-  return SCENE_LABELS[t] ?? t;
-}
 
 function phraseTagList(tags: Record<string, unknown> | string[] | null | undefined): string[] {
   if (!tags) return [];
@@ -263,7 +249,7 @@ export function CorpusPhraseDetail({ phraseNormalized }: Props) {
                   key={t}
                   className="px-2 py-0.5 text-[11px] rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-200"
                 >
-                  {tagLabel(t)}
+                  {t}
                 </span>
               ))}
             </div>

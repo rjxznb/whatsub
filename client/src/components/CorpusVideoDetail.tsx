@@ -178,6 +178,12 @@ export function CorpusVideoDetail({
         </div>
       )}
 
+      {videoId && (
+        <p className="text-[11px] text-zinc-600 leading-relaxed">
+          播不了？多半是当前代理节点被 YouTube 限了——换个节点，或点右上角 ⧉ 在浏览器打开。
+        </p>
+      )}
+
       {items.length === 0 ? (
         <div className="text-zinc-500 text-sm">这个来源暂无语料（可能需要点右上角 ↻ 刷新）。</div>
       ) : (

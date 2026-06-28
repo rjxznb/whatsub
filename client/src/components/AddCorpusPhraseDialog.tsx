@@ -13,7 +13,6 @@ import {
   type CorpusSource,
 } from "../lib/api/corpus";
 import { parseYouTubeUrl } from "./YouTubeEmbed";
-import { SCENE_ORDER, SCENE_LABELS } from "../lib/scenes";
 
 interface Props {
   /** True when used >= limit — submit is blocked. */
@@ -103,9 +102,6 @@ export function AddCorpusPhraseDialog({ quotaFull, onClose, onAdded }: Props) {
     }
   };
 
-  // Custom (non-scene) tags the user already picked, shown after the scene grid.
-  const customSelected = tags.filter((t) => !SCENE_ORDER.includes(t as never));
-
   return createPortal(
     <div
       className="fixed inset-0 z-[140] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
@@ -162,33 +158,20 @@ export function AddCorpusPhraseDialog({ quotaFull, onClose, onAdded }: Props) {
           </Field>
 
           <Field label="标签">
-            <div className="flex flex-wrap gap-1.5">
-              {SCENE_ORDER.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => toggleTag(s)}
-                  className={
-                    "rounded-full px-2 py-0.5 text-[11px] transition-colors " +
-                    (tags.includes(s)
-                      ? "bg-amber-400/20 text-amber-200 border border-amber-400/50"
-                      : "bg-zinc-800 text-zinc-400 border border-zinc-700 hover:text-zinc-200")
-                  }
-                >
-                  {SCENE_LABELS[s]}
-                </button>
-              ))}
-              {customSelected.map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => toggleTag(t)}
-                  className="rounded-full border border-amber-400/50 bg-amber-400/20 px-2 py-0.5 text-[11px] text-amber-200"
-                >
-                  {t} ✕
-                </button>
-              ))}
-            </div>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => toggleTag(t)}
+                    className="rounded-full border border-amber-400/50 bg-amber-400/20 px-2 py-0.5 text-[11px] text-amber-200"
+                  >
+                    {t} ✕
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="mt-1.5 flex gap-2">
               <input
                 value={customTag}

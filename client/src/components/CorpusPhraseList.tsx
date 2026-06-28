@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Plus, Trash2, Loader2, List, Layers, Tags, Film, ChevronDown } from 'lucide-react';
-import { SCENE_ORDER, SCENE_LABELS } from '../lib/scenes';
 import { useCorpusList } from '../hooks/useCorpusList';
 import { corpusQuota, type Quota } from '../lib/api/quota';
 import { corpusDelete } from '../lib/api/corpus';
@@ -408,8 +407,8 @@ export function CorpusPhraseList({
       );
     }
 
-    // 按场景/标签分组：一条短语出现在它的每个标签下；18 个官方场景按 SCENE_ORDER
-    // 在前，自定义标签按字母在后，无标签的归到「未分类」。公共/我的通用。
+    // 按标签分组：一条短语出现在它的每个标签下；组按「条数多→少、同条数按字母」
+    // 排序，无标签的归到「未分类」。公共/我的通用。标签是自由文本，不再有场景概念。
     if (layout === 'tag') {
       const buckets = new Map<string, PublicItem[]>();
       const untagged: PublicItem[] = [];
@@ -424,10 +423,9 @@ export function CorpusPhraseList({
           buckets.get(t)!.push(it);
         }
       }
-      const officialSet = SCENE_ORDER as readonly string[];
-      const official = SCENE_ORDER.filter((s) => buckets.has(s));
-      const custom = [...buckets.keys()].filter((t) => !officialSet.includes(t)).sort();
-      const order = [...official, ...custom];
+      const order = [...buckets.keys()].sort(
+        (a, b) => buckets.get(b)!.length - buckets.get(a)!.length || a.localeCompare(b),
+      );
       const renderGroup = (k: string, title: string, grp: PublicItem[]) => {
         const isCollapsed = collapsed.has(k);
         return (
@@ -447,7 +445,7 @@ export function CorpusPhraseList({
       };
       return (
         <div>
-          {order.map((t) => renderGroup(`tag:${t}`, SCENE_LABELS[t] ?? t, buckets.get(t)!))}
+          {order.map((t) => renderGroup(`tag:${t}`, t, buckets.get(t)!))}
           {untagged.length > 0 && renderGroup('tag:__untagged', '未分类', untagged)}
         </div>
       );

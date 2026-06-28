@@ -21,16 +21,16 @@ const SLIDES: Slide[] = [
   {
     badge: "公共语料库",
     icon: "📚",
-    title: "精选生活场景语料",
-    desc: "18 个真实生活场景的高频英语短语，可按场景、视频来源或标签浏览；每条带中文释义和重点笔记，点 ▶ 时间戳就能跳到原视频对应位置听原声。",
-    media: "/help/corpus-browse.mp4",
+    title: "精选实用英语短语",
+    desc: "精选地道英语短语，每条带中文释义和重点笔记，并标注它出自哪个视频；可按视频来源或标签浏览，点 ▶ 时间戳就能跳到原视频对应位置听原声。",
+    media: "/help/feature-subtitles.mp4",
   },
   {
     badge: "我的语料库",
     icon: "⭐",
     title: "随手收藏 · 多端同步",
     desc: "在桌面端字幕里、或用浏览器插件在任意英文网页划词，一键收藏到你的个人语料库，多设备自动同步、随时回看。",
-    media: "/help/corpus-mine.mp4",
+    media: "/help/feature-plugin-sync.mp4",
   },
 ];
 

@@ -10,6 +10,9 @@ const PLUGIN_WEBSITE_URL = "https://whatsub.eversay.cc/plugin";
 interface Slide {
   badge: string;
   icon: string;
+  /** Optional image icon (e.g. an SVG under client/public). When set it
+   *  replaces the emoji `icon`. */
+  iconSrc?: string;
   title: string;
   desc: string;
   /** Demo clip. Drop a short muted mp4 at the path under client/public.
@@ -21,6 +24,7 @@ const SLIDES: Slide[] = [
   {
     badge: "公共语料库",
     icon: "📚",
+    iconSrc: "/icons/corpus.svg",
     title: "精选实用英语短语",
     desc: "精选地道英语短语，每条带中文释义和重点笔记，并标注它出自哪个视频；可按视频来源或标签浏览，点 ▶ 时间戳就能跳到原视频对应位置听原声。",
     media: "/help/feature-subtitles.mp4",
@@ -93,7 +97,11 @@ export function CorpusTour({ onDismiss }: Props) {
               <div key={i} className="w-full shrink-0 px-6">
                 <div className="flex items-center gap-3 pt-1">
                   <div className="h-10 w-10 rounded-full bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-xl">
-                    {slide.icon}
+                    {slide.iconSrc ? (
+                      <img src={slide.iconSrc} alt="" className="h-6 w-6" />
+                    ) : (
+                      slide.icon
+                    )}
                   </div>
                   <div>
                     <div className="text-[11px] text-amber-300/80 font-medium">
@@ -171,22 +179,22 @@ export function CorpusTour({ onDismiss }: Props) {
           </button>
         </div>
 
-        {/* Action — primary 知道了 dismisses; the plugin (one way to fill 我的
-            语料库) is a secondary link, not the headline. */}
+        {/* Action — 下载插件 is the primary CTA (the plugin fills 我的语料库);
+            a small 知道了 below dismisses. */}
         <div className="px-6 py-5 space-y-2">
           <button
             type="button"
-            onClick={onDismiss}
+            onClick={openPluginSite}
             className="w-full px-4 py-2 bg-amber-400/15 border border-amber-400/50 text-amber-100 rounded-lg hover:bg-amber-400/25 transition-colors text-sm font-medium"
           >
-            知道了
+            下载插件
           </button>
           <button
             type="button"
-            onClick={openPluginSite}
-            className="w-full text-[11px] text-zinc-500 hover:text-amber-300 transition-colors"
+            onClick={onDismiss}
+            className="w-full text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            想在网页上划词收藏？下载浏览器插件 →
+            知道了
           </button>
         </div>
       </div>

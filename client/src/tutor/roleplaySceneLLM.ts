@@ -1,7 +1,33 @@
 import { extractJsonObject } from "./lessonPlanLLM";
 import { getProvider } from "../llm/providers";
 import type { Settings } from "../types/settings";
+import type { Subtitle } from "../llm/types";
 import type { LearnerProfile, RoleplayScenario } from "./types";
+
+/** Scene generation only needs the gist of the video (setting/topics + key
+ *  phrases), NOT the full transcript with every Chinese translation + note —
+ *  sending all cues makes the prompt enormous on a long video (a 40-min clip has
+ *  hundreds of cues → minutes to generate, high cost). Build a compact,
+ *  English-only slice: ~50 evenly-sampled dialogue lines (so topic coverage
+ *  spans the whole video, not just the opening) + up to 30 highlight phrases
+ *  (the vocabHints source). */
+function compactAnalysis(analysis: unknown): { lines: string[]; phrases: string[] } {
+  const cues = Array.isArray(analysis) ? (analysis as Subtitle[]) : [];
+  const step = Math.max(1, Math.ceil(cues.length / 50));
+  const lines = cues
+    .filter((_, i) => i % step === 0)
+    .map((c) => c?.text?.trim())
+    .filter((t): t is string => !!t);
+  const phrases = Array.from(
+    new Set(
+      cues
+        .flatMap((c) => c?.highlightWords ?? [])
+        .map((p) => p.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 30);
+  return { lines, phrases };
+}
 
 function concatSse(raw: string): string {
   let out = "";
@@ -92,7 +118,10 @@ export async function deriveScenarios(args: {
   let raw = "";
   for await (const chunk of provider.stream({
     systemPrompt: SCENE_SYSTEM,
-    userPrompt: JSON.stringify({ analysis: args.analysis, profile: profileSlice }),
+    userPrompt: JSON.stringify({
+      analysis: compactAnalysis(args.analysis),
+      profile: profileSlice,
+    }),
     signal: args.signal,
   })) {
     raw += chunk;

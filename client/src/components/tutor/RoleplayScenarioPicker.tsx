@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import type { RoleplayScenario } from "../../tutor/types";
 import { TUTOR_CARD, TUTOR_EYEBROW, BTN_GHOST } from "./styles";
 
@@ -24,8 +25,9 @@ export function RoleplayScenarioPicker({
       <div className="text-base text-zinc-100 mb-5">挑一个场景开始</div>
 
       {loading && scenarios.length === 0 && (
-        <div className="text-sm text-zinc-500 py-6 text-center">
-          正在生成场景…
+        <div className="flex flex-col items-center justify-center gap-3 py-10 text-zinc-400">
+          <Loader2 size={22} className="animate-spin text-amber-400" />
+          <span className="text-sm">正在生成场景…</span>
         </div>
       )}
 

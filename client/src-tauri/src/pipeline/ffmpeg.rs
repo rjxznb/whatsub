@@ -161,6 +161,110 @@ pub async fn probe_duration_secs(app: &AppHandle, path: &Path) -> f64 {
     }
 }
 
+/// Probe the first video + audio stream's codec names (lowercased; empty when a
+/// stream is absent). One ffprobe call, CSV `codec_type,codec_name` per stream.
+pub async fn probe_codecs(app: &AppHandle, path: &Path) -> (String, String) {
+    let p = path.to_string_lossy().to_string();
+    let out = run_sidecar(
+        app,
+        "ffprobe",
+        &[
+            "-v", "error",
+            "-show_entries", "stream=codec_type,codec_name",
+            "-of", "csv=p=0",
+            &p,
+        ],
+        |_l: &str| {},
+        None,
+    )
+    .await;
+    let (mut vcodec, mut acodec) = (String::new(), String::new());
+    if let Ok(s) = out {
+        for line in s.lines() {
+            let parts: Vec<&str> = line.trim().split(',').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            // -show_entries stream=codec_type,codec_name → "video,h264" / "audio,ac3"
+            match parts[0] {
+                "video" if vcodec.is_empty() => vcodec = parts[1].to_ascii_lowercase(),
+                "audio" if acodec.is_empty() => acodec = parts[1].to_ascii_lowercase(),
+                _ => {}
+            }
+        }
+    }
+    (vcodec, acodec)
+}
+
+/// Make a local import playable in the WebView `<video>` element, writing the
+/// result to `dest` (source.mp4). WebView2/Chromium can't decode AC-3 / DTS /
+/// E-AC-3 audio (common in MKV) → the picture plays but there's NO SOUND; and
+/// HEVC / VP9 / AV1 video may not play at all. So: if the source is already
+/// H.264 + (AAC|MP3) we just byte-copy (fast — most mp4s). Otherwise we
+/// transcode, copying the video stream when it's already H.264 (only re-encoding
+/// the offending audio — fast) and re-encoding video only when it isn't. Audio
+/// re-encode forces stereo (`-ac 2`) to dodge the multichannel-AAC corruption
+/// noted in CLAUDE-PITFALLS.
+pub async fn ensure_web_playable_mp4(
+    app: &AppHandle,
+    src_path: &Path,
+    dest_path: &Path,
+    video_id: &str,
+    cancel: Option<&CancellationToken>,
+) -> AppResult<()> {
+    let (vcodec, acodec) = probe_codecs(app, src_path).await;
+    let video_ok = vcodec == "h264";
+    let audio_ok = acodec.is_empty() || matches!(acodec.as_str(), "aac" | "mp3");
+
+    if video_ok && audio_ok {
+        std::fs::copy(src_path, dest_path)?;
+        return Ok(());
+    }
+
+    let app_for_log = app.clone();
+    let vid = video_id.to_string();
+    let log = move |line: &str| {
+        emit(
+            &app_for_log,
+            PipelineEvent::Log {
+                video_id: vid.clone(),
+                source: "ffmpeg".into(),
+                line: line.into(),
+            },
+        );
+    };
+    emit(
+        app,
+        PipelineEvent::Log {
+            video_id: video_id.to_string(),
+            source: "whatsub".into(),
+            line: format!(
+                "检测到内置播放器不兼容的编码（视频 {} / 音频 {}），正在转码以便播放…",
+                if vcodec.is_empty() { "?" } else { &vcodec },
+                if acodec.is_empty() { "无" } else { &acodec },
+            ),
+        },
+    );
+
+    let src = src_path.to_string_lossy().to_string();
+    let out = dest_path.to_string_lossy().to_string();
+    let mut args: Vec<&str> = vec!["-y", "-i", &src];
+    if video_ok {
+        args.extend(["-c:v", "copy"]);
+    } else {
+        args.extend(["-c:v", "libx264", "-crf", "20", "-preset", "veryfast"]);
+    }
+    if audio_ok {
+        args.extend(["-c:a", "copy"]);
+    } else {
+        args.extend(["-c:a", "aac", "-b:a", "192k", "-ac", "2"]);
+    }
+    args.extend(["-movflags", "+faststart", &out]);
+
+    run_sidecar(app, "ffmpeg", &args, log, cancel).await?;
+    Ok(())
+}
+
 /// Transcode a video to a mobile-friendly 720p H.264 MP4 (never upscales) with
 /// faststart (moov atom up front for progressive streaming). Used by library
 /// cloud-sync before uploading to OSS.

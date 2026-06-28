@@ -170,7 +170,17 @@ async fn run_import(
         }
         "local" => {
             let dest = out_dir.join("source.mp4");
-            std::fs::copy(&req.source_value, &dest)?;
+            // Copy as-is when already web-playable (H.264 + AAC/MP3); otherwise
+            // transcode — WebView2 can't decode AC-3/DTS audio (common in MKV →
+            // video plays but no sound) or HEVC/VP9/AV1 video.
+            ffmpeg::ensure_web_playable_mp4(
+                app,
+                std::path::Path::new(&req.source_value),
+                &dest,
+                video_id,
+                Some(cancel),
+            )
+            .await?;
             let thumb = out_dir.join("thumb.jpg");
             ffmpeg::extract_thumbnail(app, &dest, &thumb, video_id, Some(cancel)).await?;
             // Probe the duration (yt-dlp gives URL imports this for free; local

@@ -1185,13 +1185,15 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 }
                 title={
                   canSubmit
-                    ? "放到后台继续下载，关闭弹窗。后台模式 yt-dlp 会重试更长时间"
+                    ? tab === "url"
+                      ? "放到后台继续下载，关闭弹窗。后台模式 yt-dlp 会重试更长时间"
+                      : "放到后台解析，关闭弹窗，解析完成后自动入库"
                     : tab === "url"
                     ? "请先粘贴视频链接"
                     : "请先选择视频文件"
                 }
               >
-                后台下载
+                {tab === "url" ? "后台下载" : "后台解析"}
               </button>
               <button
                 data-tour="submit-button"

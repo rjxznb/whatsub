@@ -27,7 +27,7 @@ const SLIDES: Slide[] = [
     iconSrc: "/icons/corpus.svg",
     title: "精选实用英语短语",
     desc: "精选地道英语短语，每条带中文释义和重点笔记，并标注它出自哪个视频；可按视频来源或标签浏览，点 ▶ 时间戳就能跳到原视频对应位置听原声。",
-    media: "/help/feature-subtitles.mp4",
+    media: "/help/corpus-browse.mp4",
   },
   {
     badge: "我的语料库",

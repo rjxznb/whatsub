@@ -783,11 +783,9 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // ------- Progress view -------
   if (submitting) {
     const showBar = phase === "downloading" || phase === "transcribing";
-    // Local-file imports skip the download phase (yt-dlp is not invoked).
-    const visiblePhases: Phase[] =
-      tab === "local"
-        ? ["started", "extracting", "transcribing", "done"]
-        : ["started", "downloading", "extracting", "transcribing", "done"];
+    // 准备中 + 下载视频 are shown as ONE step (the "started" step also covers the
+    // download phase for URL imports). Local imports have no download phase.
+    const visiblePhases: Phase[] = ["started", "extracting", "transcribing", "done"];
     return (
       <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
         <div className="bg-zinc-900 border border-zinc-700 rounded-lg p-6 w-[520px] max-w-full max-h-[90vh] overflow-y-auto">
@@ -818,8 +816,17 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
 
           <div className="space-y-3">
             {visiblePhases.map((p) => {
-              const isCurrent = phase === p;
-              const isDone = phaseOrder(p) < phaseOrder(phase);
+              // The "started" step is the merged 准备中 + 下载视频 stage: for URL
+              // imports it stays current through the download phase, and is only
+              // "done" once we move past downloading (extracting+).
+              const isStarted = p === "started";
+              const isCurrent = isStarted
+                ? phase === "started" || phase === "downloading"
+                : phase === p;
+              const isDone = isStarted
+                ? phaseOrder(phase) > phaseOrder("downloading")
+                : phaseOrder(p) < phaseOrder(phase);
+              const label = isStarted && tab !== "local" ? "下载视频" : PHASE_LABEL[p];
               return (
                 <div
                   key={p}
@@ -842,18 +849,20 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                     )}
                   </span>
                   <span className="font-medium">
-                    {PHASE_LABEL[p]}
-                    {/* Sub-step badge inside "准备中" when active —
+                    {label}
+                    {/* Sub-step badge inside the merged step when active —
                         shows which yt-dlp sub-task is currently running
                         so a long preparation isn't a black box. */}
-                    {isCurrent && p === "started" && preparingStep && (
+                    {isCurrent && isStarted && preparingStep && (
                       <span className="ml-2 text-[11px] text-blue-200/80 font-normal">
                         · {PREPARING_SUBSTEP_LABEL[preparingStep] ?? preparingStep}
                       </span>
                     )}
                   </span>
                   <span className="flex-1 text-[10px] text-zinc-600 italic">
-                    {phaseDuration(p, settings.whisperModel)}
+                    {isStarted && tab !== "local"
+                      ? "随网速：几秒到几分钟"
+                      : phaseDuration(p, settings.whisperModel)}
                   </span>
                   {isCurrent && showBar && (
                     <span className="text-xs text-zinc-400 tabular-nums">

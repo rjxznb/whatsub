@@ -36,13 +36,13 @@ on:
         required: true
         default: '1.4.309.0'
       ffmpeg_url_macos:
-        description: 'Static ffmpeg arm64 zip URL'
+        description: 'Static ffmpeg arm64 zip URL. Default mirrors osxexperts 7.1.1 on our public release repo — the GH macOS runner intermittently fails DNS for osxexperts.net (Could not resolve host), but always resolves github.com.'
         required: true
-        default: 'https://www.osxexperts.net/ffmpeg711arm.zip'
+        default: 'https://github.com/rjxznb/whatsub-releases/releases/download/build-deps/ffmpeg711arm.zip'
       ffprobe_url_macos:
-        description: 'Static ffprobe arm64 zip URL (osxexperts publishes ffmpeg/ffprobe separately on macOS — Win gyan.dev bundles both in one zip)'
+        description: 'Static ffprobe arm64 zip URL (mirrored on our release repo — same osxexperts-DNS reason as ffmpeg_url_macos).'
         required: true
-        default: 'https://www.osxexperts.net/ffprobe711arm.zip'
+        default: 'https://github.com/rjxznb/whatsub-releases/releases/download/build-deps/ffprobe711arm.zip'
       ffmpeg_url_windows:
         description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe). gyan.dev is more stable than BtbN whose latest-tag asset names rotate.'
         required: true

@@ -64,7 +64,13 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
   build-windows:
     if: inputs.targets == 'both' || inputs.targets == 'windows'
-    runs-on: windows-latest
+    # Pinned to windows-2022: `windows-latest` migrated toward windows-2025,
+    # whose image broke CMake's "Visual Studio 17 2022" generator detection
+    # ("could not find any instance of Visual Studio") when the whisper.cpp
+    # cache expired and it rebuilt from source. 2022 is the known-good image
+    # with VS 2022 (used by the last successful release). Do NOT revert to
+    # windows-latest without re-checking the VS generator on the new image.
+    runs-on: windows-2022
     timeout-minutes: 45
     defaults:
       run:

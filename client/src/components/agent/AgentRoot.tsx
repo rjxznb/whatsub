@@ -107,13 +107,38 @@ export function AgentRoot() {
   const prevModeRef = useRef<ChatBarMode>(mode);
 
   // First-run coachmark for the AI 助手. Fire once per machine (localStorage
-  // gate → both fresh installs and updating users see it on next launch), after
-  // a short delay so the ChatBar has mounted + positioned.
+  // gate → both fresh installs and updating users see it on next launch).
+  // Sequenced AFTER the Library import tour so the two first-run guides never
+  // overlap (both land on /library on first launch). `libraryTourSeen` is set
+  // when the import tour finishes; for updating users it's already set, so this
+  // resolves on the first check (after a short ChatBar-settle delay).
   const [showTour, setShowTour] = useState(false);
   useEffect(() => {
     if (!shouldShowAgentTour()) return;
-    const t = setTimeout(() => setShowTour(true), 1200);
-    return () => clearTimeout(t);
+    const libraryTourDone = () => {
+      try {
+        return !!localStorage.getItem("libraryTourSeen");
+      } catch {
+        return true;
+      }
+    };
+    let iv = 0;
+    const t = setTimeout(() => {
+      if (libraryTourDone()) {
+        setShowTour(true);
+        return;
+      }
+      iv = window.setInterval(() => {
+        if (libraryTourDone()) {
+          setShowTour(true);
+          window.clearInterval(iv);
+        }
+      }, 1000);
+    }, 1200);
+    return () => {
+      clearTimeout(t);
+      if (iv) window.clearInterval(iv);
+    };
   }, []);
   const dismissTour = useCallback(() => {
     markAgentTourSeen();

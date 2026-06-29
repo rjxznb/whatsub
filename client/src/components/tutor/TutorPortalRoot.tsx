@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTutorRuntime } from "../../store/tutorRuntime";
 import { useVoiceMode } from "../../store/voiceMode";
 import { useSettings } from "../../store/settings";
@@ -22,6 +22,11 @@ import { generateReport } from "../../tutor/roleplayReportLLM";
 import { RemediationRuntime } from "../../tutor/remediationRuntime";
 import { saveLessonState, clearLessonState } from "../../tutor/lessonState";
 import { deriveScenarios } from "../../tutor/roleplaySceneLLM";
+import {
+  getCachedScenarios,
+  setCachedScenarios,
+  clearCachedScenarios,
+} from "../../tutor/roleplayScenarioCache";
 import {
   computeLessonSummary,
   shouldOfferRemediation,
@@ -400,32 +405,53 @@ function RoleplayPickerHost(props: {
 }) {
   const { loading, scenarios, sourceVideoId, settings, onPick, onCancel } = props;
 
+  const deriveAndStore = useCallback(async () => {
+    useTutorRuntime.getState().setMode({
+      kind: "roleplay-picker",
+      scenarios: [],
+      sourceVideoId,
+      loading: true,
+    });
+    const profile = await loadLearnerProfile();
+    const derived = await deriveScenarios({
+      settings,
+      analysis: useAnalysis.getState().subtitles,
+      profile,
+      sourceVideoId,
+    });
+    // bail if the user closed/navigated away from the picker mid-derivation
+    if (useTutorRuntime.getState().mode.kind !== "roleplay-picker") return;
+    setCachedScenarios(sourceVideoId, derived);
+    useTutorRuntime.getState().setMode({
+      kind: "roleplay-picker",
+      scenarios: derived,
+      sourceVideoId,
+      loading: false,
+    });
+  }, [settings, sourceVideoId]);
+
   useEffect(() => {
+    // The tool path already populated scenarios (loading:false) — nothing to do.
     if (!loading) return;
-    let cancelled = false;
-    (async () => {
-      const profile = await loadLearnerProfile();
-      const derived = await deriveScenarios({
-        settings,
-        analysis: useAnalysis.getState().subtitles,
-        profile,
-        sourceVideoId,
-      });
-      if (cancelled) return;
-      // bail if the user closed/navigated away from the picker mid-derivation
-      if (useTutorRuntime.getState().mode.kind !== "roleplay-picker") return;
+    // Reuse this session's batch for the video if we have one; else derive once.
+    const cached = getCachedScenarios(sourceVideoId);
+    if (cached) {
       useTutorRuntime.getState().setMode({
         kind: "roleplay-picker",
-        scenarios: derived,
+        scenarios: cached,
         sourceVideoId,
         loading: false,
       });
-    })();
-    return () => {
-      cancelled = true;
-    };
+      return;
+    }
+    void deriveAndStore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const onRefresh = useCallback(() => {
+    clearCachedScenarios(sourceVideoId);
+    void deriveAndStore();
+  }, [sourceVideoId, deriveAndStore]);
 
   return (
     <RoleplayScenarioPicker
@@ -433,6 +459,7 @@ function RoleplayPickerHost(props: {
       loading={loading}
       onPick={onPick}
       onCancel={onCancel}
+      onRefresh={onRefresh}
     />
   );
 }

@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import type { RoleplayScenario } from "../../tutor/types";
 import { TUTOR_CARD, TUTOR_EYEBROW, BTN_GHOST } from "./styles";
 
@@ -7,6 +7,8 @@ interface Props {
   loading?: boolean;
   onPick: (s: RoleplayScenario) => void;
   onCancel: () => void;
+  /** Re-derive a fresh batch (clears the cached scenarios for this video). */
+  onRefresh?: () => void;
 }
 
 function stars(d: 1 | 2 | 3): string {
@@ -18,11 +20,26 @@ export function RoleplayScenarioPicker({
   loading,
   onPick,
   onCancel,
+  onRefresh,
 }: Props) {
   return (
     <div className={`${TUTOR_CARD} w-full max-w-[560px] p-7`}>
       <div className={`${TUTOR_EYEBROW} mb-2`}>角色扮演</div>
-      <div className="text-base text-zinc-100 mb-5">挑一个场景开始</div>
+      <div className="mb-5 flex items-center justify-between">
+        <div className="text-base text-zinc-100">挑一个场景开始</div>
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            title="换一批场景"
+            className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-zinc-400 transition-colors hover:text-amber-300 disabled:opacity-40"
+          >
+            <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+            换一批
+          </button>
+        )}
+      </div>
 
       {loading && scenarios.length === 0 && (
         <div className="flex flex-col items-center justify-center gap-3 py-10 text-zinc-400">

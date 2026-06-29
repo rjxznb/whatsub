@@ -5,6 +5,7 @@
 
 import type { ToolDef } from "../types";
 import { deriveScenarios } from "../../tutor/roleplaySceneLLM";
+import { getCachedScenarios, setCachedScenarios } from "../../tutor/roleplayScenarioCache";
 import { loadLearnerProfile } from "../../tutor/learnerProfile";
 import { useAnalysis } from "../../store/analysis";
 import { useSettings } from "../../store/settings";
@@ -37,11 +38,26 @@ export const startRoleplayTool: ToolDef<StartRoleplayArgs, StartRoleplayResult> 
   runningLabel: "正在生成角色扮演场景…",
   doneLabel: (r) => `推荐了 ${r.count} 个场景`,
   async execute(args, ctx) {
+    const sourceVideoId = args.sourceVideoId ?? null;
+
+    // Reuse this session's already-generated batch for this video if present —
+    // closing + reopening the picker should NOT re-derive a fresh batch.
+    const cached = getCachedScenarios(sourceVideoId);
+    if (cached) {
+      useTutorRuntime.getState().setMode({
+        kind: "roleplay-picker",
+        scenarios: cached,
+        sourceVideoId,
+        loading: false,
+      });
+      return { count: cached.length };
+    }
+
     // Show loading state immediately
     useTutorRuntime.getState().setMode({
       kind: "roleplay-picker",
       scenarios: [],
-      sourceVideoId: args.sourceVideoId ?? null,
+      sourceVideoId,
       loading: true,
     });
     const settings = useSettings.getState().settings;
@@ -51,13 +67,14 @@ export const startRoleplayTool: ToolDef<StartRoleplayArgs, StartRoleplayResult> 
       settings,
       analysis,
       profile,
-      sourceVideoId: args.sourceVideoId ?? null,
+      sourceVideoId,
       signal: ctx.signal,
     });
+    setCachedScenarios(sourceVideoId, scenarios);
     useTutorRuntime.getState().setMode({
       kind: "roleplay-picker",
       scenarios,
-      sourceVideoId: args.sourceVideoId ?? null,
+      sourceVideoId,
       loading: false,
     });
     return { count: scenarios.length };

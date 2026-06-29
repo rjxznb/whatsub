@@ -15,7 +15,7 @@
 
 import { useEffect, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useVoiceMode } from "../../store/voiceMode";
 import { useSettings } from "../../store/settings";
 import { usePlayerState } from "../../store/playerState";
@@ -66,6 +66,7 @@ function VoiceModeInner() {
   const [level, setLevel] = useState(0);
   const [liveReply, setLiveReply] = useState(""); // currently-streaming reply
   const [replies, setReplies] = useState<string[]>([]); // completed reply history
+  const [userText, setUserText] = useState(""); // last recognized user utterance
   const [replyIndex, setReplyIndex] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [micDenied, setMicDenied] = useState(false);
@@ -114,7 +115,10 @@ function VoiceModeInner() {
         setLevel(Math.min(1, rms / RMS_FULL_SCALE));
         if (rms > ACTIVITY_LEVEL) bumpActivity();
       },
-      onUserText: () => bumpActivity(),
+      onUserText: (text) => {
+        bumpActivity();
+        if (text.trim()) setUserText(text.trim());
+      },
       onAssistantText: (text, done) => {
         bumpActivity();
         if (done) {
@@ -175,8 +179,11 @@ function VoiceModeInner() {
   }, []);
 
   // Auto-dismiss after silence (only while idly listening, never mid-AI-turn
-  // or on the mic-denied screen).
+  // or on the mic-denied screen). DISABLED during a roleplay — a learner
+  // composing an English sentence routinely pauses >6s, and the conversation
+  // should persist until they explicitly end it (✕ / Esc / click-outside).
   useEffect(() => {
+    if (roleplay) return;
     const iv = setInterval(() => {
       if (micDenied) return;
       if (voiceState === "listening" && Date.now() - lastActivityRef.current > IDLE_DISMISS_MS) {
@@ -184,7 +191,7 @@ function VoiceModeInner() {
       }
     }, 700);
     return () => clearInterval(iv);
-  }, [voiceState, micDenied, handleClose]);
+  }, [voiceState, micDenied, handleClose, roleplay]);
 
   // ←/→ to browse reply history, Esc to close.
   useEffect(() => {
@@ -225,6 +232,17 @@ function VoiceModeInner() {
         if (e.target === e.currentTarget) handleClose();
       }}
     >
+      {/* Explicit close — roleplay disables the idle auto-close, so make the
+          ✕ obvious (the user asked for a clear way to end the conversation). */}
+      <button
+        type="button"
+        aria-label="结束对话"
+        onClick={handleClose}
+        className="absolute top-5 right-5 z-10 grid h-10 w-10 place-items-center rounded-full bg-black/40 text-zinc-200 transition-colors hover:bg-black/60"
+      >
+        <X size={20} />
+      </button>
+
       {micDenied ? (
         <div className="flex flex-col items-center gap-5 px-8 text-center max-w-sm">
           <p
@@ -264,6 +282,15 @@ function VoiceModeInner() {
               style={{ textShadow: "0 1px 8px rgba(0,0,0,0.8)" }}
             >
               🎭 {roleplay.title}
+            </div>
+          )}
+          {/* What the learner just said (speech-recognized) — so they can see
+              their own turn, not just the AI's reply. */}
+          {userText && (
+            <div className="flex w-full max-w-[680px] justify-end px-4">
+              <div className="max-w-[80%] rounded-2xl bg-blue-500/25 px-4 py-2 ring-1 ring-blue-300/20">
+                <p className="text-right text-sm text-blue-50">{userText}</p>
+              </div>
             </div>
           )}
           {/* Single reply, in a translucent pill, with ←/→ history nav beside it. */}

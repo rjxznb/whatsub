@@ -36,6 +36,7 @@ import { sendAgentMessage } from "../../agent/send";
 import type { Message } from "../../types/agent";
 import type { Settings } from "../../types/settings";
 import { ChatBar, type ChatBarMode } from "./ChatBar";
+import { AgentTour, shouldShowAgentTour, markAgentTourSeen } from "./AgentTour";
 import { ConversationHeader } from "./ConversationHeader";
 import { MessageList } from "./MessageList";
 import { InlineConfirmList } from "./InlineConfirmList";
@@ -104,6 +105,20 @@ export function AgentRoot() {
   >(undefined);
   const abortRef = useRef<AbortController | null>(null);
   const prevModeRef = useRef<ChatBarMode>(mode);
+
+  // First-run coachmark for the AI 助手. Fire once per machine (localStorage
+  // gate → both fresh installs and updating users see it on next launch), after
+  // a short delay so the ChatBar has mounted + positioned.
+  const [showTour, setShowTour] = useState(false);
+  useEffect(() => {
+    if (!shouldShowAgentTour()) return;
+    const t = setTimeout(() => setShowTour(true), 1200);
+    return () => clearTimeout(t);
+  }, []);
+  const dismissTour = useCallback(() => {
+    markAgentTourSeen();
+    setShowTour(false);
+  }, []);
 
   // Set up the navigator bridge once + hydrate persisted history once.
   // (Both are idempotent — useAgent.hydrate sets `hydrated` true, callers
@@ -277,15 +292,20 @@ export function AgentRoot() {
   const header = <ConversationHeader onClose={() => setMode("icon")} />;
 
   return (
-    <ChatBar
-      mode={mode}
-      onModeChange={setMode}
-      streaming={streamingMsgId != null}
-      hasUnread={unreadFlag}
-      header={header}
-      body={body}
-      inlineConfirms={<InlineConfirmList />}
-      inputBox={inputBox}
-    />
+    <>
+      <ChatBar
+        mode={mode}
+        onModeChange={setMode}
+        streaming={streamingMsgId != null}
+        hasUnread={unreadFlag}
+        header={header}
+        body={body}
+        inlineConfirms={<InlineConfirmList />}
+        inputBox={inputBox}
+      />
+      {showTour && !tutorActive && (
+        <AgentTour mode={mode} onDismiss={dismissTour} />
+      )}
+    </>
   );
 }

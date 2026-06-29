@@ -501,6 +501,7 @@ export function ChatBar({
     else dockStyle.right = 0;
     return (
       <div
+        data-agent-chatbar
         className="fixed z-50 group select-none"
         style={dockStyle}
         onMouseDown={onDockedIconMouseDown}
@@ -560,6 +561,7 @@ export function ChatBar({
     return (
       <div
         ref={containerRef}
+        data-agent-chatbar
         role="button"
         aria-label="打开 AI 助手"
         aria-expanded={false}
@@ -638,6 +640,7 @@ export function ChatBar({
   return (
     <div
       ref={containerRef}
+      data-agent-chatbar
       role="dialog"
       aria-label="AI 助手"
       aria-expanded={expanded}

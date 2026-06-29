@@ -410,6 +410,7 @@ export function InputBox({
   const toolsBtn = (
     <button
       ref={toolsBtnRef}
+      data-agent-tools-btn
       type="button"
       onClick={() => setToolsOpen((o) => !o)}
       aria-label="查看所有工具"

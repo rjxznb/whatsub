@@ -1,6 +1,22 @@
 import type { ErrorPattern } from "./errorPatterns";
 import { coerceErrorPattern } from "./errorPatterns";
 import { extractJsonObject } from "./lessonPlanLLM";
+import type { Subtitle } from "../llm/types";
+
+/** Explaining a cue only needs that cue + a little surrounding context, not the
+ *  whole video. Return a window of cues around cueIdx, each keyed by its real
+ *  index `i` (so anchor.cueIdx still resolves) with the Chinese translation. */
+function passageAround(analysis: unknown, cueIdx: number) {
+  const cues = Array.isArray(analysis) ? (analysis as Subtitle[]) : [];
+  const from = Math.max(0, cueIdx - 2);
+  const to = Math.min(cues.length, cueIdx + 5);
+  return cues.slice(from, to).map((c, k) => ({
+    i: from + k,
+    text: c?.text ?? "",
+    zh: c?.translation ?? "",
+    hl: c?.highlightWords?.filter(Boolean) ?? [],
+  }));
+}
 
 // Reuse the SSE concatenation logic. Re-implementing per file would drift.
 // The SSE-concat helper is duplicated here intentionally to avoid depending
@@ -111,7 +127,7 @@ import type { Settings } from "../types/settings";
 import type { LessonPlan } from "./types";
 import type { LessonLlmAdapter } from "./lessonRuntime";
 
-const EXPLAIN_SYSTEM = `You are a Chinese-speaking learner's English tutor. Explain a specific cue in plain natural Chinese (~80-150 chars), then list 1-3 key vocab items in **word**: 中文释义 markdown. End with one sentence on cultural/register context. Do NOT ask a question — that comes next.`;
+const EXPLAIN_SYSTEM = `You are a Chinese-speaking learner's English tutor. Input is { anchor: {cueIdx, topic, ...}, analysis: [{i, text, zh, hl}] } — explain the cue whose i === anchor.cueIdx (the others are surrounding context). Explain it in plain natural Chinese (~80-150 chars), then list 1-3 key vocab items in **word**: 中文释义 markdown. End with one sentence on cultural/register context. Do NOT ask a question — that comes next.`;
 
 const QUESTION_SYSTEM = `Generate ONE short Chinese-language English-production question for the learner, based on the just-explained cue. Output JSON only:
 { "question": "...", "expectedAnswer": "...", "targetPattern": "<pattern>" }
@@ -150,7 +166,7 @@ export function makeLiveLessonLlmAdapter(
   return {
     async explain({ plan, anchorIdx, analysis }: { plan: LessonPlan; anchorIdx: number; analysis: unknown }) {
       const anchor = plan.anchors[anchorIdx];
-      const userMsg = JSON.stringify({ anchor, analysis });
+      const userMsg = JSON.stringify({ anchor, analysis: passageAround(analysis, anchor.cueIdx) });
       return streamToText(settings, EXPLAIN_SYSTEM, userMsg, signal);
     },
     async question({ plan, anchorIdx, explainText }: { plan: LessonPlan; anchorIdx: number; explainText: string }) {

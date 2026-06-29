@@ -136,7 +136,20 @@ export function parseLessonPlanFromStream(
 
 import { getProvider } from "../llm/providers";
 import type { Settings } from "../types/settings";
+import type { Subtitle } from "../llm/types";
 import type { LearnerProfile } from "./types";
+
+/** Planning picks anchors BY cue index, so we must send every cue WITH its real
+ *  index — but NOT the Chinese translation / keyNotes / highlightTranslations,
+ *  which triple+ the prompt on a long video for no planning benefit. Keep only
+ *  `{ i: index, text, hl: highlight phrases }`. */
+function compactCues(analysis: unknown): Array<{ i: number; text: string; hl?: string[] }> {
+  const cues = Array.isArray(analysis) ? (analysis as Subtitle[]) : [];
+  return cues.map((c, i) => {
+    const hl = c?.highlightWords?.filter(Boolean) ?? [];
+    return hl.length ? { i, text: c?.text ?? "", hl } : { i, text: c?.text ?? "" };
+  });
+}
 
 const SYSTEM_PROMPT = `You are an English-as-foreign-language tutor planning a guided lesson on a video for a Chinese-speaking learner. Output ONLY a JSON object matching this schema (no markdown, no commentary):
 
@@ -163,6 +176,8 @@ Controlled patterns: past_tense_irregular, past_tense_regular, third_person_sing
 
 Example output for a 4-minute immigration vlog:
 {"videoId":"abc123","estimateTokens":3500,"overview":"教入境对话最常见的 5 个表达","anchors":[{"cueIdx":3,"topic":"I'm here for X","whyThisOne":"学员上次也错过 be here for","targetPatterns":["preposition_wrong"]}]}
+
+\`analysis\` is an array of cues \`{ i, text, hl }\` — i is the cue index (use it directly as cueIdx), text is the English line, hl is its highlight phrases (may be absent).
 `;
 
 export interface PlanLessonInput {
@@ -183,7 +198,7 @@ export async function planLesson(input: PlanLessonInput): Promise<LessonPlan | n
   };
   const userMessage = JSON.stringify({
     videoId: input.videoId,
-    analysis: input.analysis,
+    analysis: compactCues(input.analysis),
     profile: profileSlice,
   });
 

@@ -84,8 +84,11 @@ export function AgentTour({ mode, onDismiss }: Props) {
           transition: "left 120ms ease-out, top 120ms ease-out, width 120ms, height 120ms",
         }}
       />
-      {/* tooltip card */}
+      {/* tooltip card — data-agent-popover so clicking it does NOT trip the
+          panel's click-outside collapse (which would flip mode off "panel" and
+          bounce the tour back to step 1 before 知道了's onClick can fire). */}
       <div
+        data-agent-popover
         className="fixed z-[9999] rounded-lg border border-amber-400/40 bg-zinc-900 p-3.5 shadow-2xl"
         style={{
           width: TIP_W,

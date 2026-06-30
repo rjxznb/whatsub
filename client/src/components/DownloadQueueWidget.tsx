@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Download, CheckCircle2, AlertCircle } from "lucide-react";
 import { useDownloadQueue, type QueueItem, type QueuePhase } from "../store/downloadQueue";
 import {
@@ -7,6 +8,9 @@ import {
   type BgAnalysisJob,
 } from "../store/backgroundAnalyses";
 import { syncToCloud } from "../lib/api/librarySync";
+import { friendlyError } from "../utils/friendlyError";
+import { SiteLoginModal } from "./SiteLoginModal";
+import { useSettings } from "../store/settings";
 
 async function retryUpload(videoId: string): Promise<void> {
   useDownloadQueue.getState().update(videoId, { phase: "uploading", percent: 0, error: null });
@@ -20,6 +24,48 @@ async function retryUpload(videoId: string): Promise<void> {
   } catch (e) {
     useDownloadQueue.getState().update(videoId, { phase: "upload_failed", error: String(e) });
   }
+}
+
+export function FailedActions({
+  error,
+  sourceValue,
+  onRetry,
+}: {
+  error: string;
+  sourceValue: string;
+  onRetry: () => void;
+}) {
+  const [loginOpen, setLoginOpen] = useState(false);
+  const fe = friendlyError(error, "downloading", sourceValue);
+  return (
+    <span className="ml-auto flex items-center gap-2">
+      <span className="text-amber-400 truncate max-w-[160px]" title={error}>
+        {fe.title}
+      </span>
+      {fe.action && (
+        <button
+          className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px]"
+          onClick={() => setLoginOpen(true)}
+        >
+          立即登录{fe.action.siteLabel}
+        </button>
+      )}
+      <button
+        className="px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-[10px]"
+        onClick={onRetry}
+      >
+        重试
+      </button>
+      {fe.action && (
+        <SiteLoginModal
+          open={loginOpen}
+          action={fe.action}
+          onClose={() => setLoginOpen(false)}
+          onSuccess={onRetry}
+        />
+      )}
+    </span>
+  );
 }
 
 /**
@@ -38,6 +84,7 @@ type UnifiedItem =
       label: string;
       phase: QueuePhase;
       percent: number;
+      sourceKind: string;
       sourceValue: string;
       speed?: string | null;
       eta?: string | null;
@@ -74,6 +121,7 @@ export function DownloadQueueWidget() {
       label: d.label,
       phase: d.phase,
       percent: d.percent,
+      sourceKind: d.sourceKind,
       sourceValue: d.sourceValue,
       speed: d.speed,
       eta: d.eta,
@@ -231,7 +279,24 @@ function Row({
             {item.subtitleCount}/{item.totalCues} 行
           </span>
         )}
-        {item.phase === "error" && item.error && (
+        {item.phase === "error" && item.error && item.kind === "download" && (
+          <FailedActions
+            error={item.error}
+            sourceValue={item.sourceValue}
+            onRetry={() =>
+              void invoke("import_video", {
+                req: {
+                  sourceKind: item.sourceKind,
+                  sourceValue: item.sourceValue,
+                  whisperModel: useSettings.getState().settings.whisperModel,
+                  quality: "standard",
+                  background: true,
+                },
+              })
+            }
+          />
+        )}
+        {item.phase === "error" && item.error && item.kind !== "download" && (
           <span className="text-amber-400 truncate" title={item.error}>
             {shortError(item.error)}
           </span>

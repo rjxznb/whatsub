@@ -52,6 +52,7 @@ export function useSiteLogin(opts?: {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const unlistens: UnlistenFn[] = [];
     void Promise.all([
       listen("site-login-success", () => {
@@ -59,14 +60,20 @@ export function useSiteLogin(opts?: {
         setSavingLogin(false);
         setLoginError(null);
         onSuccessRef.current?.();
-      }).then((u) => unlistens.push(u)),
+      }),
       listen("site-login-cancelled", () => {
         setPendingLogin(null);
         setSavingLogin(false);
         onCancelledRef.current?.();
-      }).then((u) => unlistens.push(u)),
-    ]);
-    return () => unlistens.forEach((u) => u());
+      }),
+    ]).then((us) => {
+      if (cancelled) us.forEach((u) => u());
+      else unlistens.push(...us);
+    });
+    return () => {
+      cancelled = true;
+      unlistens.forEach((u) => u());
+    };
   }, []);
 
   async function startLogin(args: LoginArgs) {
@@ -104,6 +111,7 @@ export function useSiteLogin(opts?: {
     }
     setPendingLogin(null);
     setSavingLogin(false);
+    setLoginError(null);
   }
 
   return {

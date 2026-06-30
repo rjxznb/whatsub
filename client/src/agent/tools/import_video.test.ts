@@ -110,3 +110,76 @@ describe("import_video tool", () => {
     expect(label).toBe("已启动导入（进度看 Library）");
   });
 });
+
+describe("import_video cookie pre-check", () => {
+  it("returns a cookieWarning when in-app youtube cookies are expired", async () => {
+    // Set cookieSource to "in-app" so the pre-check is active
+    useSettings.setState({
+      settings: {
+        ...useSettings.getState().settings,
+        cookieSource: "in-app",
+      },
+    });
+
+    const mockInvoke = vi.mocked(invoke);
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "cookies_status")
+        return Promise.resolve({
+          siteKey: "youtube",
+          label: "YouTube",
+          exists: true,
+          expired: true,
+          expiringSoon: true,
+          expiresAt: 1,
+        });
+      return Promise.resolve(undefined);
+    });
+
+    const r = await importVideoTool.execute(
+      { url: "https://www.youtube.com/watch?v=x" },
+      {} as never,
+    );
+    expect(r.cookieWarning).toMatch(/登录可能已过期/);
+  });
+
+  it("does not return cookieWarning when cookieSource is not in-app", async () => {
+    useSettings.setState({
+      settings: {
+        ...useSettings.getState().settings,
+        cookieSource: "file",
+      },
+    });
+
+    const mockInvoke = vi.mocked(invoke);
+    mockInvoke.mockResolvedValue(undefined);
+
+    const r = await importVideoTool.execute(
+      { url: "https://www.youtube.com/watch?v=x" },
+      {} as never,
+    );
+    expect(r.cookieWarning).toBeUndefined();
+  });
+
+  it("does not block import when cookies_status throws", async () => {
+    useSettings.setState({
+      settings: {
+        ...useSettings.getState().settings,
+        cookieSource: "in-app",
+      },
+    });
+
+    const mockInvoke = vi.mocked(invoke);
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "cookies_status") return Promise.reject(new Error("IPC error"));
+      return Promise.resolve(undefined);
+    });
+
+    // Must not throw; import should start normally
+    const r = await importVideoTool.execute(
+      { url: "https://www.youtube.com/watch?v=x" },
+      {} as never,
+    );
+    expect(r.started).toBe(true);
+    expect(r.cookieWarning).toBeUndefined();
+  });
+});

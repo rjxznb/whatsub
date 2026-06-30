@@ -9,6 +9,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ToolDef } from "../types";
 import { useSettings } from "../../store/settings";
+import { cookieStatusFor } from "../../lib/cookieStatus";
+import { siteKeyForUrl } from "../../utils/friendlyError";
 
 export interface ImportVideoArgs {
   url: string;
@@ -20,6 +22,7 @@ export interface ImportVideoResult {
   started: true;
   watchAt: "/library";
   sourceUrl: string;
+  cookieWarning?: string;
 }
 
 export const importVideoTool: ToolDef<ImportVideoArgs, ImportVideoResult> = {
@@ -46,6 +49,21 @@ export const importVideoTool: ToolDef<ImportVideoArgs, ImportVideoResult> = {
   async execute({ url, quality }, _ctx) {
     const settings = useSettings.getState().settings;
 
+    // Best-effort pre-check: warn the agent if the target site's in-app cookies
+    // are expired. Non-fatal — a thrown error must not block the import.
+    let cookieWarning: string | undefined;
+    const siteKey = siteKeyForUrl(url);
+    if (siteKey && settings.cookieSource === "in-app") {
+      try {
+        const status = await cookieStatusFor(siteKey);
+        if (status.exists && status.expired) {
+          cookieWarning = `${status.label || siteKey} 登录可能已过期，若导入失败请在 Library 的导入框重新登录后重试。`;
+        }
+      } catch {
+        /* non-fatal: pre-check is best-effort */
+      }
+    }
+
     // The Rust command signature is `import_video(app, state, req: ImportRequest)`
     // so the JS-side invoke MUST wrap args in a `req` key (matching the Rust
     // parameter name). Tauri converts JS camelCase to Rust snake_case via
@@ -68,6 +86,7 @@ export const importVideoTool: ToolDef<ImportVideoArgs, ImportVideoResult> = {
       started: true as const,
       watchAt: "/library" as const,
       sourceUrl: url,
+      ...(cookieWarning ? { cookieWarning } : {}),
     };
   },
 };

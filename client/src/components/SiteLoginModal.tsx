@@ -12,7 +12,7 @@ export interface SiteLoginModalProps {
 export function SiteLoginModal({ open, action, onClose, onSuccess }: SiteLoginModalProps) {
   const login = useSiteLogin({
     onSuccess: () => { onSuccess?.(); onClose(); },
-    onCancelled: () => {},
+    onCancelled: () => { onClose(); },
   });
 
   if (!open) return null;

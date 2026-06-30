@@ -19,6 +19,7 @@ export interface UseSiteLogin {
   starting: boolean;
   savingLogin: boolean;
   loginError: string | null;
+  clearError: () => void;
   startLogin: (args: LoginArgs) => Promise<void>;
   finishLogin: () => Promise<void>;
   cancelLogin: () => Promise<void>;
@@ -114,9 +115,11 @@ export function useSiteLogin(opts?: {
     setLoginError(null);
   }
 
+  const clearError = () => setLoginError(null);
+
   return {
     presets, browsers, selectedBrowser, setSelectedBrowser,
-    pendingLogin, starting, savingLogin, loginError,
+    pendingLogin, starting, savingLogin, loginError, clearError,
     startLogin, finishLogin, cancelLogin,
   };
 }

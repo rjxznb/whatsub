@@ -111,7 +111,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
 
   const {
     presets, browsers, selectedBrowser, setSelectedBrowser,
-    pendingLogin, starting, savingLogin, loginError,
+    pendingLogin, starting, savingLogin, loginError, clearError,
     startLogin, finishLogin, cancelLogin,
   } = useSiteLogin({ onSuccess: () => onDismissRef.current(skipForeverRef.current) });
 
@@ -305,6 +305,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                                 setSelectedKey(p.key);
                                 setPickerOpen(false);
                                 setFormError(null);
+                                clearError();
                               }}
                               className={
                                 'w-full text-left px-2.5 py-1.5 text-xs hover:bg-zinc-800 flex items-center gap-2 ' +
@@ -325,6 +326,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                               setSelectedKey(CUSTOM_OPTION_KEY);
                               setPickerOpen(false);
                               setFormError(null);
+                              clearError();
                             }}
                             className={
                               'w-full text-left px-2.5 py-1.5 text-xs hover:bg-zinc-800 flex items-center gap-2 ' +
@@ -376,6 +378,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                   onChange={(e) => {
                     setCustomUrl(e.target.value);
                     setFormError(null);
+                    clearError();
                   }}
                   placeholder="比如 https://www.weibo.com/"
                   spellCheck={false}

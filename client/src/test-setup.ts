@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
 
 // Mock @tauri-apps/api/core — not available in the test (happy-dom) environment.
 // convertFileSrc is used by FolderCard to build asset:// URLs for thumbnails;

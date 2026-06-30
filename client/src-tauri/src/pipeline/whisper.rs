@@ -72,14 +72,12 @@ const VAD_MIN_DURATION_SECS: f64 = 1200.0; // 20 minutes
 const VAD_MODEL_FILE: &str = "ggml-silero-v5.1.2.bin";
 
 /// Pure gate: enable VAD only for long media when the VAD model is available.
-#[allow(dead_code)]
 fn should_use_vad(duration_secs: f64, vad_model_present: bool) -> bool {
     vad_model_present && duration_secs > VAD_MIN_DURATION_SECS
 }
 
 /// Build the whisper-cli argument vector. When `vad_model` is `Some`, append
 /// `--vad --vad-model <path>`; otherwise the args are exactly today's set.
-#[allow(dead_code)]
 fn build_whisper_args<'a>(
     model: &'a str,
     audio: &'a str,
@@ -105,7 +103,6 @@ fn build_whisper_args<'a>(
 
 /// Resolve the bundled VAD model (resource_dir/models/<VAD_MODEL_FILE>).
 /// `None` when not present — callers then skip VAD (graceful fallback).
-#[allow(dead_code)]
 fn vad_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     let p = app
         .path()
@@ -386,6 +383,26 @@ pub async fn transcribe(
     // whisper-cli writes <out_base>.srt
     let out_base = out_dir.join("transcript").to_string_lossy().to_string();
 
+    // VAD decision — computed once, invariant across stall retries (like GPU pinning).
+    let duration_secs = crate::pipeline::ffmpeg::probe_duration_secs(app, audio_path).await;
+    let vad_model = vad_model_path(app);
+    let use_vad = should_use_vad(duration_secs, vad_model.is_some());
+    let vad_arg: Option<String> = if use_vad {
+        vad_model.as_ref().map(|p| p.to_string_lossy().to_string())
+    } else {
+        None
+    };
+    if use_vad {
+        emit(
+            app,
+            PipelineEvent::Log {
+                video_id: video_id.to_string(),
+                source: "whatsub".into(),
+                line: "长视频已启用 VAD 智能分段（跳过非语音段，提升字幕准确度）".into(),
+            },
+        );
+    }
+
     // GPU device selection — invariant across stall retries.
     let (prefer_discrete, pinned) = gpu_preference();
     let pin_str = pinned.map(|i| i.to_string());
@@ -403,7 +420,8 @@ pub async fn transcribe(
     let mut stall_retries: u32 = 0;
     loop {
         match run_whisper_once(
-            app, &audio_str, &model_str, &out_base, &env, prefer_discrete, pinned, video_id, cancel,
+            app, &audio_str, &model_str, &out_base, &env, prefer_discrete, pinned,
+            vad_arg.as_deref(), video_id, cancel,
         )
         .await
         {
@@ -452,6 +470,7 @@ async fn run_whisper_once(
     env: &[(&str, &str)],
     prefer_discrete: bool,
     pinned: Option<u32>,
+    vad_model: Option<&str>,
     video_id: &str,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
@@ -519,27 +538,11 @@ async fn run_whisper_once(
     // the already-downloaded source.mp4 — no re-download).
     let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let progress_count_cb = progress_count.clone();
+    let whisper_args = build_whisper_args(model_str, audio_str, out_base, vad_model);
     run_sidecar_env(
         app,
         "whisper-cli",
-        &[
-            "-m", model_str,
-            "-f", audio_str,
-            "-l", "en",
-            // Disable text-context carryover between 30s windows (whisper.cpp
-            // default is -1 = carry as much prior transcript as fits). With it
-            // on, a repetition/hallucination on a non-speech stretch (intro
-            // music, crowd noise) becomes the prompt for the next window and
-            // snowballs into a runaway loop of one repeated line across the
-            // whole file (observed on sports-highlight intros). A controlled
-            // A/B on clean speech showed no quality loss from -mc 0 — only
-            // minor cross-window punctuation/casing variance, which the
-            // downstream LLM translation normalizes anyway.
-            "-mc", "0",
-            "-osrt",
-            "-of", out_base,
-            "--print-progress",
-        ],
+        &whisper_args,
         env,
         Some(progress_count.clone()),
         move |chunk| {

@@ -201,6 +201,12 @@ function detectKnownSite(
   return undefined;
 }
 
+/** Public site-key resolver for a source URL (reuses detectKnownSite's host
+ *  mapping). Used by the pre-import cookie-expiry check. */
+export function siteKeyForUrl(url: string): string | undefined {
+  return detectKnownSite(url)?.siteKey;
+}
+
 function classifyError(
   raw: string,
   phase?:

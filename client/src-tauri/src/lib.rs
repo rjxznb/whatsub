@@ -68,6 +68,7 @@ pub fn run() {
             commands::yt_dlp::yt_dlp_get_status,
             commands::yt_dlp::yt_dlp_update,
             commands::youtube_auth::site_presets,
+            commands::youtube_auth::cookies_status,
             commands::youtube_auth::site_login_browsers,
             commands::youtube_auth::site_logins_list,
             commands::youtube_auth::site_login_pending,

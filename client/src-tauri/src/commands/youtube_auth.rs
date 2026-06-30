@@ -1207,21 +1207,53 @@ fn clear_settings_in_app_at() -> Result<(), String> {
     Ok(())
 }
 
-#[allow(dead_code)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CookiesInfo {
-    pub path: String,
+pub struct CookieSiteStatus {
+    pub site_key: String,
+    pub label: String,
     pub exists: bool,
+    pub expired: bool,
+    pub expiring_soon: bool,
+    /// Unix epoch seconds of the longest-lived cookie; None when the bucket is
+    /// missing or holds only session cookies (expires <= 0).
+    pub expires_at: Option<i64>,
+}
+
+/// Pure expiry classification for one site bucket. `now` is unix epoch seconds.
+pub fn compute_site_status(
+    jar: &crate::core::cookie_jar::CookieJar,
+    site_key: &str,
+    now: i64,
+) -> CookieSiteStatus {
+    let bucket = jar.sites.get(site_key);
+    let expires_at = bucket.and_then(|b| {
+        b.cookies
+            .iter()
+            .filter_map(|c| c.expires)
+            .filter(|e| *e > 0)
+            .max()
+    });
+    let expired = matches!(expires_at, Some(e) if e < now);
+    let expiring_soon = matches!(expires_at, Some(e) if e < now + 7 * 24 * 3600);
+    CookieSiteStatus {
+        site_key: site_key.to_string(),
+        label: bucket.map(|b| b.label.clone()).unwrap_or_default(),
+        exists: bucket.is_some(),
+        expired,
+        expiring_soon,
+        expires_at,
+    }
 }
 
 #[tauri::command]
-pub fn youtube_cookies_info() -> Result<CookiesInfo, String> {
-    let path = paths::cookies_txt_path()?;
-    Ok(CookiesInfo {
-        path: path.to_string_lossy().into_owned(),
-        exists: path.exists(),
-    })
+pub fn cookies_status(site_key: String) -> Result<CookieSiteStatus, String> {
+    let jar = crate::core::cookie_jar::load();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Ok(compute_site_status(&jar, &site_key, now))
 }
 
 #[cfg(test)]
@@ -1266,5 +1298,80 @@ mod tests {
     fn missing_type_field_does_not_count() {
         let v = json!([{ "url": "https://x" }, { "type": "page" }]);
         assert_eq!(count_page_targets(&v), 1);
+    }
+}
+
+#[cfg(test)]
+mod cookies_status_tests {
+    use super::compute_site_status;
+    use crate::core::cookie_jar::{CookieJar, JarCookie, SiteBucket};
+    use std::collections::BTreeMap;
+
+    fn jar_with(site: &str, expiries: &[Option<i64>]) -> CookieJar {
+        let cookies = expiries
+            .iter()
+            .map(|e| JarCookie {
+                domain: ".example.com".into(),
+                path: "/".into(),
+                secure: true,
+                expires: *e,
+                name: "SID".into(),
+                value: "x".into(),
+            })
+            .collect();
+        let mut sites = BTreeMap::new();
+        sites.insert(
+            site.to_string(),
+            SiteBucket { label: "YouTube".into(), login_at: 0, cookies },
+        );
+        CookieJar { version: 1, sites }
+    }
+
+    #[test]
+    fn missing_bucket_is_not_expired() {
+        let s = compute_site_status(&CookieJar::default(), "youtube", 1000);
+        assert!(!s.exists);
+        assert!(!s.expired);
+        assert!(!s.expiring_soon);
+        assert_eq!(s.expires_at, None);
+    }
+
+    #[test]
+    fn expired_when_max_expiry_in_past() {
+        let jar = jar_with("youtube", &[Some(500), Some(800)]);
+        let s = compute_site_status(&jar, "youtube", 1000);
+        assert!(s.exists);
+        assert!(s.expired);
+        assert!(s.expiring_soon);
+        assert_eq!(s.expires_at, Some(800));
+    }
+
+    #[test]
+    fn expiring_soon_within_7_days() {
+        let now = 1_000_000;
+        let jar = jar_with("youtube", &[Some(now + 3 * 24 * 3600)]);
+        let s = compute_site_status(&jar, "youtube", now);
+        assert!(!s.expired);
+        assert!(s.expiring_soon);
+    }
+
+    #[test]
+    fn fresh_when_max_expiry_far_future() {
+        let now = 1_000_000;
+        let jar = jar_with("youtube", &[Some(now + 60 * 24 * 3600)]);
+        let s = compute_site_status(&jar, "youtube", now);
+        assert!(!s.expired);
+        assert!(!s.expiring_soon);
+        assert_eq!(s.expires_at, Some(now + 60 * 24 * 3600));
+    }
+
+    #[test]
+    fn session_only_bucket_is_not_expired() {
+        let jar = jar_with("youtube", &[None, Some(0), Some(-1)]);
+        let s = compute_site_status(&jar, "youtube", 1000);
+        assert!(s.exists);
+        assert!(!s.expired);
+        assert!(!s.expiring_soon);
+        assert_eq!(s.expires_at, None);
     }
 }

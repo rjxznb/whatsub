@@ -997,6 +997,17 @@ jobs:
                                "$GITLAB_HOST/$PROJECT_PATH/-/releases/$PREV_TAG/downloads/latest.json" 2>/dev/null || echo "")
           fi
 
+          # Also fetch the CURRENT tag's already-published manifest. On a
+          # SAME-version re-run (e.g. a Mac-only retry after the Windows build
+          # already published this tag), this is the ONLY place the
+          # previously-built platform's entry survives — PREV_LATEST is the
+          # *previous* version and is explicitly skipped when it equals $TAG.
+          # Without this, an un-rebuilt platform is silently dropped from
+          # latest.json: that is exactly how a Windows-less 0.1.95 jihulab
+          # manifest shipped. Mirrors the GitHub publish step's `cur` lookup.
+          CUR_LATEST=$(curl -sL --connect-timeout 15 --max-time 30 \
+                            "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/latest.json" 2>/dev/null || echo "")
+
           # ── Build manifest with jihulab download URLs ──────────────────
           # URL pattern: $GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/$filename
           # GitLab routes that path to the asset link whose direct_asset_path matches.
@@ -1004,13 +1015,21 @@ jobs:
             echo "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/$(urlify "$1")"
           }
 
+          # When a platform wasn't built this run, recover its entry from the
+          # current tag's manifest first (same-version re-run), then the
+          # previous release. Both sources carry a still-valid asset URL.
           win_entry=""
           if [ -n "$EXE" ]; then
             url=$(jihulab_url "$EXE")
             sig=$(cat "$EXE_SIG")
             win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
-          elif [ -n "$PREV_LATEST" ]; then
-            win_entry=$(echo "$PREV_LATEST" | jq -c '.platforms["windows-x86_64"] // empty')
+          else
+            for src in "$CUR_LATEST" "$PREV_LATEST"; do
+              if [ -n "$src" ]; then
+                e=$(echo "$src" | jq -c '.platforms["windows-x86_64"] // empty')
+                if [ -n "$e" ]; then win_entry="$e"; break; fi
+              fi
+            done
           fi
 
           mac_entry=""
@@ -1018,8 +1037,13 @@ jobs:
             url=$(jihulab_url "$APP_TARGZ")
             sig=$(cat "$APP_SIG")
             mac_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
-          elif [ -n "$PREV_LATEST" ]; then
-            mac_entry=$(echo "$PREV_LATEST" | jq -c '.platforms["darwin-aarch64"] // empty')
+          else
+            for src in "$CUR_LATEST" "$PREV_LATEST"; do
+              if [ -n "$src" ]; then
+                e=$(echo "$src" | jq -c '.platforms["darwin-aarch64"] // empty')
+                if [ -n "$e" ]; then mac_entry="$e"; break; fi
+              fi
+            done
           fi
 
           MANIFEST=$(jq -n \

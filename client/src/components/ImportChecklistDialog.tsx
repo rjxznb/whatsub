@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { Globe, ShieldCheck, X, ChevronDown } from 'lucide-react';
+import { useSiteLogin } from '../hooks/useSiteLogin';
 
 // ─── Site brand icons ────────────────────────────────────────────────
 // Small inline SVGs in brand colors for the cookies-login dropdown.
@@ -79,12 +78,6 @@ function SiteIcon({ siteKey }: { siteKey: string }) {
  * Gating lives in importChecklistGate.ts. Drag-drop of local files
  * bypasses this entirely (no network involved).
  */
-type SitePreset = {
-  key: string;
-  label: string;
-  loginUrl: string;
-  harvestDomains: string[];
-};
 
 const CUSTOM_OPTION_KEY = '__custom__';
 
@@ -101,26 +94,9 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
   // Site picker — defaults to youtube (the dominant use case for an
   // English-subtitle learning tool). "__custom__" switches to the URL
   // input.
-  const [presets, setPresets] = useState<SitePreset[]>([]);
   const [selectedKey, setSelectedKey] = useState<string>('youtube');
   const [customUrl, setCustomUrl] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Installed browsers (lowercase ids) + the user's pick ("" = auto-detect).
-  // Lets the user choose Chrome — Edge can hand off to a startup-boost
-  // background process and exit 0 before CDP comes up.
-  const [browsers, setBrowsers] = useState<string[]>([]);
-  const [selectedBrowser, setSelectedBrowser] = useState<string>('');
-
-  // Login-in-flight state. `pendingLogin` non-null swaps the layout to
-  // the "等待保存" panel. `starting` covers the brief window between
-  // clicking 登录 and Rust returning from site_login_start.
-  const [pendingLogin, setPendingLogin] = useState<{
-    key: string;
-    label: string;
-  } | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [savingLogin, setSavingLogin] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
 
   // Refs so the event listener (mounted once) closes over the latest
   // skipForever value when it auto-dismisses on save success.
@@ -133,70 +109,22 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
     onDismissRef.current = onDismiss;
   }, [onDismiss]);
 
-  // Load presets + check for any already-pending login (e.g. user
-  // started a login on Settings page then walked away). Same probe
-  // Settings page does on mount.
-  useEffect(() => {
-    void Promise.all([
-      invoke<SitePreset[]>('site_presets')
-        .then((p) => setPresets(p))
-        .catch(() => setPresets([])),
-      invoke<{ siteKey: string; label: string } | null>('site_login_pending')
-        .then((p) => {
-          if (p) setPendingLogin({ key: p.siteKey, label: p.label });
-        })
-        .catch(() => {}),
-      invoke<string[]>('site_login_browsers')
-        .then((b) => setBrowsers(b))
-        .catch(() => {}),
-    ]);
-  }, []);
+  const {
+    presets, browsers, selectedBrowser, setSelectedBrowser,
+    pendingLogin, starting, savingLogin, loginError,
+    startLogin, finishLogin, cancelLogin,
+  } = useSiteLogin({ onSuccess: () => onDismissRef.current(skipForeverRef.current) });
 
-  // Listen for login outcomes from Rust. On success: Rust already
-  // closed the browser (cdp_close_browser inside site_login_finish);
-  // we just clear state and dismiss the whole checklist so the parent
-  // can open ImportModal.
-  useEffect(() => {
-    const unlistens: UnlistenFn[] = [];
-    void Promise.all([
-      listen('site-login-success', () => {
-        setPendingLogin(null);
-        setSavingLogin(false);
-        setLoginError(null);
-        // Auto-proceed to ImportModal — user just configured cookies,
-        // they clearly want to import next.
-        onDismissRef.current(skipForeverRef.current);
-      }).then((un) => unlistens.push(un)),
-      listen('site-login-cancelled', () => {
-        setPendingLogin(null);
-        setSavingLogin(false);
-      }).then((un) => unlistens.push(un)),
-    ]);
-    return () => {
-      unlistens.forEach((u) => u());
-    };
-  }, []);
-
-  async function startLogin(args: SitePreset) {
-    setLoginError(null);
-    setStarting(true);
-    try {
-      await invoke('site_login_start', {
-        args: { ...args, browser: selectedBrowser || undefined },
-      });
-      setPendingLogin({ key: args.key, label: args.label });
-    } catch (e) {
-      setLoginError(`登录窗口启动失败：${String(e)}`);
-    } finally {
-      setStarting(false);
-    }
-  }
+  // formError covers sync validation in onClickLogin (checked before
+  // calling the hook's startLogin, which handles async errors).
+  const [formError, setFormError] = useState<string | null>(null);
+  const displayError = formError || loginError;
 
   async function onClickLogin() {
     if (selectedKey === CUSTOM_OPTION_KEY) {
       const trimmed = customUrl.trim();
       if (!trimmed) {
-        setLoginError('请输入网址');
+        setFormError('请输入网址');
         return;
       }
       let parsed: URL;
@@ -205,10 +133,11 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
           trimmed.startsWith('http') ? trimmed : `https://${trimmed}`,
         );
       } catch {
-        setLoginError('网址格式无效');
+        setFormError('网址格式无效');
         return;
       }
       const host = parsed.hostname.replace(/^www\./, '');
+      setFormError(null);
       await startLogin({
         key: host,
         label: host,
@@ -219,33 +148,11 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
     }
     const preset = presets.find((p) => p.key === selectedKey);
     if (!preset) {
-      setLoginError('找不到所选站点');
+      setFormError('找不到所选站点');
       return;
     }
+    setFormError(null);
     await startLogin(preset);
-  }
-
-  async function finishLogin() {
-    setLoginError(null);
-    setSavingLogin(true);
-    try {
-      await invoke('site_login_finish');
-      // success event will fire → handler clears state + dismisses
-    } catch (e) {
-      setLoginError(String(e));
-      setSavingLogin(false);
-    }
-  }
-
-  async function cancelLogin() {
-    try {
-      await invoke('site_login_cancel');
-    } catch {
-      // ignore — even if cancel RPC fails, clear local UI state
-    }
-    setPendingLogin(null);
-    setSavingLogin(false);
-    setLoginError(null);
   }
 
   // ─── "等待保存" view ──────────────────────────────────────────────
@@ -397,7 +304,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                               onClick={() => {
                                 setSelectedKey(p.key);
                                 setPickerOpen(false);
-                                setLoginError(null);
+                                setFormError(null);
                               }}
                               className={
                                 'w-full text-left px-2.5 py-1.5 text-xs hover:bg-zinc-800 flex items-center gap-2 ' +
@@ -417,7 +324,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                             onClick={() => {
                               setSelectedKey(CUSTOM_OPTION_KEY);
                               setPickerOpen(false);
-                              setLoginError(null);
+                              setFormError(null);
                             }}
                             className={
                               'w-full text-left px-2.5 py-1.5 text-xs hover:bg-zinc-800 flex items-center gap-2 ' +
@@ -468,7 +375,7 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                   value={customUrl}
                   onChange={(e) => {
                     setCustomUrl(e.target.value);
-                    setLoginError(null);
+                    setFormError(null);
                   }}
                   placeholder="比如 https://www.weibo.com/"
                   spellCheck={false}
@@ -477,9 +384,9 @@ export function ImportChecklistDialog({ onDismiss }: Props) {
                 />
               )}
 
-              {loginError && (
+              {displayError && (
                 <div className="mt-2 px-2.5 py-1.5 bg-rose-500/10 border border-rose-500/30 rounded text-[11px] text-rose-200">
-                  {loginError}
+                  {displayError}
                 </div>
               )}
             </div>

@@ -9,8 +9,18 @@ import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
 import { getTier } from "../llm/modelTiers";
 import type { WhisperModelSize } from "../types/settings";
-import { friendlyError } from "../utils/friendlyError";
+import { friendlyError, siteKeyForUrl, loginAction } from "../utils/friendlyError";
+import type { SiteLoginAction } from "../utils/friendlyError";
 import type { TranslationStyle } from "../types/settings";
+import { cookieStatusFor } from "../lib/cookieStatus";
+import { SiteLoginModal } from "./SiteLoginModal";
+
+export function shouldPromptLogin(
+  cookieSource: string | undefined,
+  status: { exists: boolean; expired: boolean } | null,
+): boolean {
+  return cookieSource === "in-app" && !!status && status.exists && status.expired;
+}
 
 // Slider positions, left → right. Anything outside this trio is a legacy
 // entry style that the slider snaps to the nearest position via indexOf.
@@ -130,6 +140,26 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   const [tab, setTab] = useState<"local" | "url">(initialFilePath ? "local" : "url");
   const [urlValue, setUrlValue] = useState("");
   const [filePath, setFilePath] = useState(initialFilePath ?? "");
+  const [expiredPrompt, setExpiredPrompt] = useState<SiteLoginAction | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  useEffect(() => {
+    const siteKey = siteKeyForUrl(urlValue);
+    if (!siteKey) { setExpiredPrompt(null); return; }
+    const cookieSource = useSettings.getState().settings.cookieSource;
+    if (cookieSource !== "in-app") { setExpiredPrompt(null); return; }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      void cookieStatusFor(siteKey).then((s) => {
+        if (cancelled) return;
+        setExpiredPrompt(
+          shouldPromptLogin(cookieSource, s)
+            ? (loginAction(siteKey) ?? null)
+            : null,
+        );
+      });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [urlValue]);
   // Inline validation message shown directly under the URL input /
   // file picker when the user clicks 开始解析 / 后台下载 with no
   // source filled in. Kept SEPARATE from `error` (which is reserved
@@ -1009,6 +1039,17 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
               <div className="mt-1.5 text-xs text-rose-300">
                 {validationError}
               </div>
+            )}
+            {expiredPrompt && (
+              <div className="mt-2 text-xs text-amber-400 flex items-center gap-2">
+                <span>{expiredPrompt.siteLabel} 登录可能已过期，下载失败时可先重新登录。</span>
+                <button className="underline hover:text-amber-300" onClick={() => setLoginOpen(true)}>
+                  重新登录
+                </button>
+              </div>
+            )}
+            {expiredPrompt && (
+              <SiteLoginModal open={loginOpen} action={expiredPrompt} onClose={() => setLoginOpen(false)} />
             )}
             {/* 示例链接 — one-click affordance for first-time users who
                 don't have a URL handy. Uses "Me at the zoo" (the first

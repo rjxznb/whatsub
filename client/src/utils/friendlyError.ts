@@ -85,7 +85,7 @@ const LOGIN_PRESETS: Record<
   },
 };
 
-function loginAction(siteKey: string): SiteLoginAction | undefined {
+export function loginAction(siteKey: string): SiteLoginAction | undefined {
   const p = LOGIN_PRESETS[siteKey];
   if (!p) return undefined;
   return {

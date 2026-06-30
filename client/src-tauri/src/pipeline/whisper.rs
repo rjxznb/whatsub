@@ -63,6 +63,59 @@ pub fn model_exists(app: &AppHandle, size: &str) -> bool {
     resolve_model_path(app, size).is_some()
 }
 
+/// Minimum audio duration (seconds) above which VAD is auto-enabled.
+/// Short videos transcribe accurately without VAD; only long media suffers
+/// whisper's drift/hallucination, so we gate on length. Hardcoded — no setting.
+const VAD_MIN_DURATION_SECS: f64 = 1200.0; // 20 minutes
+
+/// Bundled Silero VAD model file name (shipped under resource_dir/models/).
+const VAD_MODEL_FILE: &str = "ggml-silero-v5.1.2.bin";
+
+/// Pure gate: enable VAD only for long media when the VAD model is available.
+#[allow(dead_code)]
+fn should_use_vad(duration_secs: f64, vad_model_present: bool) -> bool {
+    vad_model_present && duration_secs > VAD_MIN_DURATION_SECS
+}
+
+/// Build the whisper-cli argument vector. When `vad_model` is `Some`, append
+/// `--vad --vad-model <path>`; otherwise the args are exactly today's set.
+#[allow(dead_code)]
+fn build_whisper_args<'a>(
+    model: &'a str,
+    audio: &'a str,
+    out_base: &'a str,
+    vad_model: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut args: Vec<&str> = vec![
+        "-m", model,
+        "-f", audio,
+        "-l", "en",
+        "-mc", "0",
+        "-osrt",
+        "-of", out_base,
+        "--print-progress",
+    ];
+    if let Some(vm) = vad_model {
+        args.push("--vad");
+        args.push("--vad-model");
+        args.push(vm);
+    }
+    args
+}
+
+/// Resolve the bundled VAD model (resource_dir/models/<VAD_MODEL_FILE>).
+/// `None` when not present — callers then skip VAD (graceful fallback).
+#[allow(dead_code)]
+fn vad_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let p = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("models")
+        .join(VAD_MODEL_FILE);
+    p.exists().then_some(p)
+}
+
 /// Download (or resume) the model file for `size`.
 ///
 /// Resume: if `<dest>.partial` already exists, sends `Range: bytes=<offset>-`
@@ -676,6 +729,35 @@ fn gpu_preference() -> (bool, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vad_gate_only_for_long_videos_with_model() {
+        assert!(should_use_vad(1201.0, true));       // > 20 min + model present
+        assert!(!should_use_vad(1200.0, true));      // exactly 20 min → not greater
+        assert!(!should_use_vad(600.0, true));       // short
+        assert!(!should_use_vad(3600.0, false));     // long but model missing
+        assert!(!should_use_vad(0.0, true));         // probe failed (0.0)
+    }
+
+    #[test]
+    fn whisper_args_without_vad_have_no_vad_flags() {
+        let args = build_whisper_args("m.bin", "a.wav", "out", None);
+        assert!(!args.contains(&"--vad"));
+        assert!(args.contains(&"-mc") && args.contains(&"0"));
+        assert!(args.contains(&"-osrt"));
+        // sanity: model + audio threaded through
+        assert!(args.contains(&"m.bin") && args.contains(&"a.wav"));
+    }
+
+    #[test]
+    fn whisper_args_with_vad_append_vad_flags() {
+        let args = build_whisper_args("m.bin", "a.wav", "out", Some("vad.bin"));
+        assert!(args.contains(&"--vad"));
+        let i = args.iter().position(|a| *a == "--vad-model").unwrap();
+        assert_eq!(args[i + 1], "vad.bin");
+        // existing flags preserved
+        assert!(args.contains(&"-mc") && args.contains(&"-osrt"));
+    }
 
     #[test]
     fn parses_whisper_progress_line() {

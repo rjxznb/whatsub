@@ -78,6 +78,9 @@ $ffexe = Get-ChildItem $ffdir -Recurse -Filter ffmpeg.exe | Select-Object -First
 Copy-Item $ffexe.FullName (Join-Path $bin 'ffmpeg-x86_64-pc-windows-msvc.exe') -Force
 Copy-Item (Join-Path $ffexe.Directory.FullName 'ffprobe.exe') (Join-Path $bin 'ffprobe-x86_64-pc-windows-msvc.exe') -Force
 Write-Host "  ffmpeg / ffprobe / yt-dlp / node 就位" -ForegroundColor Green
+$models = Join-Path $client 'src-tauri\models'
+New-Item -ItemType Directory -Force -Path $models | Out-Null
+Fetch 'https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin' (Join-Path $models 'ggml-silero-v5.1.2.bin')
 
 Write-Host "=== 4/5 解压 whisper 自构建 DLL ===" -ForegroundColor Cyan
 $wzip = Join-Path $PSScriptRoot 'whisper-win-bits.zip'

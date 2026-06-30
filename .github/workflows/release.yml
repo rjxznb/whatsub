@@ -302,6 +302,24 @@ jobs:
           Write-Host "Downloaded $([math]::Round($sz/1MB,1)) MB"
           if ($sz -lt 100MB) { Write-Error "model too small ($sz bytes) — download failed"; exit 1 }
 
+      - name: Cache bundled VAD model (Windows)
+        id: vad-cache-win
+        uses: actions/cache@v4
+        with:
+          path: client/src-tauri/models/ggml-silero-v5.1.2.bin
+          key: vad-model-silero-v5.1.2-v1
+
+      - name: Download bundled VAD model (Windows)
+        if: steps.vad-cache-win.outputs.cache-hit != 'true'
+        run: |
+          $url = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+          Write-Host "Downloading VAD model $url"
+          New-Item -ItemType Directory -Force -Path client/src-tauri/models | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile client/src-tauri/models/ggml-silero-v5.1.2.bin -UseBasicParsing
+          $sz = (Get-Item client/src-tauri/models/ggml-silero-v5.1.2.bin).Length
+          Write-Host "Downloaded $sz bytes"
+          if ($sz -lt 500KB) { Write-Error "VAD model too small ($sz bytes) — download failed"; exit 1 }
+
       - name: Tauri build (NSIS .exe + .sig)
         working-directory: client
         env:
@@ -562,6 +580,25 @@ jobs:
           sz=$(stat -f%z client/src-tauri/models/ggml-base.bin)
           echo "Downloaded $((sz/1024/1024)) MB"
           if [ "$sz" -lt 100000000 ]; then echo "model too small ($sz) — download failed"; exit 1; fi
+
+      - name: Cache bundled VAD model (macOS)
+        id: vad-cache-mac
+        uses: actions/cache@v4
+        with:
+          path: client/src-tauri/models/ggml-silero-v5.1.2.bin
+          key: vad-model-silero-v5.1.2-v1
+
+      - name: Download bundled VAD model (macOS)
+        if: steps.vad-cache-mac.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p client/src-tauri/models
+          url="https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+          echo "Downloading VAD model $url"
+          curl -fL "$url" -o client/src-tauri/models/ggml-silero-v5.1.2.bin
+          sz=$(stat -f%z client/src-tauri/models/ggml-silero-v5.1.2.bin)
+          echo "Downloaded $sz bytes"
+          if [ "$sz" -lt 500000 ]; then echo "VAD model too small ($sz) — download failed"; exit 1; fi
 
       - name: Tauri build (signed; 3x retry for bundle_dmg.sh flakes)
         working-directory: client

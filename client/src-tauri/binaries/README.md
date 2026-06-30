@@ -78,3 +78,17 @@ otool -L whisper-cli-aarch64-apple-darwin     # all whisper deps should be @load
 | CPU + BLAS | ✅ | ✅ | ✅ | ✅ | trivial, slow |
 
 Vulkan is the only **truly cross-vendor** GPU acceleration on Windows. Metal is the only sensible choice on Mac. ggml falls back to CPU automatically when GPU init fails, so a single binary covers the long tail.
+
+## Bundled VAD model (long-video transcription)
+
+`src-tauri/models/ggml-silero-v5.1.2.bin` (~885 KB) is bundled so whisper.cpp VAD
+auto-engages for videos > 20 min. Not in git. For local dev, fetch it once:
+
+```bash
+mkdir -p client/src-tauri/models
+curl -fL https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin \
+  -o client/src-tauri/models/ggml-silero-v5.1.2.bin
+```
+
+Absent → VAD silently off (transcription still works; long videos just keep the
+old drift). CI fetches it for release builds.

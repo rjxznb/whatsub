@@ -196,6 +196,48 @@ pub async fn probe_codecs(app: &AppHandle, path: &Path) -> (String, String) {
     (vcodec, acodec)
 }
 
+/// Probe the container format name (ffprobe `format=format_name`, lowercased),
+/// e.g. "mov,mp4,m4a,3gp,3g2,mj2" or "matroska,webm". Empty string on failure.
+pub async fn probe_container(app: &AppHandle, path: &Path) -> String {
+    let p = path.to_string_lossy().to_string();
+    let out = run_sidecar(
+        app,
+        "ffprobe",
+        &[
+            "-v", "error",
+            "-show_entries", "format=format_name",
+            "-of", "default=nk=1:nw=1",
+            &p,
+        ],
+        |_l: &str| {},
+        None,
+    )
+    .await;
+    out.map(|s| s.trim().to_ascii_lowercase()).unwrap_or_default()
+}
+
+/// Decide how to make a source web-playable, given its ffprobe `format_name`
+/// container and first video/audio codec names. Returns
+/// `(byte_copy, video_copy, audio_copy)`:
+/// - `byte_copy`: a raw file copy is safe — the source is ALREADY an MP4-family
+///   container AND uses web-decodable codecs. This is the fast path for real mp4s.
+/// - otherwise the file must go through ffmpeg; `video_copy`/`audio_copy` say
+///   whether each stream can be stream-copied (fast) or must be re-encoded.
+///
+/// The container check is load-bearing: an MKV/WebM whose codecs happen to be
+/// web-OK (h264 + aac) must NOT be byte-copied — it stays a Matroska container
+/// that WebView2/Chromium plays without sound. With `byte_copy=false` and both
+/// streams copyable, ffmpeg does a pure REMUX into MP4 (fast, no re-encode).
+pub fn web_playable_plan(container: &str, vcodec: &str, acodec: &str) -> (bool, bool, bool) {
+    let is_mp4 = container
+        .split(',')
+        .any(|c| matches!(c.trim(), "mp4" | "mov" | "m4a"));
+    let video_copy = vcodec == "h264";
+    let audio_copy = acodec.is_empty() || matches!(acodec, "aac" | "mp3");
+    let byte_copy = is_mp4 && video_copy && audio_copy;
+    (byte_copy, video_copy, audio_copy)
+}
+
 /// Make a local import playable in the WebView `<video>` element, writing the
 /// result to `dest` (source.mp4). WebView2/Chromium can't decode AC-3 / DTS /
 /// E-AC-3 audio (common in MKV) → the picture plays but there's NO SOUND; and
@@ -213,10 +255,10 @@ pub async fn ensure_web_playable_mp4(
     cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
     let (vcodec, acodec) = probe_codecs(app, src_path).await;
-    let video_ok = vcodec == "h264";
-    let audio_ok = acodec.is_empty() || matches!(acodec.as_str(), "aac" | "mp3");
+    let container = probe_container(app, src_path).await;
+    let (byte_copy, video_ok, audio_ok) = web_playable_plan(&container, &vcodec, &acodec);
 
-    if video_ok && audio_ok {
+    if byte_copy {
         std::fs::copy(src_path, dest_path)?;
         return Ok(());
     }
@@ -233,16 +275,22 @@ pub async fn ensure_web_playable_mp4(
             },
         );
     };
+    let msg = if video_ok && audio_ok {
+        // Codecs are fine; only the container is wrong (e.g. MKV/WebM) → pure remux.
+        format!("检测到非 MP4 封装（{}），正在转封装为 MP4 以便播放…", container)
+    } else {
+        format!(
+            "检测到内置播放器不兼容的编码（视频 {} / 音频 {}），正在转码以便播放…",
+            if vcodec.is_empty() { "?" } else { &vcodec },
+            if acodec.is_empty() { "无" } else { &acodec },
+        )
+    };
     emit(
         app,
         PipelineEvent::Log {
             video_id: video_id.to_string(),
             source: "whatsub".into(),
-            line: format!(
-                "检测到内置播放器不兼容的编码（视频 {} / 音频 {}），正在转码以便播放…",
-                if vcodec.is_empty() { "?" } else { &vcodec },
-                if acodec.is_empty() { "无" } else { &acodec },
-            ),
+            line: msg,
         },
     );
 
@@ -382,4 +430,36 @@ pub async fn extract_audio_aac(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::web_playable_plan;
+
+    #[test]
+    fn plan_byte_copies_only_mp4_family_with_web_codecs() {
+        // Already a real MP4 (h264 + aac): raw byte-copy is safe.
+        assert_eq!(web_playable_plan("mov,mp4,m4a,3gp,3g2,mj2", "h264", "aac"), (true, true, true));
+        // MP4 with no audio stream: still byte-copy.
+        assert_eq!(web_playable_plan("mov,mp4,m4a,3gp,3g2,mj2", "h264", ""), (true, true, true));
+    }
+
+    #[test]
+    fn plan_remuxes_mkv_even_with_web_codecs() {
+        // The bug: h264 + AAC inside MKV was byte-copied → stayed matroska → no sound.
+        // Now: NOT byte-copy (container), pure remux (both streams copied) into MP4.
+        assert_eq!(web_playable_plan("matroska,webm", "h264", "aac"), (false, true, true));
+        // MKV with no audio: still remux (container must change).
+        assert_eq!(web_playable_plan("matroska,webm", "h264", ""), (false, true, true));
+    }
+
+    #[test]
+    fn plan_transcodes_incompatible_codecs() {
+        // MKV h264 + ac3: copy video, re-encode audio (the common MKV case).
+        assert_eq!(web_playable_plan("matroska,webm", "h264", "ac3"), (false, true, false));
+        // MKV hevc + ac3: re-encode both.
+        assert_eq!(web_playable_plan("matroska,webm", "hevc", "ac3"), (false, false, false));
+        // MP4 container but HEVC video + aac: container ok, but re-encode video.
+        assert_eq!(web_playable_plan("mov,mp4,m4a,3gp,3g2,mj2", "hevc", "aac"), (false, false, true));
+    }
 }

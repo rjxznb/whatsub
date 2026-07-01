@@ -154,10 +154,13 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
             .unwrap_or("yt-dlp")
     ));
 
-    // 120s timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
-    // JiHuLab mirror is primary (mainland CN); GitHub is fallback.
+    // 120s total timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
+    // JiHuLab mirror is primary (mainland CN); GitHub is fallback. A short
+    // connect_timeout bounds the worst case: if the JiHuLab primary hangs at
+    // connect, we fall back to GitHub in ~15s instead of waiting the full 120s.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| format!("HTTP client build: {e}"))?;
     let bytes = match download_bytes(&client, primary).await {

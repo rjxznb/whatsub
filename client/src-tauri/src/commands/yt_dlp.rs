@@ -25,7 +25,7 @@
 
 use crate::core::paths;
 use crate::pipeline::spawn::run_sidecar;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -177,4 +177,111 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
         version,
         source: "appdata".into(),
     })
+}
+
+/// JiHuLab-hosted version manifest URL (a dedicated `yt-dlp` release tag,
+/// manually kept fresh by the maintainer). See docs/ytdlp-mirror.md.
+const YTDLP_MANIFEST_URL: &str =
+    "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp-version.json";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct YtDlpUpdateInfo {
+    pub current: String,
+    pub latest: String,
+    pub has_update: bool,
+    pub notes: String,
+}
+
+#[derive(Deserialize)]
+struct YtDlpManifest {
+    version: String,
+    #[serde(default)]
+    notes: String,
+}
+
+/// True when dotted-numeric `latest` is strictly newer than `current`
+/// (e.g. "2026.06.10" > "2026.06.09"). Component-wise numeric compare so
+/// point releases ("2026.06.09.1") and any zero-pad quirks are handled;
+/// unparseable components count as 0, so malformed input is never "newer".
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| {
+        s.split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<u64>>()
+    };
+    let (l, c) = (parse(latest), parse(current));
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv != cv {
+            return lv > cv;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, String> {
+    let current = yt_dlp_get_status(app).await?.version;
+    let none = |cur: &str| YtDlpUpdateInfo {
+        current: cur.to_string(),
+        latest: cur.to_string(),
+        has_update: false,
+        notes: String::new(),
+    };
+    // Best-effort: any network/parse failure → "no update" (never blocks launch).
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(none(&current)),
+    };
+    let manifest: YtDlpManifest = match client.get(YTDLP_MANIFEST_URL).send().await {
+        Ok(resp) => match resp.error_for_status() {
+            Ok(ok) => match ok.bytes().await {
+                Ok(b) => match serde_json::from_slice(&b) {
+                    Ok(m) => m,
+                    Err(_) => return Ok(none(&current)),
+                },
+                Err(_) => return Ok(none(&current)),
+            },
+            Err(_) => return Ok(none(&current)),
+        },
+        Err(_) => return Ok(none(&current)),
+    };
+    let has_update = is_newer(&manifest.version, &current);
+    Ok(YtDlpUpdateInfo {
+        current,
+        latest: manifest.version,
+        has_update,
+        notes: manifest.notes,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn newer_by_day_month_year() {
+        assert!(is_newer("2026.06.10", "2026.06.09"));
+        assert!(is_newer("2026.07.01", "2026.06.30"));
+        assert!(is_newer("2027.01.01", "2026.12.31"));
+    }
+
+    #[test]
+    fn not_newer_when_equal_or_older() {
+        assert!(!is_newer("2026.06.09", "2026.06.09"));
+        assert!(!is_newer("2026.06.08", "2026.06.09"));
+    }
+
+    #[test]
+    fn handles_point_release_and_malformed() {
+        assert!(is_newer("2026.06.09.1", "2026.06.09")); // point release is newer
+        assert!(!is_newer("2026.06.09", "2026.06.09.1"));
+        assert!(!is_newer("", "2026.06.09"));            // malformed → not newer
+        assert!(!is_newer("garbage", "2026.06.09"));
+    }
 }

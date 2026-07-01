@@ -67,6 +67,7 @@ pub fn run() {
             commands::corpus_cache::corpus_cache_save,
             commands::yt_dlp::yt_dlp_get_status,
             commands::yt_dlp::yt_dlp_update,
+            commands::yt_dlp::yt_dlp_check_update,
             commands::youtube_auth::site_presets,
             commands::youtube_auth::cookies_status,
             commands::youtube_auth::site_login_browsers,

@@ -9,6 +9,7 @@ import { FirstRunGate } from "./components/FirstRunGate";
 import { LicenseGate } from "./components/LicenseGate";
 import { LicenseSessionGate } from "./components/LicenseSessionGate";
 import { UpdateChecker } from "./components/UpdateChecker";
+import { YtDlpUpdateToast } from "./components/YtDlpUpdateToast";
 import { DownloadQueueWidget } from "./components/DownloadQueueWidget";
 import { AgentRoot } from "./components/agent/AgentRoot";
 import { TutorPortalRoot } from "./components/tutor/TutorPortalRoot";
@@ -154,6 +155,7 @@ function App() {
         </LicenseSessionGate>
       </LicenseGate>
       <UpdateChecker />
+      <YtDlpUpdateToast />
       <AppDialog />
     </>
   );

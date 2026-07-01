@@ -65,6 +65,21 @@ pub fn resolve_appdata_yt_dlp() -> Option<PathBuf> {
     }
 }
 
+/// GET a URL and return the whole body, mapping errors to Chinese strings.
+async fn download_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("下载失败: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应失败: {e}"))
+        .map(|b| b.to_vec())
+}
+
 /// Run `<exe> --version` and return the trimmed first line of stdout.
 fn run_version_cmd(exe: &std::path::Path) -> Result<String, String> {
     let output = std::process::Command::new(exe)
@@ -110,10 +125,16 @@ pub async fn yt_dlp_get_status(app: AppHandle) -> Result<YtDlpStatus, String> {
 
 #[tauri::command]
 pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
-    let url = if cfg!(target_os = "windows") {
-        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    let (primary, fallback) = if cfg!(target_os = "windows") {
+        (
+            "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp.exe",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+        )
     } else if cfg!(target_os = "macos") {
-        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+        (
+            "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp_macos",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+        )
     } else {
         return Err("当前操作系统不支持 yt-dlp 自动更新".into());
     };
@@ -134,21 +155,17 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     ));
 
     // 120s timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
-    // From GitHub Releases (Azure Blob backed) usually under 10s.
+    // JiHuLab mirror is primary (mainland CN); GitHub is fallback.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| format!("HTTP client build: {e}"))?;
-    let bytes = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("下载失败: {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("读取响应失败: {e}"))?;
+    let bytes = match download_bytes(&client, primary).await {
+        Ok(b) => b,
+        Err(primary_err) => download_bytes(&client, fallback)
+            .await
+            .map_err(|fb_err| format!("主源失败({primary_err}); 备用源失败({fb_err})"))?,
+    };
 
     std::fs::write(&tmp_path, &bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
 

@@ -1,0 +1,123 @@
+# Mirror the latest upstream yt-dlp to the JiHuLab `yt-dlp` release tag.
+#
+# The desktop app's launch-time update check reads
+#   https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp-version.json
+# and its 更新 button downloads yt-dlp.exe / yt-dlp_macos from the same tag
+# (GitHub official as fallback). This workflow refreshes those three assets.
+#
+# MANUALLY triggered — you decide when users get a newer yt-dlp. Before
+# running, skim the upstream changelog per client/docs/ytdlp-mirror.md
+# (flag renames, Node runtime minimums — the bundled node sidecar is coupled).
+#
+# Runs on ubuntu in ~1 min: pulls the official latest from GitHub (fast on
+# runners; that's the whole reason this isn't done from a mainland machine),
+# then PUTs to JiHuLab generic packages and refreshes the release links.
+name: Mirror yt-dlp to JiHuLab
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 'Optional notes shown in the in-app update prompt (e.g. 修复 YouTube 下载)'
+        required: false
+        default: ''
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download upstream + upload to JiHuLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITLAB_TOKEN" ]; then echo "::error::GITLAB_TOKEN secret missing"; exit 1; fi
+
+          GITLAB_HOST="https://jihulab.com"
+          PROJECT_ID="335658"
+          PROJECT_PATH="rjxznb-group/whatsub-release"
+          API="$GITLAB_HOST/api/v4/projects/$PROJECT_ID"
+          TAG="yt-dlp"
+
+          # ── Resolve upstream latest version from the release tag ──────
+          VERSION=$(curl -sf --retry 3 https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest | jq -r .tag_name)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then echo "::error::could not resolve upstream version"; exit 1; fi
+          echo "Upstream latest: $VERSION"
+
+          # ── Download the two binaries ─────────────────────────────────
+          curl -fL --retry 3 -o yt-dlp.exe   "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+          curl -fL --retry 3 -o yt-dlp_macos "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          for f in yt-dlp.exe yt-dlp_macos; do
+            sz=$(stat -c%s "$f")
+            echo "$f: $sz bytes"
+            if [ "$sz" -lt 10000000 ]; then echo "::error::$f too small ($sz) — download failed"; exit 1; fi
+          done
+
+          # ── Version manifest the app checks on launch ─────────────────
+          jq -n --arg v "$VERSION" --arg n "$NOTES" '{version:$v, notes:$n}' > yt-dlp-version.json
+          cat yt-dlp-version.json
+
+          # ── Upload to generic packages (fixed version "latest" → PUT
+          #    overwrites, so re-running refreshes in place) ─────────────
+          upload_file() {
+            local name="$1"
+            echo "  → uploading $name"
+            curl -sf --connect-timeout 30 --max-time 600 \
+                 --retry 3 --retry-delay 5 --retry-all-errors \
+                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                 --upload-file "$name" \
+                 "$API/packages/generic/yt-dlp/latest/$name" > /dev/null
+          }
+          upload_file yt-dlp-version.json
+          upload_file yt-dlp.exe
+          upload_file yt-dlp_macos
+
+          # ── Refresh the fixed release (delete + recreate; tag survives,
+          #    same pattern as release.yml's JiHu mirror step) ───────────
+          LINKS="[]"
+          add_link() {
+            local name="$1"
+            local pkg_url="$API/packages/generic/yt-dlp/latest/$name"
+            LINKS=$(echo "$LINKS" | jq --arg n "$name" --arg u "$pkg_url" --arg p "/$name" \
+                    '. + [{name:$n, url:$u, direct_asset_path:$p, link_type:"package"}]')
+          }
+          add_link yt-dlp-version.json
+          add_link yt-dlp.exe
+          add_link yt-dlp_macos
+
+          if curl -sf --connect-timeout 15 --max-time 30 \
+                  --retry 3 --retry-delay 5 \
+                  --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                  "$API/releases/$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG exists — deleting + recreating to refresh asset links"
+            curl -sf --connect-timeout 15 --max-time 30 \
+                 --retry 3 --retry-delay 5 --retry-all-errors \
+                 -X DELETE --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                 "$API/releases/$TAG" > /dev/null
+          fi
+
+          PAYLOAD=$(jq -n \
+            --arg name "yt-dlp mirror ($VERSION)" \
+            --arg tag "$TAG" \
+            --arg desc "Mirror of upstream yt-dlp $VERSION for the in-app updater. Refreshed manually via the mirror-ytdlp workflow." \
+            --arg ref "main" \
+            --argjson links "$LINKS" \
+            '{name:$name, tag_name:$tag, description:$desc, ref:$ref, assets:{links:$links}}')
+
+          curl -sf --connect-timeout 15 --max-time 60 \
+               -X POST --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+               --header "Content-Type: application/json" \
+               --data "$PAYLOAD" \
+               "$API/releases" > /dev/null
+
+          echo "::notice::Mirrored yt-dlp $VERSION → $GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG"
+
+          # ── Verify the public URLs actually serve ─────────────────────
+          sleep 3
+          curl -sfL "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/yt-dlp-version.json"
+          echo ""
+          code=$(curl -s -o /dev/null -w "%{http_code}" -L "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/yt-dlp.exe" -r 0-0)
+          echo "yt-dlp.exe HEAD-ish check: HTTP $code"
+          [ "$code" = "200" ] || [ "$code" = "206" ] || { echo "::error::yt-dlp.exe not downloadable"; exit 1; }

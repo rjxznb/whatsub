@@ -199,12 +199,14 @@ When the iOS app encounters a caption-less YouTube video — OR **any non-YouTub
 
 `pipeline/ytdlp.rs::download()` resolves yt-dlp at runtime in priority order:
 
-1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy from Settings → 更新 yt-dlp (`commands::yt_dlp::yt_dlp_update`). Downloaded via reqwest from `https://github.com/yt-dlp/yt-dlp/releases/latest/download/`, written to `.downloading`, atomic-renamed. `chmod +x` on unix.
+1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy (`commands::yt_dlp::yt_dlp_update`), written to `.downloading`, atomic-renamed. `chmod +x` on unix. Download is **dual-source**: JiHuLab mirror first (`.../whatsub-release/-/releases/yt-dlp/downloads/…`, mainland-reachable), GitHub official `releases/latest/download/` fallback; `connect_timeout(15s)` so a hung mirror falls back fast.
 2. **Bundled sidecar** (`binaries/yt-dlp-<target_triple>{.exe}`) — what `pnpm tauri build` ships. CI workflow input `yt_dlp_tag` (default `latest`) controls which yt-dlp release gets bundled.
 
 The AppData path uses `pipeline/spawn.rs::run_external_with_callback` because Tauri shell plugin's `sidecar()` only accepts whitelisted basenames, not arbitrary paths. The bundled fallback uses `run_sidecar`.
 
-Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's player JS changes. Bundling means weeks-long lag when extractors break. Users hit Settings → 更新 yt-dlp to get the current latest within seconds.
+Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's player JS changes. Bundling means weeks-long lag when extractors break.
+
+**Launch-time update prompt (0.1.98).** `yt_dlp_check_update` reads a version manifest (`yt-dlp-version.json = {version, notes}`) from the fixed JiHuLab release tag `yt-dlp` — best-effort, any failure ⇒ silently no prompt. `useYtDlpUpdater` + `YtDlpUpdateToast` (bottom-LEFT, so it never overlaps the app-updater toast at bottom-right) prompt 更新 / 稍后 / 不再提醒此版本 (localStorage `ytdlpSkippedVersions`); the binary swaps ONLY on an explicit 更新 click — no silent auto-update. Users can still hit Settings → 更新 yt-dlp manually. The mirror is refreshed on demand via the **Mirror yt-dlp to JiHuLab** workflow (`.github/workflows/mirror-ytdlp.yml`); upkeep + compatibility checklist (flag renames, Node-runtime minimums coupled to the bundled node sidecar) in [`docs/ytdlp-mirror.md`](./docs/ytdlp-mirror.md).
 
 ## Foreground vs background yt-dlp retry budgets
 
@@ -233,6 +235,12 @@ Critical: Win cmake passes `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGG
 `pipeline/whisper.rs` parses the first `ggml_<backend>: 0 = <gpu>` stderr line, persists as `settings.whisperBackend` so Settings shows "GPU 加速" status.
 
 **Discrete-GPU selection on hybrid laptops (2026-06-21).** whisper.cpp's Vulkan backend defaults to Vulkan **device 0**, which on a dual-GPU laptop is almost always the integrated GPU — so transcription ran on the iGPU instead of the faster dGPU. Fix is **learn-on-first-run**: `transcribe()` parses ALL `ggml_vulkan: <i> = <name> … | uma: <u>` device lines (`parse_vulkan_device`; `discrete = uma != 1`, with a name-heuristic fallback) and emits a `GpuDevices` pipeline event after any *unfiltered* run. The frontend (`App.tsx` BackendListener) persists that inventory to `settings.whisperGpus`. On the **next** run, `gpu_preference()` reads `settings.preferDiscreteGpu` (default true) + the cached inventory and, if a discrete card sits at index ≠ 0, pins it via `GGML_VK_VISIBLE_DEVICES=<idx>` (injected through `spawn::run_sidecar_env`, a thin env-capable wrapper over `run_sidecar`). A pinned run only sees its 1 selected device, so we DON'T re-emit `GpuDevices` then (would clobber the full list). Net: first transcribe after install uses the iGPU + logs "已检测到独立显卡 … 下次自动启用"; every run after uses the dGPU. Settings → 显卡加速 shows the device list + a "优先使用独立显卡转录" toggle (only on machines that actually have the choice). Escape hatch: toggle off → whisper's default device 0. Staleness caveat: if the cached index later points at a missing device (hardware/driver change), that run may fall back to CPU — user toggles off/on to re-learn.
+
+**Long-video VAD (0.1.97).** whisper.cpp on long, music-heavy, sparse-dialogue media (a 46-min film) drifts its timestamps (segments pin to 30s window boundaries, ~20s off by mid-file) and hallucination-loops on non-speech (`[phone rings]`×9) — even with large-v3. Fix: for audio **> 20 min** (`VAD_MIN_DURATION_SECS`, hardcoded — deliberately NO user setting), `transcribe()` auto-appends `--vad --vad-model <bundled ggml-silero-v5.1.2.bin>` so whisper only transcribes detected speech regions anchored to real time. Decision is computed once (probe duration + `vad_model_path`) and reused across stall-retries; model absent / probe failed ⇒ silently runs exactly as before (VAD is strictly additive). The ~885 KB model is the first bundled model on Windows (`bundle.resources` lists the single file — NOT `models/*`, which would drag the 147 MB base model into the installer; macOS already bundles `models/*`). Dev machines must fetch it once into `src-tauri/models/` (see `binaries/README.md`); CI fetches it in release.yml.
+
+## Local-import web playability (MKV etc.)
+
+`ffmpeg::ensure_web_playable_mp4` gates on **container AND codecs** (`web_playable_plan(container, vcodec, acodec)`): byte-copy only for MP4-family + H.264 + (AAC|MP3); non-MP4 containers (MKV/WebM) with web-OK codecs get a pure **remux** (`-c copy` into mp4, instant); incompatible codecs (AC-3/DTS audio, HEVC/VP9 video) transcode. History: local imports were once raw byte-copies (pre-0.1.87 MKVs still in a library are silent until re-imported); 0.1.87 added the codec check but byte-copied h264+aac MKVs — still a Matroska container renamed `.mp4`, which WebView2 plays WITHOUT sound; 0.1.98 added the container gate. Don't re-introduce a codecs-only fast path.
 
 ## Build / dev
 

@@ -25,7 +25,8 @@
 - **任意 LLM**:DeepSeek / OpenAI / Kimi / Claude / Gemini / 智谱 / Qwen / SiliconFlow / Ollama,10 个预设 + 自定义
 - **多站点视频导入**:内置 yt-dlp,支持 YouTube / B 站 / Instagram / X / TikTok 等;可选画质(480p / 720p / 1080p / 原画)
 - **可视化 cookies 登录**:启动你电脑上的 Edge / Chrome 在独立 profile 里登录目标站点,whatsub 通过 CDP 抓 cookies。会员视频 / 年龄限制 / 私有视频都能下载
-- **yt-dlp 用户可自更新**:Settings → 更新 yt-dlp 一键下载最新版到 AppData,YouTube 哪天换 player JS 不用等 whatsub 发版
+- **yt-dlp 自动检查更新**(0.1.98+):启动时静默检查有没有新版 yt-dlp,有就弹提示、点「更新」一键装好(国内直连极狐镜像,GitHub 兜底);也可 Settings → 更新 yt-dlp 手动更新。YouTube 哪天换 player JS 不用等 whatsub 发版
+- **长视频字幕更准**(0.1.97+):超过 20 分钟的视频自动启用 VAD 智能分段,跳过音乐/静音段 —— 修复长片时间轴漂移、字幕反复乱码的问题,全自动无需设置
 - **字幕导出**:英文 / 中文 / 双语 SRT,或将带高亮的字幕烧录进视频导出 MP4(可选 高 / 标准 / 流畅 三档画质),也支持都不勾字幕直接流复制原视频
 - **词汇本**:⭐ 收藏重点短语,跨视频汇总,CSV 导出,深链跳回原片对应字幕段
 - **公共 / 我的语料库**(0.1.56+):云端短语库,顶部 tag chip 多选筛选(18 个生活场景 + 自定义);公共库由我们整理(所有付费用户共享),我的库装的是浏览器插件在网页 / YouTube 上划词收藏的短语。每条短语点开能看带时间戳的视频出处(▶ 02:35 一键跳转 YouTube 嵌入播放器)

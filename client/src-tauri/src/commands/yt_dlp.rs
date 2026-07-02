@@ -25,7 +25,7 @@
 
 use crate::core::paths;
 use crate::pipeline::spawn::run_sidecar;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -63,6 +63,21 @@ pub fn resolve_appdata_yt_dlp() -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// GET a URL and return the whole body, mapping errors to Chinese strings.
+async fn download_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
+    client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("下载失败: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("读取响应失败: {e}"))
+        .map(|b| b.to_vec())
 }
 
 /// Run `<exe> --version` and return the trimmed first line of stdout.
@@ -110,10 +125,16 @@ pub async fn yt_dlp_get_status(app: AppHandle) -> Result<YtDlpStatus, String> {
 
 #[tauri::command]
 pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
-    let url = if cfg!(target_os = "windows") {
-        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+    let (primary, fallback) = if cfg!(target_os = "windows") {
+        (
+            "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp.exe",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+        )
     } else if cfg!(target_os = "macos") {
-        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+        (
+            "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp_macos",
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+        )
     } else {
         return Err("当前操作系统不支持 yt-dlp 自动更新".into());
     };
@@ -133,22 +154,21 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
             .unwrap_or("yt-dlp")
     ));
 
-    // 120s timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
-    // From GitHub Releases (Azure Blob backed) usually under 10s.
+    // 120s total timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
+    // JiHuLab mirror is primary (mainland CN); GitHub is fallback. A short
+    // connect_timeout bounds the worst case: if the JiHuLab primary hangs at
+    // connect, we fall back to GitHub in ~15s instead of waiting the full 120s.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| format!("HTTP client build: {e}"))?;
-    let bytes = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("下载失败: {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| format!("读取响应失败: {e}"))?;
+    let bytes = match download_bytes(&client, primary).await {
+        Ok(b) => b,
+        Err(primary_err) => download_bytes(&client, fallback)
+            .await
+            .map_err(|fb_err| format!("主源失败({primary_err}); 备用源失败({fb_err})"))?,
+    };
 
     std::fs::write(&tmp_path, &bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
 
@@ -177,4 +197,111 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
         version,
         source: "appdata".into(),
     })
+}
+
+/// JiHuLab-hosted version manifest URL (a dedicated `yt-dlp` release tag,
+/// manually kept fresh by the maintainer). See docs/ytdlp-mirror.md.
+const YTDLP_MANIFEST_URL: &str =
+    "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp-version.json";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct YtDlpUpdateInfo {
+    pub current: String,
+    pub latest: String,
+    pub has_update: bool,
+    pub notes: String,
+}
+
+#[derive(Deserialize)]
+struct YtDlpManifest {
+    version: String,
+    #[serde(default)]
+    notes: String,
+}
+
+/// True when dotted-numeric `latest` is strictly newer than `current`
+/// (e.g. "2026.06.10" > "2026.06.09"). Component-wise numeric compare so
+/// point releases ("2026.06.09.1") and any zero-pad quirks are handled;
+/// unparseable components count as 0, so malformed input is never "newer".
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| {
+        s.split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<u64>>()
+    };
+    let (l, c) = (parse(latest), parse(current));
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv != cv {
+            return lv > cv;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, String> {
+    let current = yt_dlp_get_status(app).await?.version;
+    let none = |cur: &str| YtDlpUpdateInfo {
+        current: cur.to_string(),
+        latest: cur.to_string(),
+        has_update: false,
+        notes: String::new(),
+    };
+    // Best-effort: any network/parse failure → "no update" (never blocks launch).
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(none(&current)),
+    };
+    let manifest: YtDlpManifest = match client.get(YTDLP_MANIFEST_URL).send().await {
+        Ok(resp) => match resp.error_for_status() {
+            Ok(ok) => match ok.bytes().await {
+                Ok(b) => match serde_json::from_slice(&b) {
+                    Ok(m) => m,
+                    Err(_) => return Ok(none(&current)),
+                },
+                Err(_) => return Ok(none(&current)),
+            },
+            Err(_) => return Ok(none(&current)),
+        },
+        Err(_) => return Ok(none(&current)),
+    };
+    let has_update = is_newer(&manifest.version, &current);
+    Ok(YtDlpUpdateInfo {
+        current,
+        latest: manifest.version,
+        has_update,
+        notes: manifest.notes,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn newer_by_day_month_year() {
+        assert!(is_newer("2026.06.10", "2026.06.09"));
+        assert!(is_newer("2026.07.01", "2026.06.30"));
+        assert!(is_newer("2027.01.01", "2026.12.31"));
+    }
+
+    #[test]
+    fn not_newer_when_equal_or_older() {
+        assert!(!is_newer("2026.06.09", "2026.06.09"));
+        assert!(!is_newer("2026.06.08", "2026.06.09"));
+    }
+
+    #[test]
+    fn handles_point_release_and_malformed() {
+        assert!(is_newer("2026.06.09.1", "2026.06.09")); // point release is newer
+        assert!(!is_newer("2026.06.09", "2026.06.09.1"));
+        assert!(!is_newer("", "2026.06.09"));            // malformed → not newer
+        assert!(!is_newer("garbage", "2026.06.09"));
+    }
 }

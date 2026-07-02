@@ -2,7 +2,17 @@
 
 The desktop app checks `.../releases/yt-dlp/downloads/yt-dlp-version.json` on the
 JiHuLab `whatsub-release` project (a fixed release tag named `yt-dlp`) and prompts
-users to update. That mirror is maintained MANUALLY. To publish a newer yt-dlp:
+users to update. That mirror is refreshed manually — you decide when.
+
+## The easy way: run the mirror workflow
+
+GitHub → Actions → **Mirror yt-dlp to JiHuLab** → Run workflow (optional `notes`
+shown in the in-app prompt). It pulls the official latest from GitHub, uploads
+all three assets to the `yt-dlp` tag, and verifies the public URLs — ~1 min,
+no local downloads or tokens needed (uses the repo's `GITLAB_TOKEN` secret).
+Still read the compatibility checklist below first.
+
+## The manual way (fallback if CI is unavailable)
 
 1. Download the target yt-dlp from upstream GitHub:
    - `https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe`

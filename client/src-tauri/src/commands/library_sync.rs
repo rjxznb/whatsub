@@ -272,6 +272,19 @@ pub async fn library_sync_to_cloud(
     })
 }
 
+/// Map the "clear local synced flag" bookkeeping result for unsync. A
+/// cloud-only entry (synced from another device / local copy deleted) has no
+/// local library.json record — `set_synced_at` returns `not_found`, but there
+/// was simply nothing to clear: the unsync itself succeeded, so that's Ok.
+/// Any other error is a real local-write failure and surfaces to the UI.
+fn clear_synced_flag_best_effort(r: crate::error::AppResult<()>) -> Result<(), String> {
+    match r {
+        Ok(()) => Ok(()),
+        Err(e) if e.to_string() == "not_found" => Ok(()),
+        Err(e) => Err(format!("library write: {e}")),
+    }
+}
+
 #[tauri::command]
 pub async fn library_unsync_from_cloud<R: Runtime>(
     app: AppHandle<R>,
@@ -304,8 +317,7 @@ pub async fn library_unsync_from_cloud<R: Runtime>(
             truncate(&body_text, 200)
         ));
     }
-    crate::commands::library::set_synced_at(&id, None, None)
-        .map_err(|e| format!("library write: {e}"))?;
+    clear_synced_flag_best_effort(crate::commands::library::set_synced_at(&id, None, None))?;
     Ok(())
 }
 
@@ -923,6 +935,22 @@ fn categorise(e: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsync_tolerates_missing_local_entry() {
+        // Cloud-only entry (never downloaded to this desktop): clearing the
+        // local synced flag finds no entry — that's success, not failure.
+        assert_eq!(
+            clear_synced_flag_best_effort(Err("not_found".to_string().into())),
+            Ok(())
+        );
+        // Real write failures still surface, prefixed for the UI.
+        assert_eq!(
+            clear_synced_flag_best_effort(Err("disk full".to_string().into())),
+            Err("library write: disk full".to_string())
+        );
+        assert_eq!(clear_synced_flag_best_effort(Ok(())), Ok(()));
+    }
 
     #[test]
     fn yt_id_from_watch() {

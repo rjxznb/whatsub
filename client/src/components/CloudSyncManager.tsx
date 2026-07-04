@@ -85,6 +85,11 @@ export function CloudSyncManager({ onClose, onChanged }: Props) {
       void loadQuota();
     } catch (err) {
       await notify(friendlySyncError(String(err)));
+      // The cloud delete may have succeeded even when a later step failed —
+      // re-pull the server list so no ghost card lingers (clicking 下载到本地
+      // on one would hit an already-deleted cloud entry).
+      await reload();
+      await onChanged();
     } finally {
       setBusyIds(prev => {
         const next = new Set(prev);

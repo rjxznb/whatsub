@@ -12,6 +12,17 @@ use tauri::{AppHandle, Runtime};
 
 const SERVER_BASE: &str = "https://whatsub.eversay.cc/api/license";
 
+/// Auth HTTP client with the same 30s timeout discipline as `license.rs`.
+/// Without a timeout, one stalled connection turns into an INFINITE spinner
+/// in the login dialog / a permanently-unauthed corpus gate (2026-07-13).
+fn http_client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("client build: {e}"))
+}
+
 #[derive(Serialize)]
 struct SendCodeReq<'a> {
     email: &'a str,
@@ -94,7 +105,7 @@ async fn post_json_body(
 
 #[tauri::command]
 pub async fn auth_send_code(email: String) -> Result<AuthResult, String> {
-    let client = Client::new();
+    let client = http_client()?;
     let body = serde_json::to_string(&SendCodeReq { email: &email })
         .map_err(|e| e.to_string())?;
     let (status, body_val) =
@@ -112,7 +123,7 @@ pub async fn auth_verify_code<R: Runtime>(
     email: String,
     code: String,
 ) -> Result<AuthResult, String> {
-    let client = Client::new();
+    let client = http_client()?;
     let body = serde_json::to_string(&VerifyCodeReq { email: &email, code: &code })
         .map_err(|e| e.to_string())?;
     let (status, body_val) =
@@ -153,7 +164,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             has_active_subscription: None,
         });
     }
-    let client = Client::new();
+    let client = http_client()?;
     let resp = client
         .get(format!("{}/auth/me", SERVER_BASE))
         .header("Authorization", format!("Bearer {}", auth.session_token))
@@ -186,7 +197,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
 #[tauri::command]
 pub async fn auth_logout<R: Runtime>(app: AppHandle<R>) -> Result<AuthResult, String> {
     if let Some(auth) = auth::get_auth(&app) {
-        let client = Client::new();
+        let client = http_client()?;
         let _ = client
             .post(format!("{}/auth/logout", SERVER_BASE))
             .header("Authorization", format!("Bearer {}", auth.session_token))
@@ -236,7 +247,7 @@ pub async fn auth_from_license<R: Runtime>(
     app: AppHandle<R>,
     license_key: String,
 ) -> Result<AuthResult, String> {
-    let client = Client::new();
+    let client = http_client()?;
     let body = serde_json::to_string(&FromLicenseReq { license_key: &license_key })
         .map_err(|e| e.to_string())?;
     let (status, body_val) =

@@ -73,7 +73,10 @@ export const useAuth = create<AuthStore>((set, get) => ({
 
   verifyCode: async (email: string, code: string) => {
     const r = await invoke<AuthResult>('auth_verify_code', { email, code });
-    if (r.ok) await get().refresh();
+    // Session is already persisted by the Rust command — refresh only pulls
+    // display state (email/sub). Run it in the background so a slow/stalled
+    // auth_me can never hold the login dialog's spinner hostage (2026-07-13).
+    if (r.ok) void get().refresh();
     return r;
   },
 

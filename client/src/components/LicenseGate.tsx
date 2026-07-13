@@ -474,9 +474,17 @@ function CollapseCard({
 
 /** Email-OTP login for pure Pro subscribers (no buyout license). 3 phases:
  *  'email' → send code · 'code' → enter 6-digit code · 'verifying' → POSTing.
- *  On success re-inits the license store → init() walks the SUB_ACTIVE branch
- *  via auth_me → the gate dissolves. Rendered inside a CollapseCard, which owns
- *  the expand/collapse, so this is just the inner form. */
+ *  On success re-inits the license store; if that email holds a subscription
+ *  init() walks the SUB_ACTIVE branch → the gate dissolves and this form
+ *  unmounts. Rendered inside a CollapseCard, which owns the expand/collapse.
+ *
+ *  2026-07-13 — the success path MUST still reset `phase`. It used to rely on
+ *  "init() flips the mode → we get unmounted, so no reset needed". That holds
+ *  only for a subscriber. Log in with an email that has NO subscription and
+ *  init() lands back on NEEDS_KEY, the gate does NOT unmount, and `phase`
+ *  stays 'verifying' forever = an infinite spinner with no error. Auth had in
+ *  fact succeeded. Always reset, and tell the user their email has no active
+ *  subscription instead of silently spinning. */
 function SubLoginForm() {
   const { init } = useLicense();
   const [phase, setPhase] = useState<'email' | 'code' | 'verifying'>('email');
@@ -529,7 +537,16 @@ function SubLoginForm() {
         setPhase('code');
         return;
       }
+      // Auth succeeded (session persisted). Re-evaluate the unlock mode: a
+      // subscriber flips to SUB_ACTIVE and this component unmounts mid-await.
       await init();
+      // Still mounted ⇒ init() did NOT unlock (email has no active
+      // subscription). Reset out of 'verifying' — never leave the spinner
+      // running — and say why.
+      setPhase('code');
+      setError(
+        '该邮箱没有有效订阅，无法解锁。请输入授权码，或用持有订阅的邮箱登录。',
+      );
     } catch (e) {
       setError('登录失败：' + String(e));
       setPhase('code');

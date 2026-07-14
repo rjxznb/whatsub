@@ -1,3 +1,5 @@
+import { openUrl } from '@tauri-apps/plugin-opener';
+
 export interface ParsedYouTube {
   videoId: string;
   startSec: number;
@@ -25,6 +27,16 @@ export function parseYouTubeUrl(input: string): ParsedYouTube | null {
   }
 }
 
+/** Canonical watch URL for the system browser, carrying the timestamp over so
+ *  the user lands on the same spot they were trying to reach in the embed.
+ *  `&t=<n>s` (seconds suffix) is the form YouTube's watch page expects. */
+export function watchUrlFor(videoId: string, startSec = 0): string {
+  const t = Math.max(0, Math.floor(startSec));
+  return t > 0
+    ? `https://www.youtube.com/watch?v=${videoId}&t=${t}s`
+    : `https://www.youtube.com/watch?v=${videoId}`;
+}
+
 interface Props {
   videoId: string;
   startSec?: number;
@@ -50,7 +62,7 @@ export function YouTubeEmbed({ videoId, startSec = 0, className }: Props) {
   // picks English as the preferred subtitle language when the video has
   // multiple track options.
   const src = `https://www.youtube-nocookie.com/embed/${videoId}?start=${startInt}&rel=0&cc_load_policy=1&cc_lang_pref=en`;
-  return (
+  const iframe = (
     <iframe
       src={src}
       title={`YouTube ${videoId}`}
@@ -60,5 +72,35 @@ export function YouTubeEmbed({ videoId, startSec = 0, className }: Props) {
       height="360"
       className={className ?? 'rounded border border-zinc-700'}
     />
+  );
+
+  // A caller passing `className` owns its own layout (e.g. the agent's
+  // YouTubeResults fills a 16:9 box with `absolute inset-0`). Wrapping that in
+  // a static div would break the positioning, and a hint bar has no room in a
+  // thumbnail-sized card — so those get the bare iframe.
+  if (className) return iframe;
+
+  return (
+    <div className="space-y-1">
+      {iframe}
+      {/* Always-on escape hatch. When YouTube decides the current exit IP looks
+          like bot traffic it serves an anti-abuse page carrying
+          X-Frame-Options: DENY instead of the player — WebView2 then renders its
+          opaque "已阻止此内容。请与网站所有者联系" page and the user has no idea
+          what to do (2026-07-13: a flagged shared proxy node did exactly this;
+          switching nodes fixed it). We can't detect that reliably — an
+          XFO-refused iframe fires no onError — so instead of guessing we just
+          always offer the way out. Costs one line when playback is fine. */}
+      <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500">
+        <span>显示「已阻止此内容」？通常是代理节点被判定为异常流量，换个节点即可。</span>
+        <button
+          type="button"
+          onClick={() => void openUrl(watchUrlFor(videoId, startInt)).catch(() => {})}
+          className="shrink-0 underline hover:text-zinc-300"
+        >
+          在浏览器中打开
+        </button>
+      </div>
+    </div>
   );
 }

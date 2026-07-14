@@ -69,8 +69,33 @@ function pickVoice(
 /** Trailing sentence/clause punctuation (zh + en) the neural voices pause on. */
 const TERMINAL_PUNCT = /[。.!?！？…，,、;；:：]$/;
 
-/** Strip markdown / formatting noise so the voice doesn't read "asterisk
- *  asterisk word" etc., and turn line / paragraph breaks into a spoken pause.
+// ── Symbols the voice would VERBALIZE ────────────────────────────────────────
+// A neural voice reads "/" as "slash", "*" as "asterisk", "→" as "right arrow".
+// The tutor's text is LLM output — markdown-flavoured, full of notation that
+// exists purely for the eye — so everything below is either dropped or turned
+// into a pause. This is the single choke point: EVERY spoken line in the app
+// (精讲 / 角色扮演 / 语料库 / 生词本 / 关键短语) goes through ttsSpeak → here.
+
+/** Characters that only occur in IPA/phonetic transcription (IPA Extensions +
+ *  spacing modifiers ˈ ˌ ː, plus the stray Latin/Greek borrowings æ ð ø θ). */
+const IPA_CHARS = "ɐ-ʯʰ-˿æðøθ";
+/** A phonetic span — `/prəˈnaʊns/` or `[ˈwɜːd]`. Dropped WHOLE: a TTS engine
+ *  can't pronounce IPA, it spells the glyphs out as noise. Only spans that
+ *  actually contain an IPA glyph match, so `and/or` and `[1]` are untouched. */
+const IPA_SLASH_SPAN = new RegExp(`/[^/\\n]*[${IPA_CHARS}][^/\\n]*/`, "g");
+const IPA_BRACKET_SPAN = new RegExp(`\\[[^\\]\\n]*[${IPA_CHARS}][^\\]\\n]*\\]`, "g");
+const IPA_STRAY = new RegExp(`[${IPA_CHARS}]`, "g");
+/** Arrows ("go → went") become a comma: a pause reads as the intended
+ *  "becomes", where the glyph itself would be spoken as "right arrow". */
+const ARROWS = /[←-⇿⟰-⟿⬀-⬑➔➜➡]/g;
+/** Pictographs — several voices announce the emoji's NAME ("party popper"). */
+const EMOJI = /[\p{Extended_Pictographic}‍️⃣]/gu;
+/** Leftover notation with no spoken form. Becomes a space, never a word. */
+const MUTE_SYMBOLS = /[/*_~^\\<>|#`•·‣▪◦※–]/g;
+
+/** Strip markdown / notation noise so the voice doesn't read "asterisk
+ *  asterisk word" or "slash" etc., and turn line / paragraph breaks into a
+ *  spoken pause.
  *
  *  Pause handling: the free Edge readaloud endpoint ignores SSML `<break>`, and
  *  neural voices read a bare newline as a plain space (no breath) — so the only
@@ -79,12 +104,26 @@ const TERMINAL_PUNCT = /[。.!?！？…，,、;；:：]$/;
  *  with a space, so the voice pauses between paragraphs. */
 export function stripForSpeech(text: string): string {
   const stripped = text
+    // ── structural markdown — must run BEFORE the per-character strips, which
+    //    would otherwise shred the delimiters these patterns need to match ──
     .replace(/```[\s\S]*?```/g, " ") // code fences
     .replace(/`([^`]*)`/g, "$1") // inline code
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1") // image → alt text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1") // link → link text, NEVER the URL
+    .replace(/<[^<>\n]{1,60}>/g, " ") // html-ish tags
+    .replace(/\bhttps?:\/\/\S+/gi, " ") // bare URL — unspeakable, and the "//"
+    .replace(/\bwww\.\S+/gi, " ") //   would come out as "slash slash"
     .replace(/\*\*([^*]+)\*\*/g, "$1") // bold
     .replace(/\*([^*]+)\*/g, "$1") // italic
     .replace(/_([^_]+)_/g, "$1") // underscore emphasis
-    .replace(/[#>|]/g, " ") // headings / quotes / table pipes
+    .replace(/^[ \t]*[-*+•]\s+/gm, "") // list bullets (a lone "-" reads as "dash")
+    // ── notation with no spoken form ──
+    .replace(IPA_SLASH_SPAN, " ")
+    .replace(IPA_BRACKET_SPAN, " ")
+    .replace(IPA_STRAY, "")
+    .replace(EMOJI, "")
+    .replace(ARROWS, ", ")
+    .replace(MUTE_SYMBOLS, " ")
     .replace(/[^\S\n]+/g, " "); // collapse spaces/tabs, keep newlines for now
 
   const lines = stripped
@@ -92,14 +131,21 @@ export function stripForSpeech(text: string): string {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  return lines
-    .map((line, i) =>
-      // last line needs no trailing pause; earlier lines get a full stop so the
-      // voice breathes at the break (unless they already end with punctuation)
-      i === lines.length - 1 || TERMINAL_PUNCT.test(line) ? line : line + "。",
-    )
-    .join(" ")
-    .trim();
+  return (
+    lines
+      .map((line, i) =>
+        // last line needs no trailing pause; earlier lines get a full stop so the
+        // voice breathes at the break (unless they already end with punctuation)
+        i === lines.length - 1 || TERMINAL_PUNCT.test(line) ? line : line + "。",
+      )
+      .join(" ")
+      // A strip can strand a space before punctuation ("好的 。") or leave a
+      // doubled separator (", 。") — both make the voice stumble.
+      .replace(/([,，])\s*(?=[。.!?！？;；:：、…])/g, "")
+      .replace(/\s+(?=[,，。.!?！？;；:：、…])/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim()
+  );
 }
 
 export interface SpeakOptions {

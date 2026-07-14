@@ -89,6 +89,47 @@ describe("stripForSpeech", () => {
   });
 });
 
+// The voice must never VERBALIZE a symbol that only exists for the eye. Neural
+// TTS reads "/" as "slash", "*" as "asterisk", "→" as "right arrow" — which is
+// exactly what the tutor's markdown-flavoured LLM output is full of.
+describe("stripForSpeech — symbols the voice would otherwise read aloud", () => {
+  it("never leaves a slash for the voice to read as 'slash'", () => {
+    expect(stripForSpeech("动词/名词")).toBe("动词 名词");
+    expect(stripForSpeech("and/or")).toBe("and or");
+  });
+
+  it("drops phonetic transcriptions (unpronounceable glyph soup)", () => {
+    expect(stripForSpeech("pronounce /prəˈnaʊns/ 这样读")).toBe("pronounce 这样读");
+    expect(stripForSpeech("word [ˈwɜːd] 重音在前")).toBe("word 重音在前");
+  });
+
+  it("turns arrows into a pause instead of 'right arrow'", () => {
+    expect(stripForSpeech("buy → bought")).toBe("buy, bought");
+  });
+
+  it("keeps link text but never speaks the URL", () => {
+    expect(stripForSpeech("见 [官网](https://a.com/x) 说明")).toBe("见 官网 说明");
+    expect(stripForSpeech("打开 https://youtu.be/abc 看")).toBe("打开 看");
+  });
+
+  it("drops emoji (some voices read the emoji name)", () => {
+    expect(stripForSpeech("答对了 🎉 继续")).toBe("答对了 继续");
+  });
+
+  it("drops list bullets and stray markdown symbols", () => {
+    expect(stripForSpeech("- 第一点\n- 第二点")).toBe("第一点。 第二点");
+    expect(stripForSpeech("大约 ~ 5 分钟 * 注意 _ 这里")).toBe("大约 5 分钟 注意 这里");
+  });
+
+  it("keeps prosody punctuation (that's how the voice breathes)", () => {
+    expect(stripForSpeech("你好，世界。真的吗？")).toBe("你好，世界。真的吗？");
+  });
+
+  it("leaves no space stranded before punctuation after a strip", () => {
+    expect(stripForSpeech("好的 */ 。")).toBe("好的。");
+  });
+});
+
 describe("tts mute preference", () => {
   beforeEach(() => {
     localStorage.clear();

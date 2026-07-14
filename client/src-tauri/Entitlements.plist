@@ -16,5 +16,34 @@
     -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+
+    <!--
+        Required for the sidecar `node` (V8), which yt-dlp spawns via
+        `--js-runtimes node:<path>` to solve YouTube's n-challenge. Without
+        these, macOS downloads fail with:
+
+          [jsc] Error solving n challenge ... using "node" provider:
+                Error running node process (returncode: -5)
+          ERROR: [youtube] <id>: No video formats found!
+
+        returncode -5 = SIGTRAP: the kernel killed node inside V8's
+        SetPermissions when it tried to make JIT memory executable.
+
+        Why our build strips node's own entitlements: notarization requires
+        every executable inside the .app to be signed with OUR identity, so
+        Tauri re-signs each sidecar with hardened runtime + THIS file —
+        replacing the entitlements the official nodejs.org binary ships with
+        (which include both keys below). We must re-grant them.
+
+        allow-jit alone is not enough on recent macOS — V8 also needs
+        allow-unsigned-executable-memory. Both are permitted for Developer ID
+        distribution and notarization (Electron/Node apps ship them routinely).
+
+        Windows is unaffected: no hardened runtime, no entitlements.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
 </dict>
 </plist>

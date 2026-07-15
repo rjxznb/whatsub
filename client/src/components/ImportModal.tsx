@@ -22,14 +22,15 @@ export function shouldPromptLogin(
   return cookieSource === "in-app" && !!status && status.exists && status.expired;
 }
 
-// Slider positions, left → right. Anything outside this trio is a legacy
-// entry style that the slider snaps to the nearest position via indexOf.
-// One-click sample URL surfaced in the URL tab as an "下载示例" link
-// for first-time users who land in the modal without a video in mind.
+// One-click sample URL offered during onboarding as ghost-text
+// (placeholder) + a Tab-to-fill affordance inside the URL input, for
+// first-time users who land in the modal without a video in mind.
 // "Me at the zoo" — first ever YouTube upload (April 2005), 18 seconds,
 // English narration with auto-captions, will never be removed.
 const SAMPLE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 
+// Slider positions, left → right. Anything outside this trio is a legacy
+// entry style that the slider snaps to the nearest position via sliderIdx.
 const STYLE_SLIDER_ORDER: TranslationStyle[] = ["formal", "neutral", "colloquial"];
 const STYLE_LABEL: Record<"formal" | "neutral" | "colloquial", string> = {
   formal: "正式",
@@ -1020,21 +1021,69 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
 
         {tab === "url" ? (
           <>
-            <input
-              ref={urlInputRef}
-              type="text"
-              data-tour="url-input"
-              value={urlValue}
-              onChange={(e) => {
-                setUrlValue(e.target.value);
-                if (validationError) setValidationError(null);
-              }}
-              placeholder="https://www.youtube.com/watch?v="
-              className={
-                "w-full px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border " +
-                (validationError ? "border-rose-500" : "border-zinc-700")
-              }
-            />
+            {/* During onboarding the sample URL is offered as ghost-text
+                (placeholder) + a Tab-to-fill affordance INSIDE the input,
+                not as a separate button below it. The old below-input
+                button sat under the tour's spotlight tooltip + dim mask, so
+                first-time users literally couldn't see it. Keeping the hint
+                inside the highlighted input keeps it in the cutout. */}
+            <div className="relative">
+              <input
+                ref={urlInputRef}
+                type="text"
+                data-tour="url-input"
+                value={urlValue}
+                onChange={(e) => {
+                  setUrlValue(e.target.value);
+                  if (validationError) setValidationError(null);
+                }}
+                onKeyDown={(e) => {
+                  // Tab (without Shift) on an EMPTY field during onboarding
+                  // accepts the sample URL instead of moving focus — the
+                  // ghost-text-autocomplete gesture the placeholder promises.
+                  // Gated on showSampleLink so normal users keep Tab as plain
+                  // focus navigation.
+                  if (
+                    showSampleLink &&
+                    e.key === "Tab" &&
+                    !e.shiftKey &&
+                    urlValue.trim() === ""
+                  ) {
+                    e.preventDefault();
+                    setUrlValue(SAMPLE_URL);
+                    if (validationError) setValidationError(null);
+                  }
+                }}
+                placeholder={
+                  showSampleLink
+                    ? SAMPLE_URL
+                    : "https://www.youtube.com/watch?v="
+                }
+                className={
+                  "w-full px-3 py-2 bg-zinc-800 text-zinc-100 rounded text-sm border " +
+                  (showSampleLink && !urlValue ? "pr-24 " : "") +
+                  (validationError ? "border-rose-500" : "border-zinc-700")
+                }
+              />
+              {showSampleLink && !urlValue && (
+                <button
+                  type="button"
+                  data-tour="sample-link"
+                  onClick={() => {
+                    setUrlValue(SAMPLE_URL);
+                    if (validationError) setValidationError(null);
+                    urlInputRef.current?.focus();
+                  }}
+                  title="填入示例链接：Me at the zoo（YouTube 第一支视频，18 秒）"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1 px-1.5 py-1 rounded bg-zinc-700/80 hover:bg-zinc-600 text-[10px] text-zinc-300 hover:text-zinc-100 transition-colors"
+                >
+                  <kbd className="font-mono text-[10px] px-1 py-px rounded bg-zinc-900/70 border border-zinc-600">
+                    Tab
+                  </kbd>
+                  填入示例
+                </button>
+              )}
+            </div>
             {validationError && (
               <div className="mt-1.5 text-xs text-rose-300">
                 {validationError}
@@ -1050,28 +1099,6 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
             )}
             {expiredPrompt && (
               <SiteLoginModal open={loginOpen} action={expiredPrompt} onClose={() => setLoginOpen(false)} />
-            )}
-            {/* 示例链接 — one-click affordance for first-time users who
-                don't have a URL handy. Uses "Me at the zoo" (the first
-                video ever uploaded to YouTube, jNQXAC9IVRw):
-                  · 18 秒,下载快
-                  · 永久存在(YouTube 不会删第一支视频)
-                  · 有英文 auto-captions,跑得通整条字幕流水线
-                Note: still needs 梯子 to actually fetch since it's on
-                youtube.com — checklist already covers that path. */}
-            {showSampleLink && (
-              <button
-                type="button"
-                data-tour="sample-link"
-                onClick={() => {
-                  setUrlValue(SAMPLE_URL);
-                  if (validationError) setValidationError(null);
-                  urlInputRef.current?.focus();
-                }}
-                className="mt-1.5 text-[11px] text-blue-300 hover:text-blue-200 hover:underline transition-colors"
-              >
-                没有合适的链接?试试示例:Me at the zoo(YouTube 第一支视频,18 秒) →
-              </button>
             )}
             <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
               <span className="shrink-0">画质</span>

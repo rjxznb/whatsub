@@ -13,8 +13,8 @@ import { createPortal } from "react-dom";
  *                                                checklist 关闭 → "url"
  *                                                (检测 url-input 在 DOM)
  *   url       → 高亮 URL 输入框.                 输入框非空 → "download"
- *                                                (覆盖输入 / 粘贴 / 示例按钮
- *                                                程序化填入三种路径)
+ *                                                (手动输入 / 粘贴 / 按 Tab
+ *                                                填入示例三种路径都算)
  *   download  → 高亮 开始解析 按钮.              点击 → dismiss(结束)
  *
  * `checklist` step不画 dim mask — checklist dialog 本身有 backdrop,
@@ -58,7 +58,7 @@ const STEP_CONFIG: Record<Exclude<LibraryTourStep, null>, StepConfig> = {
   },
   url: {
     selector: '[data-tour="url-input"]',
-    message: "🔗 粘贴视频链接,或点输入框下方「试试示例链接」一键填入",
+    message: "🔗 粘贴视频链接,或按 Tab 键一键填入示例链接",
     pad: 8,
   },
   download: {
@@ -116,7 +116,7 @@ export function LibraryTour({ step, onAdvance, onDismiss }: Props) {
   }, [config.selector]);
 
   // Polled advancement for checklist→url and url→download. We poll
-  // rather than listen for events because the sample-link button
+  // rather than listen for events because the Tab-to-fill affordance
   // fills the input via React state (no native `input` event), and
   // checklist closure happens through several code paths — polling
   // covers all of them uniformly.

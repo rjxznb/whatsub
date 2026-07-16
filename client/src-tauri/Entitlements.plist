@@ -18,9 +18,15 @@
     <true/>
 
     <!--
-        Required for the sidecar `node` (V8), which yt-dlp spawns via
-        `--js-runtimes node:<path>` to solve YouTube's n-challenge. Without
+        Required for the sidecar `node` (V8), which yt-dlp spawns via its
+        js-runtimes flag (node:<path>) to solve YouTube's n-challenge. Without
         these, macOS downloads fail with:
+
+        NOTE: never write two adjacent hyphens in this comment. Apple's
+        entitlements parser (AMFIUnserializeXML) is a strict XML parser and
+        rejects that sequence inside a comment ("syntax error"), which fails
+        codesign for the WHOLE app. That is why the flag above is written
+        without its leading dashes.
 
           [jsc] Error solving n challenge ... using "node" provider:
                 Error running node process (returncode: -5)

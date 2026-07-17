@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ExternalLink, Check, Pause, Play, Download, Eye, EyeOff, ChevronDown, LogIn, Trash2, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -40,6 +40,25 @@ export function Settings() {
   const downloadPaused = dlPhase === "paused" ? dlActive : null;
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Deep-link highlight: the Player's tiny-model nudge routes here with
+  // ?highlight=whisper-model. Scroll the 字幕识别引擎 section into view and
+  // pulse an amber ring briefly so the user's eye lands on the model picker.
+  const [searchParams] = useSearchParams();
+  const modelSectionRef = useRef<HTMLElement>(null);
+  const [highlightModel, setHighlightModel] = useState(false);
+  useEffect(() => {
+    if (searchParams.get("highlight") !== "whisper-model") return;
+    const t = window.setTimeout(() => {
+      modelSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightModel(true);
+    }, 150);
+    const off = window.setTimeout(() => setHighlightModel(false), 2800);
+    return () => {
+      window.clearTimeout(t);
+      window.clearTimeout(off);
+    };
+  }, [searchParams]);
 
   useEffect(() => {
     load();
@@ -183,7 +202,13 @@ export function Settings() {
           </div>
         </section>
 
-        <section>
+        <section
+          ref={modelSectionRef}
+          className={
+            "scroll-mt-6 rounded-lg transition-shadow duration-500 " +
+            (highlightModel ? "ring-2 ring-amber-400/70 ring-offset-2 ring-offset-zinc-950" : "")
+          }
+        >
           <h2 className="font-semibold mb-3">字幕识别引擎</h2>
           {(() => {
             // Single-row dropdown + action, then description + (optional)

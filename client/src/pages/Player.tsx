@@ -22,6 +22,7 @@ import { SubtitleList } from "../components/SubtitleList";
 import { AutoScrollIcon } from "../components/AutoScrollIcon";
 import { KeyPhraseList } from "../components/KeyPhraseList";
 import { ProgressBanner } from "../components/ProgressBanner";
+import { TinyModelHint } from "../components/TinyModelHint";
 import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
 import { getProvider } from "../llm/providers";
@@ -935,6 +936,8 @@ export function Player() {
         onRetranscribe={onRetranscribe}
         onMoveToBackground={onMoveToBackground}
       />
+
+      <TinyModelHint hasSubtitles={analysis.subtitles.length > 0} />
 
       {videoId && (
         <div className="px-4 pt-2">

@@ -216,10 +216,18 @@ export function Settings() {
             // cards which ate ~200 lines of vertical space when the user
             // mostly just wants to swap which model's active.
             //
-            // Lock the dropdown while a download is in flight — switching
-            // the draft mid-download would hide the in-progress tier from
-            // its own progress bar (we render the bar based on the active
-            // draft tier matching `downloading`).
+            // The dropdown is deliberately NOT locked during a download.
+            // It used to be, so the in-flight tier couldn't be switched away
+            // from its own progress bar — but that stranded the user: the
+            // lock is global ("some download is running") while the progress
+            // bar was keyed to the SELECTED tier, so any time the two
+            // diverged (download started without saving, save failed, or the
+            // page remounted after 返回 and re-read `draft` from disk) you
+            // got a dead dropdown with no progress bar and no way back —
+            // re-selecting the downloading tier was exactly what the lock
+            // forbade. The bar now follows the tier that's actually
+            // transferring (see `activeTier` below), so switching selection
+            // can't hide it and the lock is unnecessary.
             const current = MODEL_TIERS.find((t) => t.size === draft.whisperModel);
             if (!current) return null;
             const isCurrentDownloaded = modelDownloaded[current.size];
@@ -227,6 +235,11 @@ export function Settings() {
             const isPausedHere = downloadPaused === current.size;
             const currentPartial = modelPartialPct[current.size] ?? 0;
             const downloadInFlight = downloading !== null;
+            // The tier actually transferring / paused, whatever is selected.
+            const activeSize = downloading ?? downloadPaused;
+            const activeTier = activeSize
+              ? MODEL_TIERS.find((t) => t.size === activeSize)
+              : undefined;
 
             // Compact suffix shown next to each option in the dropdown so
             // the user can see download status without first selecting.
@@ -242,7 +255,6 @@ export function Settings() {
                 <div className="flex items-center gap-2">
                   <select
                     value={draft.whisperModel}
-                    disabled={downloadInFlight}
                     onChange={(e) =>
                       setDraft({
                         ...draft,
@@ -284,6 +296,11 @@ export function Settings() {
                     <button
                       onClick={() => downloadModel(current.size)}
                       disabled={downloadInFlight}
+                      title={
+                        downloadInFlight && activeTier
+                          ? `正在下载「${activeTier.name}」，完成后才能开始下一个`
+                          : undefined
+                      }
                       className="text-[11px] px-3 py-2 bg-blue-500 hover:bg-blue-400 text-black rounded inline-flex items-center gap-1 shrink-0 disabled:opacity-50"
                     >
                       <Download className="h-3 w-3" />
@@ -292,15 +309,18 @@ export function Settings() {
                   )}
                 </div>
 
-                {/* Progress bar — only when the active tier is the one
-                    actually being transferred or paused. */}
-                {(isCurrentDownload || isPausedHere) && (
+                {/* Progress bar — follows the tier actually being transferred
+                    or paused, NOT the selected one, so changing the dropdown
+                    mid-download can never hide an in-flight download. The tier
+                    name is spelled out because it may differ from the
+                    selection. */}
+                {activeTier && (
                   <div className="mt-2">
                     <div className="h-1.5 bg-zinc-800 rounded overflow-hidden">
                       <div
                         className={
                           "h-full transition-all duration-200 " +
-                          (isPausedHere ? "bg-amber-500" : "bg-blue-500")
+                          (downloadPaused ? "bg-amber-500" : "bg-blue-500")
                         }
                         style={{ width: `${downloadPct}%` }}
                       />
@@ -308,10 +328,13 @@ export function Settings() {
                     <p
                       className={
                         "text-[11px] mt-1 " +
-                        (isPausedHere ? "text-amber-400" : "text-zinc-400")
+                        (downloadPaused ? "text-amber-400" : "text-zinc-400")
                       }
                     >
-                      {isPausedHere ? `已暂停（${downloadPct}%）` : `下载中 ${downloadPct}%`}
+                      「{activeTier.name}」
+                      {downloadPaused
+                        ? `已暂停（${downloadPct}%）`
+                        : `下载中 ${downloadPct}%`}
                     </p>
                   </div>
                 )}

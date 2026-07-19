@@ -173,13 +173,27 @@ pub async fn youtube_search(
     let child = cmd
         .spawn()
         .map_err(|e| AppError::Subprocess(format!("yt-dlp spawn failed: {}", e)))?;
-    let output = match timeout(
-        Duration::from_secs(SEARCH_TIMEOUT_SECS),
+    // Race the search against a reachability probe. yt-dlp gives no early
+    // signal when YouTube is simply unreachable — it just hangs until
+    // SEARCH_TIMEOUT_SECS. That cost a proxy-off user 45s per attempt, and
+    // because the AI agent feeds tool errors back to the LLM, it would retry
+    // with a reworded query and hang again, so the user waited minutes before
+    // hearing anything — and then only "网络有问题", never "你没开梯子".
+    //
+    // Racing (rather than pre-checking) keeps the happy path at zero added
+    // latency: when YouTube IS reachable the probe arm parks on pending() and
+    // the search finishes exactly as before. Only an unreachable network wins
+    // the race, and it does so in ~8s with an actionable message. Dropping the
+    // wait future here kills yt-dlp via kill_on_drop.
+    let search = crate::core::net::race_with_reachability(
         child.wait_with_output(),
-    )
-    .await
-    {
-        Ok(res) => res.map_err(|e| AppError::Subprocess(format!("yt-dlp wait failed: {}", e)))?,
+        crate::core::net::youtube_reachable(),
+    );
+    let output = match timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS), search).await {
+        Ok(Ok(res)) => res.map_err(|e| AppError::Subprocess(format!("yt-dlp wait failed: {}", e)))?,
+        Ok(Err(())) => {
+            return Err(AppError::Subprocess(crate::core::net::unreachable_message()));
+        }
         Err(_) => {
             return Err(AppError::Subprocess(format!(
                 "YouTube 搜索超时（{} 秒未返回）。常见原因：当前网络无法访问 YouTube（需要科学上网），或 yt-dlp 需要在「设置 → 更新 yt-dlp」里更新。",

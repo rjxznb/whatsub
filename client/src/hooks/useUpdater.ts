@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { exit } from "@tauri-apps/plugin-process";
 import { Command } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 
 // Tauri's updater behaves differently per platform after install completes:
@@ -36,7 +37,59 @@ export type UpdateStatus =
   | { type: "none" }
   | { type: "downloading"; percent: number }
   | { type: "installing" }
-  | { type: "error"; message: string };
+  /** `stage` distinguishes a failed manifest check from a failed
+   *  download/install — the UI used to label BOTH "检查失败", which sent users
+   *  hunting for a network problem when the check had actually succeeded and
+   *  it was the install that blew up. */
+  | { type: "error"; message: string; stage?: "check" | "install" };
+
+/** Reported by the Rust `update_location` command. */
+interface UpdateLocationInfo {
+  path: string;
+  updatable: boolean;
+  reason?: string | null;
+}
+
+/** macOS can't replace the .app bundle when it lives on a read-only mount.
+ *  Nothing in-app can fix it — the user has to move the bundle — so the copy
+ *  says exactly that instead of surfacing `os error 30`. */
+const READ_ONLY_HELP =
+  "无法自动更新：whatsub 正在从只读位置运行。请退出应用，把 whatsub 拖到「应用程序」文件夹，" +
+  "从那里重新打开后再更新。";
+
+const REASON_HELP: Record<string, string> = {
+  dmg:
+    "无法自动更新：whatsub 正在从磁盘映像(.dmg)里直接运行，磁盘映像是只读的。" +
+    "请把 whatsub 拖到「应用程序」文件夹，弹出磁盘映像，从「应用程序」里打开后再更新。",
+  translocated:
+    "无法自动更新：macOS 的安全隔离(App Translocation)正在只读副本中运行 whatsub。" +
+    "请退出应用，把 whatsub 拖到「应用程序」文件夹，从那里重新打开后再更新。",
+  unwritable: READ_ONLY_HELP,
+};
+
+/** True when an install error is the read-only-filesystem failure. Matches the
+ *  errno text Tauri surfaces (`os error 30` = EROFS) as well as the plain
+ *  English phrasing, so a message-format change upstream can't silently turn
+ *  this back into an opaque error. */
+export function isReadOnlyFsError(msg: string): boolean {
+  return /os error 30\b/i.test(msg) || /read-only file system/i.test(msg);
+}
+
+/** Actionable copy for a blocked update location, or null when it's fine. */
+export function blockedMessage(info: UpdateLocationInfo | null): string | null {
+  if (!info || info.updatable) return null;
+  return REASON_HELP[info.reason ?? ""] ?? READ_ONLY_HELP;
+}
+
+async function readUpdateLocation(): Promise<UpdateLocationInfo | null> {
+  try {
+    return await invoke<UpdateLocationInfo>("update_location");
+  } catch {
+    // Older binary / command unavailable — fail open and let the install
+    // attempt surface its own error.
+    return null;
+  }
+}
 
 /**
  * Module-level zustand store + singleton download promise. We deliberately
@@ -82,7 +135,7 @@ async function runCheckNow(): Promise<void> {
     const update = await check();
     set(update ? { type: "available", update } : { type: "none" });
   } catch (e) {
-    set({ type: "error", message: String(e) });
+    set({ type: "error", message: String(e), stage: "check" });
   }
 }
 
@@ -100,6 +153,17 @@ async function runDownloadAndInstall(): Promise<void> {
 
   runningDownload = (async () => {
     try {
+      // Pre-flight the install location BEFORE downloading. macOS replaces the
+      // .app bundle in place, so a read-only mount (running from the .dmg, or
+      // Gatekeeper's App Translocation) makes the install impossible — and it
+      // only failed AFTER streaming ~270 MB, then showed a bare
+      // "Read-only file system (os error 30)". Check first, say what to do,
+      // and don't waste the download.
+      const blocked = blockedMessage(await readUpdateLocation());
+      if (blocked) {
+        set({ type: "error", message: blocked, stage: "install" });
+        return;
+      }
       // Re-read latest because the "available" Update object we
       // stashed earlier may be stale by now. Cheap manifest re-fetch.
       const update = await check();
@@ -141,11 +205,20 @@ async function runDownloadAndInstall(): Promise<void> {
           set({
             type: "error",
             message: `更新已下载，但自动重启失败：${e}。请手动退出应用并重新打开，新版本下次启动时生效。`,
+            stage: "install",
           });
         }
       }
     } catch (e) {
-      set({ type: "error", message: String(e) });
+      // A read-only bundle can also fail here (e.g. the pre-flight passed but
+      // /Applications itself isn't writable). Translate the errno into the
+      // same actionable copy rather than leaking "os error 30".
+      const raw = String(e);
+      set({
+        type: "error",
+        message: isReadOnlyFsError(raw) ? READ_ONLY_HELP : raw,
+        stage: "install",
+      });
     } finally {
       runningDownload = null;
     }

@@ -18,3 +18,4 @@ pub mod youtube_search;
 pub mod import_queue_http;
 pub mod voice;
 pub mod edge_tts;
+pub mod update_location;

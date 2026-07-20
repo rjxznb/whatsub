@@ -1226,8 +1226,16 @@ function UpdateSection() {
           <span className="text-sm text-green-400">✓ 已是最新版本</span>
         )}
         {status.type === "error" && (
-          <span className="text-xs text-red-400" title={status.message}>
-            ✗ 检查失败
+          // The message carries the actionable part (e.g. "把 whatsub 拖到
+          // 「应用程序」文件夹"), so it must be readable without hovering —
+          // it used to be tooltip-only behind a flat "✗ 检查失败", which also
+          // mislabelled install failures as check failures.
+          <span
+            className="text-xs text-red-400 max-w-[28rem] leading-relaxed"
+            title={status.message}
+          >
+            ✗ {status.stage === "install" ? "更新失败" : "检查失败"}
+            <span className="text-red-300/90">：{status.message}</span>
           </span>
         )}
         {status.type === "downloading" && (

@@ -7,8 +7,24 @@ const SAMPLE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 // ── Mocks for the tauri / store surface ImportModal touches on mount ─────────
 vi.mock("react-router-dom", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+
+// Capture the pipeline-event handler so tests can drive real events.
+let pipelineHandler: ((e: { payload: unknown }) => void) | null = null;
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+  listen: vi.fn(async (_name: string, cb: (e: { payload: unknown }) => void) => {
+    pipelineHandler = cb;
+    return () => {};
+  }),
+}));
+// Controllable invoke: `import_video` never settles, so the modal stays on the
+// progress view — the state the ✕-cancel tests exercise.
+const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
+  if (cmd === "import_video") return new Promise(() => {});
+  return Promise.resolve(null);
+});
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (p: string) => p,
+  invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args),
 }));
 vi.mock("../store/appDialog", () => ({ notify: vi.fn() }));
 vi.mock("../lib/cookieStatus", () => ({
@@ -77,6 +93,67 @@ describe("ImportModal — onboarding sample-URL affordance", () => {
     render(<ImportModal onClose={() => {}} showSampleLink />);
     fireEvent.keyDown(urlInput(), { key: "Tab" });
     expect(document.querySelector('[data-tour="sample-link"]')).toBeNull();
+  });
+});
+
+// Clicking ✕ must actually kill the download. Rust registers the cancel token
+// BEFORE emitting Started specifically so a fast ✕ lands — but the frontend can
+// only cancel if it knows the video_id, and it used to learn that from the
+// `Started` event ALONE. `Started` is routinely missed: submit() reaches
+// invoke("import_video") synchronously while listen() is still registering, so
+// the id stayed null, cancelInFlight() early-returned, and yt-dlp kept running.
+describe("ImportModal — ✕ cancels the in-flight import", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  async function startImport() {
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+    await flush(); // let the listener register + progress view mount
+    return r;
+  }
+
+  beforeEach(() => {
+    invokeMock.mockClear();
+    pipelineHandler = null;
+  });
+
+  it("cancels using an id learned from a later event when Started was missed", async () => {
+    const r = await startImport();
+    // Started never arrives (lost to the listen()/invoke race); progress does.
+    pipelineHandler?.({
+      payload: { stage: "Downloading", video_id: "vid123", percent: 42 },
+    });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await flush();
+
+    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vid123" });
+  });
+
+  it("still cancels when Started did arrive", async () => {
+    const r = await startImport();
+    pipelineHandler?.({ payload: { stage: "Started", video_id: "vid999" } });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await flush();
+
+    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vid999" });
+  });
+
+  it("learns the id even from a Log line (the earliest event yt-dlp emits)", async () => {
+    const r = await startImport();
+    pipelineHandler?.({
+      payload: { stage: "Log", video_id: "vidLog", source: "yt-dlp", line: "[youtube] ..." },
+    });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await flush();
+
+    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLog" });
   });
 });
 

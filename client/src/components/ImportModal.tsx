@@ -349,12 +349,24 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     let cancelled = false;
     listen<PipelineEventPayload>("pipeline-event", (e) => {
       const ev = e.payload;
+      // Learn the video_id from EVERY event that carries one, not just
+      // `Started`. ✕ / Esc can only cancel an import whose id we know, and
+      // `Started` is routinely missed: submit() reaches invoke("import_video")
+      // synchronously while this listen() is still registering, so the very
+      // first event can land before the handler exists. When that happened the
+      // id stayed null, cancelInFlight() early-returned, and yt-dlp kept
+      // downloading in the background after the user closed the dialog — the
+      // exact opposite of what ✕ promises. Every later stage (Log / Preparing /
+      // Downloading / …) carries the same id, so picking it up here makes
+      // cancellation robust no matter which event arrives first.
+      if ("video_id" in ev && ev.video_id) {
+        currentVideoIdRef.current = ev.video_id;
+      }
       switch (ev.stage) {
         case "Started":
           setPhase("started");
           setPercent(0);
           setPreparingStep(null);
-          currentVideoIdRef.current = ev.video_id;
           break;
         case "Preparing":
           setPreparingStep(ev.step);

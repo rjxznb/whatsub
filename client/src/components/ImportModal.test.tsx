@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, waitFor } from "@testing-library/react";
 import { ImportModal } from "./ImportModal";
 
 const SAMPLE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
@@ -10,9 +10,11 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 // Capture the pipeline-event handler so tests can drive real events.
 let pipelineHandler: ((e: { payload: unknown }) => void) | null = null;
+const eventHandlers = new Map<string, (e: { payload: unknown }) => void>();
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (_name: string, cb: (e: { payload: unknown }) => void) => {
-    pipelineHandler = cb;
+  listen: vi.fn(async (name: string, cb: (e: { payload: unknown }) => void) => {
+    eventHandlers.set(name, cb);
+    if (name === "pipeline-event") pipelineHandler = cb;
     return () => {};
   }),
 }));
@@ -116,6 +118,7 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
   beforeEach(() => {
     invokeMock.mockClear();
     pipelineHandler = null;
+    eventHandlers.clear();
   });
 
   it("cancels using an id learned from a later event when Started was missed", async () => {
@@ -154,6 +157,81 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
     await flush();
 
     expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLog" });
+  });
+});
+
+describe("ImportModal — diagnosed download failures", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  async function startImport() {
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+    await flush();
+    return r;
+  }
+
+  beforeEach(() => {
+    invokeMock.mockClear();
+    pipelineHandler = null;
+    eventHandlers.clear();
+  });
+
+  it("opens the YouTube login flow immediately for a bot-check error", async () => {
+    const r = await startImport();
+    pipelineHandler?.({
+      payload: {
+        stage: "Failed",
+        video_id: "auth-video",
+        error: "ERROR: [youtube] Sign in to confirm you’re not a bot. Use --cookies.",
+      },
+    });
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("site_login_start", {
+        args: {
+          key: "youtube",
+          label: "YouTube",
+          loginUrl: "https://www.youtube.com/",
+          harvestDomains: ["youtube.com", "google.com", "googleusercontent.com"],
+        },
+      });
+    });
+    expect(r.getByText("等待 YouTube 登录完成")).toBeInTheDocument();
+  });
+
+  it("automatically retries once after fresh cookies are saved", async () => {
+    await startImport();
+    pipelineHandler?.({
+      payload: {
+        stage: "Failed",
+        video_id: "auth-video",
+        error: "The provided account cookies are no longer valid. Please refresh your cookies.",
+      },
+    });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("site_login_start", expect.anything()));
+
+    eventHandlers.get("site-login-success")?.({ payload: {} });
+
+    await waitFor(() => {
+      expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(2);
+    });
+  });
+
+  it("shows a focused network diagnosis without opening login", async () => {
+    const r = await startImport();
+    pipelineHandler?.({
+      payload: {
+        stage: "Failed",
+        video_id: "network-video",
+        error: "yt-dlp exit 1: Unable to download webpage: connection timed out",
+      },
+    });
+
+    await waitFor(() => expect(r.getByText("无法访问视频网站")).toBeInTheDocument());
+    expect(r.queryByText("下载失败 — 排查清单")).toBeNull();
+    expect(r.getByRole("button", { name: "放到后台重试" })).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "site_login_start")).toBe(false);
   });
 });
 

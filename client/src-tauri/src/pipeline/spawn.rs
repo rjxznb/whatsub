@@ -7,7 +7,7 @@ use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
-/// Shared progress counter for the stall watchdog. The caller's stderr callback
+/// Shared progress counter for the stall watchdog. The caller's output callback
 /// bumps it once per progress line (yt-dlp download % / whisper transcribe %);
 /// the spawn loop kills the child if it stops advancing. `None` = watchdog
 /// disabled (the default for ffmpeg + other sidecars).
@@ -41,20 +41,35 @@ pub async fn run_sidecar<F>(
 where
     F: FnMut(&str),
 {
-    run_sidecar_env(app, bin_name, args, &[], None, on_stderr_line, cancel).await
+    run_sidecar_env(
+        app,
+        bin_name,
+        args,
+        &[],
+        None,
+        false,
+        on_stderr_line,
+        cancel,
+    )
+    .await
 }
 
 /// Like [`run_sidecar`] but injects extra environment variables into the child
-/// process. Used by whisper.rs to pin the Vulkan device via
-/// `GGML_VK_VISIBLE_DEVICES`. Kept as a separate entry point so the ~9 other
-/// sidecar callers don't all have to pass an empty env slice.
+/// process. `stream_stdout` additionally sends stdout chunks to the same callback
+/// while still retaining them in the returned string. Used by yt-dlp because its
+/// normal extraction/progress messages are stdout, while warnings/errors are
+/// stderr. Whisper keeps this disabled because its callback contract is stderr.
+/// The extra environment is used by whisper.rs to pin the Vulkan device via
+/// `GGML_VK_VISIBLE_DEVICES` without forcing other sidecar callers to pass an
+/// environment slice.
 pub async fn run_sidecar_env<F>(
     app: &AppHandle,
     bin_name: &str,
     args: &[&str],
     extra_env: &[(&str, &str)],
     stall: Option<StallCounter>,
-    mut on_stderr_line: F,
+    stream_stdout: bool,
+    mut on_output: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
@@ -143,7 +158,15 @@ where
             ev = rx.recv() => {
                 match ev {
                     Some(event) => {
-                        if handle_event(event, &mut stdout, &mut stderr_tail, TAIL_LINES, &mut on_stderr_line, &mut exit_code) {
+                        if handle_event(
+                            event,
+                            &mut stdout,
+                            &mut stderr_tail,
+                            TAIL_LINES,
+                            stream_stdout,
+                            &mut on_output,
+                            &mut exit_code,
+                        ) {
                             break;
                         }
                     }
@@ -209,17 +232,22 @@ fn handle_event<F: FnMut(&str)>(
     stdout: &mut String,
     stderr_tail: &mut std::collections::VecDeque<String>,
     tail_lines: usize,
-    on_stderr_line: &mut F,
+    stream_stdout: bool,
+    on_output: &mut F,
     exit_code: &mut Option<i32>,
 ) -> bool {
     match event {
         CommandEvent::Stdout(bytes) => {
-            stdout.push_str(&String::from_utf8_lossy(&bytes));
+            let chunk = String::from_utf8_lossy(&bytes).to_string();
+            stdout.push_str(&chunk);
+            if stream_stdout {
+                on_output(&chunk);
+            }
             false
         }
         CommandEvent::Stderr(bytes) => {
             let chunk = String::from_utf8_lossy(&bytes).to_string();
-            on_stderr_line(&chunk);
+            on_output(&chunk);
             for line in chunk.lines() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -245,15 +273,16 @@ fn handle_event<F: FnMut(&str)>(
 /// the user has updated it via Settings → 更新 yt-dlp (lives in AppData,
 /// not in the sidecar allowlist).
 ///
-/// Captures stdout into the returned String, streams stderr chunks to
-/// `on_stderr_line`, honours a `CancellationToken` (kills the child on
-/// fire), and returns the last 20 lines of stderr in the error message
-/// on non-zero exit.
+/// Captures stdout into the returned String, streams stderr chunks (and,
+/// optionally, stdout chunks) to `on_output`, honours a `CancellationToken`
+/// (kills the child on fire), and returns the last 20 lines of stderr in the
+/// error message on non-zero exit.
 pub async fn run_external_with_callback<F>(
     exe: &Path,
     args: &[&str],
     stall: Option<StallCounter>,
-    mut on_stderr_line: F,
+    stream_stdout: bool,
+    mut on_output: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
@@ -334,7 +363,13 @@ where
             r = stdout.read(&mut buf_out), if !stdout_done => {
                 match r {
                     Ok(0) => stdout_done = true,
-                    Ok(n) => stdout_buf.extend_from_slice(&buf_out[..n]),
+                    Ok(n) => {
+                        stdout_buf.extend_from_slice(&buf_out[..n]);
+                        if stream_stdout {
+                            let chunk = String::from_utf8_lossy(&buf_out[..n]).to_string();
+                            on_output(&chunk);
+                        }
+                    },
                     Err(_) => stdout_done = true,
                 }
             }
@@ -343,7 +378,7 @@ where
                     Ok(0) => stderr_done = true,
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf_err[..n]).to_string();
-                        on_stderr_line(&chunk);
+                        on_output(&chunk);
                         for line in chunk.lines() {
                             let t = line.trim();
                             if t.is_empty() { continue; }
@@ -388,5 +423,54 @@ where
         None => Err(AppError::Subprocess(
             "child terminated abnormally (no exit code)".into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stdout_is_retained_and_streamed_when_enabled() {
+        let mut stdout = String::new();
+        let mut stderr_tail = std::collections::VecDeque::new();
+        let mut streamed = Vec::<String>::new();
+        let mut exit_code = None;
+
+        let terminated = handle_event(
+            CommandEvent::Stdout(b"[youtube] Downloading webpage\n".to_vec()),
+            &mut stdout,
+            &mut stderr_tail,
+            20,
+            true,
+            &mut |chunk| streamed.push(chunk.to_string()),
+            &mut exit_code,
+        );
+
+        assert!(!terminated);
+        assert_eq!(stdout, "[youtube] Downloading webpage\n");
+        assert_eq!(streamed, vec!["[youtube] Downloading webpage\n"]);
+        assert!(stderr_tail.is_empty());
+    }
+
+    #[test]
+    fn stdout_is_only_retained_when_streaming_is_disabled() {
+        let mut stdout = String::new();
+        let mut stderr_tail = std::collections::VecDeque::new();
+        let mut streamed = Vec::<String>::new();
+        let mut exit_code = None;
+
+        handle_event(
+            CommandEvent::Stdout(b"probe result\n".to_vec()),
+            &mut stdout,
+            &mut stderr_tail,
+            20,
+            false,
+            &mut |chunk| streamed.push(chunk.to_string()),
+            &mut exit_code,
+        );
+
+        assert_eq!(stdout, "probe result\n");
+        assert!(streamed.is_empty());
     }
 }

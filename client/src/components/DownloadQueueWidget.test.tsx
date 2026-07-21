@@ -31,6 +31,7 @@ describe("FailedActions", () => {
       />,
     );
     expect(screen.getByRole("button", { name: /立即登录/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).toBeNull();
   });
 
   it("shows no login button for a plain non-login failure", () => {
@@ -42,5 +43,6 @@ describe("FailedActions", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: /立即登录/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
   });
 });

@@ -35,6 +35,14 @@ export interface FriendlyError {
    *  (video private / banned / cookies expired / age-gated) where a
    *  retry would just hit the same wall. */
   retryable?: boolean;
+  /** The stderr pattern proves that authentication/cookies are the blocker.
+   *  Foreground imports may immediately open the matching site-login flow and
+   *  retry once after fresh cookies are saved. This is deliberately stricter
+   *  than merely attaching an optional login action based on the source URL. */
+  loginRequired?: boolean;
+  /** No reliable diagnosis was possible. The UI may fall back to the broader
+   *  troubleshooting checklist instead of pretending one cause is certain. */
+  generic?: boolean;
 }
 
 export interface SiteLoginAction {
@@ -138,7 +146,7 @@ export function friendlyError(
       return {
         ...fe,
         action: loginAction(site.siteKey),
-        actionTier: site.tier,
+        actionTier: fe.loginRequired ? "primary" : site.tier,
       };
     }
   }
@@ -217,16 +225,36 @@ function classifyError(
     | string,
 ): FriendlyError {
   const txt = raw.toLowerCase();
+  // yt-dlp has used both ASCII and typographic apostrophes in the same
+  // YouTube bot-check sentence across releases/locales.
+  const normalized = txt.replace(/[’‘]/g, "'");
 
   // ── YouTube / yt-dlp specific ──────────────────────────────────────
 
-  if (txt.includes("sign in to confirm you're not a bot")) {
+  if (normalized.includes("sign in to confirm you're not a bot")) {
     return {
       title: "YouTube 要求登录验证",
       suggestion:
         "YouTube 在你这个 IP 触发了反机器人检测，需要登录一次。点下面的按钮直接走 whatsub 的快速登录流程 —— cookies 抓完之后回来再试。",
       details: raw,
       action: loginAction("youtube"),
+      loginRequired: true,
+    };
+  }
+
+  if (
+    normalized.includes("cookies are no longer valid") ||
+    normalized.includes("account cookies are no longer valid") ||
+    normalized.includes("cookies have been invalidated") ||
+    normalized.includes("cookie file has expired") ||
+    normalized.includes("please refresh your cookies") ||
+    (normalized.includes("login required") && normalized.includes("cookies"))
+  ) {
+    return {
+      title: "网站登录已失效",
+      suggestion: "保存的 cookies 已经过期或被网站轮换，需要重新登录后再下载。",
+      details: raw,
+      loginRequired: true,
     };
   }
 
@@ -252,6 +280,7 @@ function classifyError(
         "Instagram 不允许匿名访问大多数视频。点下面的按钮一键登录，cookies 抓完之后回来再试。",
       details: raw,
       action: loginAction("instagram"),
+      loginRequired: true,
     };
   }
 
@@ -270,6 +299,7 @@ function classifyError(
         "可能是大会员 / 充电专属 / 仅登录可见。点下面的按钮一键登录 B 站，cookies 抓完之后回来再试。",
       details: raw,
       action: loginAction("bilibili"),
+      loginRequired: true,
     };
   }
 
@@ -287,6 +317,7 @@ function classifyError(
         "可能是限制级 / 私密推文 / 仅关注者可见。点下面的按钮一键登录 X，cookies 抓完之后回来再试。",
       details: raw,
       action: loginAction("x"),
+      loginRequired: true,
     };
   }
 
@@ -328,8 +359,9 @@ function classifyError(
   if (txt.includes("sign in to confirm your age")) {
     return {
       title: "视频有 18+ 年龄限制",
-      suggestion: "需要用一个已确认成年的账号的 cookies 才能下载。",
+      suggestion: "需要重新登录一个已确认成年的账号，保存 cookies 后再下载。",
       details: raw,
+      loginRequired: true,
     };
   }
 
@@ -456,6 +488,7 @@ function classifyError(
       suggestion:
         "看下方「详细日志」找具体原因，或点 URL 输入框旁的「?」查看常见原因表。",
       details: raw,
+      generic: true,
     };
   }
 
@@ -481,6 +514,7 @@ function classifyError(
     title: phase ? `${phaseLabel(phase)}失败` : "处理失败",
     suggestion: "看下方「详细日志」找原因，或重启应用重试。",
     details: raw,
+    generic: true,
   };
 }
 

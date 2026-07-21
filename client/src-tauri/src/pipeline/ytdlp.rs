@@ -506,6 +506,7 @@ pub async fn download(
                 &appdata_path,
                 &arg_refs,
                 Some(progress_count.clone()),
+                true,
                 callback,
                 cancel,
             )
@@ -517,6 +518,7 @@ pub async fn download(
                 &arg_refs,
                 &[],
                 Some(progress_count.clone()),
+                true,
                 callback,
                 cancel,
             )

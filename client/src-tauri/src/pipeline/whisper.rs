@@ -545,6 +545,7 @@ async fn run_whisper_once(
         &whisper_args,
         env,
         Some(progress_count.clone()),
+        false,
         move |chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
             // multiple lines. emit_log / detect_backend already split
@@ -587,8 +588,10 @@ async fn run_whisper_once(
         cancel,
     )
     .await?;
-    // If whisper-cli ran without ever printing a Vulkan device line, it fell
-    // back to CPU. Surface that explicitly so the UI doesn't say "未检测".
+    // If whisper-cli ran without ever printing a recognized accelerator line,
+    // it fell back to CPU. Surface that explicitly so the UI doesn't say
+    // "未检测". Keep detect_backend_line in sync with upstream log formats:
+    // Metal's v1.8.x output no longer uses the Vulkan-style `0 = ...` line.
     if !backend_emitted.load(std::sync::atomic::Ordering::Relaxed) {
         emit(app, PipelineEvent::BackendDetected { name: "CPU".into() });
     }
@@ -633,13 +636,48 @@ fn parse_progress(line: &str) -> Option<u8> {
     None
 }
 
-/// Parse the first whisper.cpp device line, e.g.
+/// Parse a whisper.cpp accelerator line, e.g.
 ///   `ggml_vulkan: 0 = NVIDIA GeForce RTX 4090 (NVIDIA) | uma: 0 | ...`
 /// into `"Vulkan / NVIDIA GeForce RTX 4090"`.
-/// CUDA / CoreML / Metal builds emit similar `ggml_<backend>: ...` patterns;
-/// we generalize by recognizing any `ggml_<word>: 0 = <name>` form.
+///
+/// Metal changed its startup messages in whisper.cpp v1.8.x to lines such as
+/// `ggml_metal_device_init: GPU name: MTL0` and
+/// `whisper_backend_init_gpu: using Metal backend`. Recognize those explicitly
+/// instead of incorrectly reporting CPU after a successful Metal run.
 fn detect_backend_line(line: &str) -> Option<String> {
     let trimmed = line.trim();
+
+    for prefix in [
+        "ggml_metal_device_init: GPU name:",
+        "ggml_metal_init: GPU name:",
+        "ggml_metal_init: found device:",
+        "ggml_metal_init: picking default device:",
+    ] {
+        if let Some(raw_model) = trimmed.strip_prefix(prefix) {
+            let model = raw_model.trim();
+            if model.is_empty() {
+                return None;
+            }
+            // Recent ggml versions use the internal device id "MTL0" here;
+            // don't expose that implementation detail as if it were a model.
+            return Some(if is_metal_device_id(model) {
+                "Metal".to_string()
+            } else {
+                format!("Metal / {model}")
+            });
+        }
+    }
+
+    if matches!(
+        trimmed,
+        "whisper_backend_init_gpu: using Metal backend"
+            | "whisper_backend_init: using Metal backend"
+    ) || (trimmed.starts_with("whisper_model_load:")
+        && trimmed.contains("Metal total size"))
+    {
+        return Some("Metal".to_string());
+    }
+
     // Expect "ggml_<backend>:" prefix
     let rest = trimmed.strip_prefix("ggml_")?;
     let (backend, after) = rest.split_once(':')?;
@@ -663,6 +701,14 @@ fn detect_backend_line(line: &str) -> Option<String> {
         other => return Some(format!("{other} / {model}")),
     };
     Some(format!("{backend_label} / {model}"))
+}
+
+fn is_metal_device_id(value: &str) -> bool {
+    value
+        .strip_prefix("MTL")
+        .is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// Parse a whisper-cli Vulkan device-list line, e.g.
@@ -796,10 +842,46 @@ mod tests {
     }
 
     #[test]
+    fn parses_modern_metal_device_line() {
+        assert_eq!(
+            detect_backend_line("ggml_metal_device_init: GPU name: MTL0"),
+            Some("Metal".to_string())
+        );
+        assert_eq!(
+            detect_backend_line("ggml_metal_device_init: GPU name: Apple M4 Pro"),
+            Some("Metal / Apple M4 Pro".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_metal_backend_activation_lines() {
+        assert_eq!(
+            detect_backend_line("whisper_backend_init_gpu: using Metal backend"),
+            Some("Metal".to_string())
+        );
+        assert_eq!(
+            detect_backend_line("whisper_model_load:    Metal total size =   148.55 MB"),
+            Some("Metal".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_legacy_metal_device_line() {
+        assert_eq!(
+            detect_backend_line("ggml_metal_init: found device: Apple M2 Pro"),
+            Some("Metal / Apple M2 Pro".to_string())
+        );
+    }
+
+    #[test]
     fn skips_non_device_lines() {
         assert_eq!(detect_backend_line("ggml_vulkan: Found 2 Vulkan devices:"), None);
         assert_eq!(detect_backend_line("whisper_init_state: ..."), None);
         assert_eq!(detect_backend_line("ggml_vulkan: 1 = AMD Radeon"), None);
+        assert_eq!(
+            detect_backend_line("whisper_backend_init: using BLAS backend"),
+            None
+        );
     }
 
     #[test]

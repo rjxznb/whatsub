@@ -194,32 +194,16 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   }
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Error checklist dialog. Replaces the old "show raw stderr" pattern —
-  // when an import fails we don't want to surface yt-dlp's cryptic
-  // output at all; instead we auto-open a friendly help-style dialog
-  // listing common causes (no VPN / missing cookies / bad URL / etc.)
-  // with site-specific action buttons. Raw stderr stays available
-  // but tucked behind a collapsible "技术详情" expander inside the
-  // checklist so the cosmetic noise doesn't dominate the screen.
+  const [phase, setPhase] = useState<Phase>("idle");
+  // Diagnosed-error dialog. Deterministic failures get one focused action
+  // (login, retry, or background retry); only genuinely unknown failures fall
+  // back to the broader checklist. Raw stderr remains available underneath.
   const [showErrorDialog, setShowErrorDialog] = useState(false);
   // Track the last error we auto-opened the dialog for so the dialog
   // doesn't re-pop every render — only when a NEW error appears. If
   // the user closes the dialog and the error hasn't changed, we
   // respect their dismiss.
   const lastShownErrorRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (error && error !== lastShownErrorRef.current) {
-      lastShownErrorRef.current = error;
-      setShowErrorDialog(true);
-      // Always log raw error to console so developers / power users
-      // can still pull the stderr via Ctrl+Shift+I in any build. The
-      // checklist dialog itself stays clean: no walls of yt-dlp
-      // output for non-technical users to navigate.
-      console.error("[whatsub import error]", error);
-    } else if (!error) {
-      lastShownErrorRef.current = null;
-    }
-  }, [error]);
 
   // ── In-modal site-login state ──────────────────────────────────────
   //
@@ -237,6 +221,67 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   } | null>(null);
   const [savingLogin, setSavingLogin] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  // One automatic login launch per source/site during this modal session.
+  // If fresh cookies still cannot download the video, do not trap the user in
+  // an endless browser → retry → browser loop; show the focused diagnosis and
+  // leave the next login attempt explicit.
+  const autoLoginAttemptedRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    autoLoginAttemptedRef.current.clear();
+  }, [urlValue]);
+
+  async function beginSiteLogin(action: SiteLoginAction) {
+    setLoginError(null);
+    try {
+      await invoke("site_login_start", {
+        args: {
+          key: action.siteKey,
+          label: action.siteLabel,
+          loginUrl: action.loginUrl,
+          harvestDomains: action.harvestDomains,
+        },
+      });
+      setShowErrorDialog(false);
+      setPendingLogin({ key: action.siteKey, label: action.siteLabel });
+    } catch (e) {
+      // Automatic launch failed: fall back to the focused error dialog so the
+      // user still has context and can explicitly retry opening the browser.
+      setShowErrorDialog(true);
+      void notify(`登录窗口启动失败：${e}`);
+    }
+  }
+
+  useEffect(() => {
+    if (!error) {
+      lastShownErrorRef.current = null;
+      return;
+    }
+    if (error === lastShownErrorRef.current) return;
+
+    lastShownErrorRef.current = error;
+    console.error("[whatsub import error]", error);
+
+    const fe = friendlyError(
+      error,
+      tab === "url" ? "downloading" : phase,
+      tab === "url" ? urlValue : undefined,
+    );
+    if (tab === "url" && fe.loginRequired && fe.action) {
+      const key = `${urlValue.trim()}\u0000${fe.action.siteKey}`;
+      if (!autoLoginAttemptedRef.current.has(key)) {
+        autoLoginAttemptedRef.current.add(key);
+        setShowErrorDialog(false);
+        void beginSiteLogin(fe.action);
+        return;
+      }
+    }
+
+    setShowErrorDialog(true);
+    // beginSiteLogin intentionally omitted: this effect is driven only by a
+    // newly-arrived raw error, not by function identity on each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [error, phase, tab, urlValue]);
 
   // submit() is defined further down + captures form state via closure;
   // we ref it so the site-login-success listener (mounted once with
@@ -310,7 +355,6 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showErrorDialog, onClose]);
 
-  const [phase, setPhase] = useState<Phase>("idle");
   const [percent, setPercent] = useState<number>(0);
   // Fine-grained sub-step within "准备中". Cleared on each phase change.
   const [preparingStep, setPreparingStep] = useState<string | null>(null);
@@ -531,7 +575,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     setLogLines([]);
   }
 
-  // Error-checklist dialog. Rendered in BOTH the progress view and
+  // Error dialog. Rendered in BOTH the progress view and
   // the form view (yt-dlp failures bounce submitting back to false,
   // so the user sees the failure on the form view). Defining once
   // here as a const keeps the JSX shared between the two return
@@ -547,7 +591,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           // than any single error pattern.
           const fe = friendlyError(
             error,
-            phase,
+            tab === "url" ? "downloading" : phase,
             tab === "url" ? urlValue : undefined,
           );
           const act = fe.action;
@@ -556,27 +600,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           // download/cookies/network problem. So a local failure gets its own
           // checklist instead of the download one.
           const isLocal = tab === "local";
-          const startLogin = async () => {
-            if (!act) return;
-            try {
-              await invoke("site_login_start", {
-                args: {
-                  key: act.siteKey,
-                  label: act.siteLabel,
-                  loginUrl: act.loginUrl,
-                  harvestDomains: act.harvestDomains,
-                },
-              });
-              // Switch the modal into the in-modal "waiting for save"
-              // view — better UX than navigating off to Settings,
-              // since the user keeps the import context AND we can
-              // auto-retry the download once cookies land.
-              setShowErrorDialog(false);
-              setPendingLogin({ key: act.siteKey, label: act.siteLabel });
-            } catch (e) {
-              void notify(`登录窗口启动失败：${e}`);
-            }
-          };
+          const isDiagnosedDownload = !isLocal && !fe.generic;
           return (
             <div
               className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]"
@@ -589,12 +613,18 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-zinc-800">
                   <div className="min-w-0">
                     <div className="text-base font-semibold text-zinc-100 mb-1">
-                      {isLocal ? "解析失败 — 排查清单" : "下载失败 — 排查清单"}
+                      {isLocal
+                        ? "解析失败 — 排查清单"
+                        : isDiagnosedDownload
+                          ? fe.title
+                          : "下载失败 — 排查清单"}
                     </div>
                     <div className="text-xs leading-relaxed text-zinc-400">
                       {isLocal
                         ? "本地视频不走下载，失败多半出在文件本身或音轨解码。逐条对照检查。"
-                        : "逐条对照检查，按相关性排序。多数情况是前两条之一。"}
+                        : isDiagnosedDownload
+                          ? fe.suggestion
+                          : "暂时无法确定唯一原因，请按相关性逐项检查。"}
                     </div>
                   </div>
                   <button
@@ -637,7 +667,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                     </>
                   )}
 
-                  {!isLocal && (
+                  {!isLocal && !isDiagnosedDownload && (
                   <>
                   <ChecklistItem
                     index="①"
@@ -661,7 +691,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                     {act ? (
                       <button
                         type="button"
-                        onClick={startLogin}
+                        onClick={() => void beginSiteLogin(act)}
                         className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-xs font-medium rounded"
                       >
                         立即登录 {act.siteLabel} →
@@ -693,6 +723,53 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                     </button>
                   </ChecklistItem>
                   </>
+                  )}
+
+                  {isDiagnosedDownload && (
+                    <div
+                      className={`rounded-lg border p-4 ${
+                        fe.loginRequired
+                          ? "border-amber-500/40 bg-amber-500/5"
+                          : fe.retryable
+                            ? "border-blue-500/40 bg-blue-500/5"
+                            : "border-zinc-700 bg-zinc-950/50"
+                      }`}
+                    >
+                      <div className="text-sm font-medium text-zinc-100 mb-1">
+                        {fe.loginRequired
+                          ? "需要重新登录"
+                          : fe.retryable
+                            ? "网络连接失败"
+                            : "已识别失败原因"}
+                      </div>
+                      <p className="text-xs leading-relaxed text-zinc-400">
+                        {fe.suggestion}
+                      </p>
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {fe.loginRequired && act && (
+                          <button
+                            type="button"
+                            onClick={() => void beginSiteLogin(act)}
+                            className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-medium rounded"
+                          >
+                            重新登录 {act.siteLabel}
+                          </button>
+                        )}
+                        {fe.retryable && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowErrorDialog(false);
+                              setError(null);
+                              void submit({ background: true });
+                            }}
+                            className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-xs font-medium rounded"
+                          >
+                            放到后台重试
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   )}
 
                   {/* Raw error tail — surfaces the actual stderr (yt-dlp for

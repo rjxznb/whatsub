@@ -50,12 +50,14 @@ export function FailedActions({
           立即登录{fe.action.siteLabel}
         </button>
       )}
-      <button
-        className="px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-[10px]"
-        onClick={onRetry}
-      >
-        重试
-      </button>
+      {!fe.loginRequired && (
+        <button
+          className="px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-[10px]"
+          onClick={onRetry}
+        >
+          重试
+        </button>
+      )}
       {fe.action && (
         <SiteLoginModal
           open={loginOpen}

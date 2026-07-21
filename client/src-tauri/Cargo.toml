@@ -1,6 +1,6 @@
 [package]
 name = "client"
-version = "0.1.101"
+version = "0.1.102"
 description = "A Tauri App"
 authors = ["jimmy"]
 edition = "2021"
@@ -74,4 +74,3 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 # silently in the background.
 tokio-util = "0.7"
 base64 = "0.22.1"
-

@@ -83,6 +83,7 @@ enum WhisperRunMode {
 }
 
 static VULKAN_DISABLED_FOR_SESSION: AtomicBool = AtomicBool::new(false);
+const WHISPER_STALL_RETRIES: u32 = 2;
 
 fn initial_run_mode(vulkan_disabled: bool) -> WhisperRunMode {
     if vulkan_disabled {
@@ -96,6 +97,66 @@ fn combine_gpu_cpu_errors(gpu: &str, cpu: &str) -> AppError {
     AppError::Subprocess(format!(
         "whisper_gpu_cpu_fallback_failed\nGPU: {gpu}\nCPU: {cpu}"
     ))
+}
+
+struct WhisperRecovery {
+    mode: WhisperRunMode,
+    gpu_error: Option<String>,
+    stall_retries: u32,
+}
+
+enum WhisperRecoveryDecision {
+    Complete,
+    RetryStall { retry: u32 },
+    RetryOnCpu { disable_vulkan_for_session: bool },
+    Failed(AppError),
+}
+
+impl WhisperRecovery {
+    fn new(vulkan_disabled: bool) -> Self {
+        Self {
+            mode: initial_run_mode(vulkan_disabled),
+            gpu_error: None,
+            stall_retries: 0,
+        }
+    }
+
+    fn mode(&self) -> WhisperRunMode {
+        self.mode
+    }
+
+    fn handle_attempt(&mut self, result: AppResult<()>) -> WhisperRecoveryDecision {
+        match result {
+            Ok(()) => WhisperRecoveryDecision::Complete,
+            Err(AppError::Cancelled) => {
+                WhisperRecoveryDecision::Failed(AppError::Cancelled)
+            }
+            Err(error) if should_fallback_to_cpu(&error, self.mode) => {
+                self.gpu_error = Some(error.to_string());
+                self.mode = WhisperRunMode::Cpu;
+                self.stall_retries = 0;
+                WhisperRecoveryDecision::RetryOnCpu {
+                    disable_vulkan_for_session: true,
+                }
+            }
+            Err(error)
+                if error.to_string().contains("stalled")
+                    && self.stall_retries < WHISPER_STALL_RETRIES =>
+            {
+                self.stall_retries += 1;
+                WhisperRecoveryDecision::RetryStall {
+                    retry: self.stall_retries,
+                }
+            }
+            Err(error) => match self.gpu_error.as_deref() {
+                Some(gpu) => WhisperRecoveryDecision::Failed(combine_gpu_cpu_errors(
+                    gpu,
+                    &error.to_string(),
+                )),
+                None => WhisperRecoveryDecision::Failed(error),
+            },
+        }
+    }
 }
 
 /// Build the whisper-cli argument vector. When `vad_model` is `Some`, append
@@ -459,25 +520,27 @@ pub async fn transcribe(
     // has no mid-file resume, so re-run from scratch on the SAME audio.wav (no
     // re-download / re-extract — the GPU is healthy again after wake). Bounded so
     // a persistently-broken GPU surfaces a real error instead of looping forever.
-    const WHISPER_STALL_RETRIES: u32 = 2;
-    let mut mode = initial_run_mode(VULKAN_DISABLED_FOR_SESSION.load(Ordering::Relaxed));
-    let mut gpu_error: Option<String> = None;
-    let mut stall_retries: u32 = 0;
+    let mut recovery = WhisperRecovery::new(
+        VULKAN_DISABLED_FOR_SESSION.load(Ordering::Relaxed),
+    );
     loop {
+        let mode = recovery.mode();
         let env = build_whisper_env(mode, pin_str.as_deref());
-        match run_whisper_once(
+        let result = run_whisper_once(
             app, &audio_str, &model_str, &out_base, &env, prefer_discrete, pinned,
             vad_arg.as_deref(), mode, video_id, cancel,
         )
-        .await
-        {
-            Ok(()) => return Ok(out_dir.join("transcript.srt")),
-            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
-            Err(error) if should_fallback_to_cpu(&error, mode) => {
-                gpu_error = Some(error.to_string());
-                VULKAN_DISABLED_FOR_SESSION.store(true, Ordering::Relaxed);
-                mode = WhisperRunMode::Cpu;
-                stall_retries = 0;
+        .await;
+        match recovery.handle_attempt(result) {
+            WhisperRecoveryDecision::Complete => {
+                return Ok(out_dir.join("transcript.srt"));
+            }
+            WhisperRecoveryDecision::RetryOnCpu {
+                disable_vulkan_for_session,
+            } => {
+                if disable_vulkan_for_session {
+                    VULKAN_DISABLED_FOR_SESSION.store(true, Ordering::Relaxed);
+                }
                 emit(
                     app,
                     PipelineEvent::Log {
@@ -494,10 +557,7 @@ pub async fn transcribe(
                     },
                 );
             }
-            Err(e)
-                if e.to_string().contains("stalled") && stall_retries < WHISPER_STALL_RETRIES =>
-            {
-                stall_retries += 1;
+            WhisperRecoveryDecision::RetryStall { retry } => {
                 emit(
                     app,
                     PipelineEvent::Log {
@@ -505,7 +565,7 @@ pub async fn transcribe(
                         source: "whatsub".into(),
                         line: format!(
                             "[whatsub] 转录卡住（可能是休眠中断）— 自动重新转录 ({}/{})",
-                            stall_retries, WHISPER_STALL_RETRIES
+                            retry, WHISPER_STALL_RETRIES
                         ),
                     },
                 );
@@ -519,12 +579,7 @@ pub async fn transcribe(
                 );
                 continue;
             }
-            Err(error) => {
-                return match gpu_error {
-                    Some(ref gpu) => Err(combine_gpu_cpu_errors(gpu, &error.to_string())),
-                    None => Err(error),
-                };
-            }
+            WhisperRecoveryDecision::Failed(error) => return Err(error),
         }
     }
 }
@@ -918,9 +973,98 @@ mod tests {
     }
 
     #[test]
+    fn gpu_access_violation_switches_to_cpu_and_cpu_success_completes() {
+        let mut recovery = WhisperRecovery::new(false);
+
+        assert!(matches!(
+            recovery.handle_attempt(Err(gpu_access_violation())),
+            WhisperRecoveryDecision::RetryOnCpu {
+                disable_vulkan_for_session: true,
+            }
+        ));
+        assert_eq!(recovery.mode(), WhisperRunMode::Cpu);
+        assert!(matches!(
+            recovery.handle_attempt(Ok(())),
+            WhisperRecoveryDecision::Complete
+        ));
+    }
+
+    #[test]
+    fn cpu_failure_after_gpu_access_violation_is_terminal_and_keeps_both_displays() {
+        let gpu = gpu_access_violation();
+        let gpu_display = gpu.to_string();
+        let cpu = AppError::Subprocess("whisper-cli exit 3".into());
+        let cpu_display = cpu.to_string();
+        let mut recovery = WhisperRecovery::new(false);
+
+        assert!(matches!(
+            recovery.handle_attempt(Err(gpu)),
+            WhisperRecoveryDecision::RetryOnCpu { .. }
+        ));
+        let terminal = recovery.handle_attempt(Err(cpu));
+
+        let WhisperRecoveryDecision::Failed(error) = terminal else {
+            panic!("CPU failure must terminate without a third attempt");
+        };
+        let text = error.to_string();
+        assert!(text.contains("whisper_gpu_cpu_fallback_failed"));
+        assert!(text.contains(&format!("GPU: {gpu_display}")));
+        assert!(text.contains(&format!("CPU: {cpu_display}")));
+    }
+
+    #[test]
+    fn cpu_recovery_gets_a_reset_stall_retry_budget() {
+        let mut recovery = WhisperRecovery::new(false);
+
+        assert!(matches!(
+            recovery.handle_attempt(Err(stalled_error())),
+            WhisperRecoveryDecision::RetryStall { retry: 1 }
+        ));
+        assert!(matches!(
+            recovery.handle_attempt(Err(stalled_error())),
+            WhisperRecoveryDecision::RetryStall { retry: 2 }
+        ));
+        assert!(matches!(
+            recovery.handle_attempt(Err(gpu_access_violation())),
+            WhisperRecoveryDecision::RetryOnCpu { .. }
+        ));
+        assert!(matches!(
+            recovery.handle_attempt(Err(stalled_error())),
+            WhisperRecoveryDecision::RetryStall { retry: 1 }
+        ));
+        assert!(matches!(
+            recovery.handle_attempt(Err(stalled_error())),
+            WhisperRecoveryDecision::RetryStall { retry: 2 }
+        ));
+
+        let terminal = recovery.handle_attempt(Err(stalled_error()));
+        let WhisperRecoveryDecision::Failed(error) = terminal else {
+            panic!("third CPU stall must exhaust the reset retry budget");
+        };
+        assert!(error
+            .to_string()
+            .contains("whisper_gpu_cpu_fallback_failed"));
+    }
+
+    #[test]
+    fn cancellation_during_cpu_recovery_is_not_combined() {
+        let mut recovery = WhisperRecovery::new(false);
+
+        assert!(matches!(
+            recovery.handle_attempt(Err(gpu_access_violation())),
+            WhisperRecoveryDecision::RetryOnCpu { .. }
+        ));
+        assert!(matches!(
+            recovery.handle_attempt(Err(AppError::Cancelled)),
+            WhisperRecoveryDecision::Failed(AppError::Cancelled)
+        ));
+    }
+
+    #[test]
     fn session_safe_mode_starts_new_runs_on_cpu() {
-        assert_eq!(initial_run_mode(false), WhisperRunMode::Gpu);
-        assert_eq!(initial_run_mode(true), WhisperRunMode::Cpu);
+        let recovery = WhisperRecovery::new(true);
+
+        assert_eq!(recovery.mode(), WhisperRunMode::Cpu);
     }
 
     #[test]
@@ -945,6 +1089,14 @@ mod tests {
         assert!(!should_fallback_to_cpu(&access, WhisperRunMode::Cpu));
         assert!(!should_fallback_to_cpu(&other, WhisperRunMode::Gpu));
         assert!(!should_fallback_to_cpu(&AppError::Cancelled, WhisperRunMode::Gpu));
+    }
+
+    fn gpu_access_violation() -> AppError {
+        AppError::Subprocess("whisper-cli exit -1073741819".into())
+    }
+
+    fn stalled_error() -> AppError {
+        AppError::Subprocess("whisper-cli stalled for 120s".into())
     }
 
     #[test]

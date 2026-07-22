@@ -410,6 +410,15 @@ function classifyError(
 
   // ── Whisper / 字幕识别 ─────────────────────────────────────────────
 
+  if (txt.includes("whisper_gpu_cpu_fallback_failed")) {
+    return {
+      title: "显卡加速和 CPU 兜底均失败",
+      suggestion:
+        "显卡驱动导致 Vulkan 启动崩溃，whatsub 已经自动切换到 CPU，但 CPU 识别仍未完成。建议更新 Intel/NVIDIA 显卡驱动；如果仍失败，请复制下方详细日志联系支持。",
+      details: raw,
+    };
+  }
+
   if (
     raw.includes("whisper-cli exit -1073741515") ||
     txt.includes("status_dll_not_found")

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { ImportModal } from "./ImportModal";
 
 const SAMPLE_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
@@ -232,6 +232,45 @@ describe("ImportModal — diagnosed download failures", () => {
     expect(r.queryByText("下载失败 — 排查清单")).toBeNull();
     expect(r.getByRole("button", { name: "放到后台重试" })).toBeInTheDocument();
     expect(invokeMock.mock.calls.some(([cmd]) => cmd === "site_login_start")).toBe(false);
+  });
+});
+
+describe("ImportModal — diagnosed local failures", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  async function startLocalImport() {
+    const r = render(
+      <ImportModal onClose={() => {}} initialFilePath="C:\\Videos\\sample.mp4" />,
+    );
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+    await flush();
+    return r;
+  }
+
+  beforeEach(() => {
+    invokeMock.mockClear();
+    pipelineHandler = null;
+    eventHandlers.clear();
+  });
+
+  it("shows the GPU and CPU fallback diagnosis instead of the local-file checklist", async () => {
+    const r = await startLocalImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "local-video",
+          error:
+            "whisper_gpu_cpu_fallback_failed\nGPU: whisper-cli exit -1073741819\nCPU: whisper-cli exit 3",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(r.getByText("显卡加速和 CPU 兜底均失败")).toBeInTheDocument();
+    });
+    expect(r.queryByText("视频文件本身有问题")).toBeNull();
+    expect(r.getAllByText(/已经自动切换到 CPU/).length).toBeGreaterThan(0);
   });
 });
 

@@ -583,12 +583,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   const errorChecklistDialog =
     showErrorDialog && error
       ? (() => {
-          // friendlyError is still useful for ONE thing in the new
-          // design: deciding which site's login button to surface
-          // (action.siteKey + label + URL + harvestDomains). We
-          // intentionally DON'T use its title/suggestion in the UI
-          // — the checklist below is generic and covers more ground
-          // than any single error pattern.
+          // friendlyError identifies focused diagnoses and decides which
+          // site's login button to surface (action.siteKey + label + URL +
+          // harvestDomains). Generic errors continue to use the broader
+          // troubleshooting checklists.
           const fe = friendlyError(
             error,
             tab === "url" ? "downloading" : phase,
@@ -597,10 +595,12 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           const act = fe.action;
           // Local-file imports never run yt-dlp — the failure is in ffmpeg
           // (corrupt/unsupported file, no audio track) or whisper, NOT a
-          // download/cookies/network problem. So a local failure gets its own
-          // checklist instead of the download one.
+          // download/cookies/network problem. Generic local failures get
+          // their own checklist instead of the download one.
           const isLocal = tab === "local";
+          const isDiagnosedLocal = isLocal && !fe.generic;
           const isDiagnosedDownload = !isLocal && !fe.generic;
+          const isDiagnosed = isDiagnosedLocal || isDiagnosedDownload;
           return (
             <div
               className="fixed inset-0 bg-black/70 flex items-center justify-center z-[60]"
@@ -613,17 +613,17 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-3 border-b border-zinc-800">
                   <div className="min-w-0">
                     <div className="text-base font-semibold text-zinc-100 mb-1">
-                      {isLocal
-                        ? "解析失败 — 排查清单"
-                        : isDiagnosedDownload
-                          ? fe.title
+                      {isDiagnosed
+                        ? fe.title
+                        : isLocal
+                          ? "解析失败 — 排查清单"
                           : "下载失败 — 排查清单"}
                     </div>
                     <div className="text-xs leading-relaxed text-zinc-400">
-                      {isLocal
-                        ? "本地视频不走下载，失败多半出在文件本身或音轨解码。逐条对照检查。"
-                        : isDiagnosedDownload
-                          ? fe.suggestion
+                      {isDiagnosed
+                        ? fe.suggestion
+                        : isLocal
+                          ? "本地视频不走下载，失败多半出在文件本身或音轨解码。逐条对照检查。"
                           : "暂时无法确定唯一原因，请按相关性逐项检查。"}
                     </div>
                   </div>
@@ -638,7 +638,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 </div>
 
                 <div className="px-5 py-4 flex-1 min-h-0 overflow-y-auto space-y-2.5">
-                  {isLocal && (
+                  {isLocal && !isDiagnosedLocal && (
                     <>
                       <ChecklistItem
                         index="①"
@@ -725,7 +725,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                   </>
                   )}
 
-                  {isDiagnosedDownload && (
+                  {isDiagnosed && (
                     <div
                       className={`rounded-lg border p-4 ${
                         fe.loginRequired

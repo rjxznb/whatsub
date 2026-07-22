@@ -14,6 +14,17 @@ describe("siteKeyForUrl", () => {
 });
 
 describe("friendlyError download diagnosis", () => {
+  it("explains when Vulkan crashed and the automatic CPU fallback also failed", () => {
+    const result = friendlyError(
+      "whisper_gpu_cpu_fallback_failed\nGPU: whisper-cli exit -1073741819\nCPU: whisper-cli exit 3",
+      "transcribing",
+    );
+
+    expect(result.title).toBe("显卡加速和 CPU 兜底均失败");
+    expect(result.suggestion).toContain("已经自动切换到 CPU");
+    expect(result.generic).not.toBe(true);
+  });
+
   it("marks YouTube bot checks as a deterministic login action", () => {
     const result = friendlyError(
       "ERROR: [youtube] Sign in to confirm you’re not a bot. Use --cookies.",

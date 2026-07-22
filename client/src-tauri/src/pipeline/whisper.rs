@@ -76,6 +76,12 @@ fn should_use_vad(duration_secs: f64, vad_model_present: bool) -> bool {
     vad_model_present && duration_secs > VAD_MIN_DURATION_SECS
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WhisperRunMode {
+    Gpu,
+    Cpu,
+}
+
 /// Build the whisper-cli argument vector. When `vad_model` is `Some`, append
 /// `--vad --vad-model <path>`; otherwise the args are exactly today's set.
 fn build_whisper_args<'a>(
@@ -83,6 +89,7 @@ fn build_whisper_args<'a>(
     audio: &'a str,
     out_base: &'a str,
     vad_model: Option<&'a str>,
+    mode: WhisperRunMode,
 ) -> Vec<&'a str> {
     let mut args: Vec<&str> = vec![
         "-m", model,
@@ -93,12 +100,36 @@ fn build_whisper_args<'a>(
         "-of", out_base,
         "--print-progress",
     ];
+    if mode == WhisperRunMode::Cpu {
+        args.push("-ng");
+    }
     if let Some(vm) = vad_model {
         args.push("--vad");
         args.push("--vad-model");
         args.push(vm);
     }
     args
+}
+
+fn build_whisper_env<'a>(
+    mode: WhisperRunMode,
+    pinned: Option<&'a str>,
+) -> Vec<(&'static str, &'a str)> {
+    match mode {
+        WhisperRunMode::Cpu => vec![("GGML_DISABLE_VULKAN", "1")],
+        WhisperRunMode::Gpu => pinned
+            .map(|value| vec![("GGML_VK_VISIBLE_DEVICES", value)])
+            .unwrap_or_default(),
+    }
+}
+
+fn should_fallback_to_cpu(error: &AppError, mode: WhisperRunMode) -> bool {
+    mode == WhisperRunMode::Gpu
+        && matches!(
+            error,
+            AppError::Subprocess(message)
+                if message.starts_with("whisper-cli exit -1073741819")
+        )
 }
 
 /// Resolve the bundled VAD model (resource_dir/models/<VAD_MODEL_FILE>).
@@ -406,10 +437,7 @@ pub async fn transcribe(
     // GPU device selection — invariant across stall retries.
     let (prefer_discrete, pinned) = gpu_preference();
     let pin_str = pinned.map(|i| i.to_string());
-    let env: Vec<(&str, &str)> = match pin_str.as_deref() {
-        Some(s) => vec![("GGML_VK_VISIBLE_DEVICES", s)],
-        None => vec![],
-    };
+    let env = build_whisper_env(WhisperRunMode::Gpu, pin_str.as_deref());
 
     // Stall auto-recovery: a sleep-wedged whisper-cli (hung process / lost GPU
     // context on wake) gets killed by the spawn watchdog ("stalled"). whisper.cpp
@@ -538,7 +566,13 @@ async fn run_whisper_once(
     // the already-downloaded source.mp4 — no re-download).
     let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let progress_count_cb = progress_count.clone();
-    let whisper_args = build_whisper_args(model_str, audio_str, out_base, vad_model);
+    let whisper_args = build_whisper_args(
+        model_str,
+        audio_str,
+        out_base,
+        vad_model,
+        WhisperRunMode::Gpu,
+    );
     run_sidecar_env(
         app,
         "whisper-cli",
@@ -790,7 +824,7 @@ mod tests {
 
     #[test]
     fn whisper_args_without_vad_have_no_vad_flags() {
-        let args = build_whisper_args("m.bin", "a.wav", "out", None);
+        let args = build_whisper_args("m.bin", "a.wav", "out", None, WhisperRunMode::Gpu);
         assert!(!args.contains(&"--vad"));
         assert!(args.contains(&"-mc") && args.contains(&"0"));
         assert!(args.contains(&"-osrt"));
@@ -800,12 +834,49 @@ mod tests {
 
     #[test]
     fn whisper_args_with_vad_append_vad_flags() {
-        let args = build_whisper_args("m.bin", "a.wav", "out", Some("vad.bin"));
+        let args = build_whisper_args(
+            "m.bin",
+            "a.wav",
+            "out",
+            Some("vad.bin"),
+            WhisperRunMode::Gpu,
+        );
         assert!(args.contains(&"--vad"));
         let i = args.iter().position(|a| *a == "--vad-model").unwrap();
         assert_eq!(args[i + 1], "vad.bin");
         // existing flags preserved
         assert!(args.contains(&"-mc") && args.contains(&"-osrt"));
+    }
+
+    #[test]
+    fn cpu_mode_disables_gpu_in_args_and_environment() {
+        let args = build_whisper_args("m.bin", "a.wav", "out", None, WhisperRunMode::Cpu);
+        assert!(args.contains(&"-ng"));
+
+        let env = build_whisper_env(WhisperRunMode::Cpu, Some("1"));
+        assert_eq!(env, vec![("GGML_DISABLE_VULKAN", "1")]);
+    }
+
+    #[test]
+    fn gpu_mode_preserves_device_pinning_without_cpu_flags() {
+        let args = build_whisper_args("m.bin", "a.wav", "out", None, WhisperRunMode::Gpu);
+        assert!(!args.contains(&"-ng"));
+        assert_eq!(
+            build_whisper_env(WhisperRunMode::Gpu, Some("1")),
+            vec![("GGML_VK_VISIBLE_DEVICES", "1")],
+        );
+    }
+
+    #[test]
+    fn only_gpu_access_violation_uses_cpu_recovery() {
+        let access = AppError::Subprocess(
+            "whisper-cli exit -1073741819\n--- whisper-cli stderr ---\nggml_vulkan: Found 2 Vulkan devices".into(),
+        );
+        let other = AppError::Subprocess("whisper-cli exit 3".into());
+        assert!(should_fallback_to_cpu(&access, WhisperRunMode::Gpu));
+        assert!(!should_fallback_to_cpu(&access, WhisperRunMode::Cpu));
+        assert!(!should_fallback_to_cpu(&other, WhisperRunMode::Gpu));
+        assert!(!should_fallback_to_cpu(&AppError::Cancelled, WhisperRunMode::Gpu));
     }
 
     #[test]

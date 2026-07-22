@@ -82,6 +82,22 @@ enum WhisperRunMode {
     Cpu,
 }
 
+static VULKAN_DISABLED_FOR_SESSION: AtomicBool = AtomicBool::new(false);
+
+fn initial_run_mode(vulkan_disabled: bool) -> WhisperRunMode {
+    if vulkan_disabled {
+        WhisperRunMode::Cpu
+    } else {
+        WhisperRunMode::Gpu
+    }
+}
+
+fn combine_gpu_cpu_errors(gpu: &str, cpu: &str) -> AppError {
+    AppError::Subprocess(format!(
+        "whisper_gpu_cpu_fallback_failed\nGPU: {gpu}\nCPU: {cpu}"
+    ))
+}
+
 /// Build the whisper-cli argument vector. When `vad_model` is `Some`, append
 /// `--vad --vad-model <path>`; otherwise the args are exactly today's set.
 fn build_whisper_args<'a>(
@@ -123,8 +139,6 @@ fn build_whisper_env<'a>(
     }
 }
 
-// Task 2 will wire this classifier into runtime recovery and remove this allowance.
-#[allow(dead_code)]
 fn should_fallback_to_cpu(error: &AppError, mode: WhisperRunMode) -> bool {
     mode == WhisperRunMode::Gpu
         && matches!(
@@ -439,7 +453,6 @@ pub async fn transcribe(
     // GPU device selection — invariant across stall retries.
     let (prefer_discrete, pinned) = gpu_preference();
     let pin_str = pinned.map(|i| i.to_string());
-    let env = build_whisper_env(WhisperRunMode::Gpu, pin_str.as_deref());
 
     // Stall auto-recovery: a sleep-wedged whisper-cli (hung process / lost GPU
     // context on wake) gets killed by the spawn watchdog ("stalled"). whisper.cpp
@@ -447,16 +460,40 @@ pub async fn transcribe(
     // re-download / re-extract — the GPU is healthy again after wake). Bounded so
     // a persistently-broken GPU surfaces a real error instead of looping forever.
     const WHISPER_STALL_RETRIES: u32 = 2;
+    let mut mode = initial_run_mode(VULKAN_DISABLED_FOR_SESSION.load(Ordering::Relaxed));
+    let mut gpu_error: Option<String> = None;
     let mut stall_retries: u32 = 0;
     loop {
+        let env = build_whisper_env(mode, pin_str.as_deref());
         match run_whisper_once(
             app, &audio_str, &model_str, &out_base, &env, prefer_discrete, pinned,
-            vad_arg.as_deref(), video_id, cancel,
+            vad_arg.as_deref(), mode, video_id, cancel,
         )
         .await
         {
             Ok(()) => return Ok(out_dir.join("transcript.srt")),
             Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(error) if should_fallback_to_cpu(&error, mode) => {
+                gpu_error = Some(error.to_string());
+                VULKAN_DISABLED_FOR_SESSION.store(true, Ordering::Relaxed);
+                mode = WhisperRunMode::Cpu;
+                stall_retries = 0;
+                emit(
+                    app,
+                    PipelineEvent::Log {
+                        video_id: video_id.to_string(),
+                        source: "whatsub".into(),
+                        line: "显卡加速启动异常，已自动切换 CPU 继续识别".into(),
+                    },
+                );
+                emit(
+                    app,
+                    PipelineEvent::Transcribing {
+                        video_id: video_id.to_string(),
+                        percent: 0,
+                    },
+                );
+            }
             Err(e)
                 if e.to_string().contains("stalled") && stall_retries < WHISPER_STALL_RETRIES =>
             {
@@ -482,7 +519,12 @@ pub async fn transcribe(
                 );
                 continue;
             }
-            Err(e) => return Err(e),
+            Err(error) => {
+                return match gpu_error {
+                    Some(ref gpu) => Err(combine_gpu_cpu_errors(gpu, &error.to_string())),
+                    None => Err(error),
+                };
+            }
         }
     }
 }
@@ -501,6 +543,7 @@ async fn run_whisper_once(
     prefer_discrete: bool,
     pinned: Option<u32>,
     vad_model: Option<&str>,
+    mode: WhisperRunMode,
     video_id: &str,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<()> {
@@ -573,7 +616,7 @@ async fn run_whisper_once(
         audio_str,
         out_base,
         vad_model,
-        WhisperRunMode::Gpu,
+        mode,
     );
     run_sidecar_env(
         app,
@@ -629,13 +672,18 @@ async fn run_whisper_once(
     // "未检测". Keep detect_backend_line in sync with upstream log formats:
     // Metal's v1.8.x output no longer uses the Vulkan-style `0 = ...` line.
     if !backend_emitted.load(std::sync::atomic::Ordering::Relaxed) {
-        emit(app, PipelineEvent::BackendDetected { name: "CPU".into() });
+        let name = if mode == WhisperRunMode::Cpu {
+            "CPU（GPU 异常，已自动降级）"
+        } else {
+            "CPU"
+        };
+        emit(app, PipelineEvent::BackendDetected { name: name.into() });
     }
 
     // Persist the device inventory after an unfiltered run so Settings can show
     // the cards and the next run can pin the discrete GPU. A pinned run only
     // sees its 1 selected device, so skip it (it would clobber the full list).
-    if pinned.is_none() {
+    if mode == WhisperRunMode::Gpu && pinned.is_none() {
         let found = devices.lock().map(|v| v.clone()).unwrap_or_default();
         if !found.is_empty() {
             emit(app, PipelineEvent::GpuDevices { devices: found.clone() });
@@ -867,6 +915,24 @@ mod tests {
             build_whisper_env(WhisperRunMode::Gpu, Some("1")),
             vec![("GGML_VK_VISIBLE_DEVICES", "1")],
         );
+    }
+
+    #[test]
+    fn session_safe_mode_starts_new_runs_on_cpu() {
+        assert_eq!(initial_run_mode(false), WhisperRunMode::Gpu);
+        assert_eq!(initial_run_mode(true), WhisperRunMode::Cpu);
+    }
+
+    #[test]
+    fn combined_fallback_error_keeps_both_failures() {
+        let combined = combine_gpu_cpu_errors(
+            "whisper-cli exit -1073741819",
+            "whisper-cli exit 3",
+        );
+        let text = combined.to_string();
+        assert!(text.contains("whisper_gpu_cpu_fallback_failed"));
+        assert!(text.contains("GPU: whisper-cli exit -1073741819"));
+        assert!(text.contains("CPU: whisper-cli exit 3"));
     }
 
     #[test]

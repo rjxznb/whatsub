@@ -123,6 +123,8 @@ fn build_whisper_env<'a>(
     }
 }
 
+// Task 2 will wire this classifier into runtime recovery and remove this allowance.
+#[allow(dead_code)]
 fn should_fallback_to_cpu(error: &AppError, mode: WhisperRunMode) -> bool {
     mode == WhisperRunMode::Gpu
         && matches!(

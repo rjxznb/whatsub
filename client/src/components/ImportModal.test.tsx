@@ -272,6 +272,24 @@ describe("ImportModal — diagnosed local failures", () => {
     expect(r.queryByText("视频文件本身有问题")).toBeNull();
     expect(r.getAllByText(/已经自动切换到 CPU/).length).toBeGreaterThan(0);
   });
+
+  it("keeps the generic local checklist for an unclassified failure", async () => {
+    const r = await startLocalImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "unknown-local-video",
+          error: "unexpected local pipeline failure with no known marker",
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(r.getByText("解析失败 — 排查清单")).toBeInTheDocument();
+    });
+    expect(r.getByText("视频文件本身有问题")).toBeInTheDocument();
+  });
 });
 
 describe("ImportModal — normal (non-onboarding) use", () => {

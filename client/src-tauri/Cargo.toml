@@ -1,6 +1,6 @@
-[package]
+﻿[package]
 name = "client"
-version = "0.1.103"
+version = "0.1.104"
 description = "A Tauri App"
 authors = ["jimmy"]
 edition = "2021"
@@ -15,7 +15,7 @@ name = "client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # Override the binary name. Cargo defaults to package.name (= "client"),
-# producing `client.exe` / `client` — the user-visible exe name in install
+# producing `client.exe` / `client` 鈥?the user-visible exe name in install
 # dirs and process lists. We want `whatsub.exe` / `whatsub` instead so it
 # matches the product. Package.name itself stays "client" since renaming
 # it would break Cargo.lock + every workspace reference downstream.
@@ -50,9 +50,9 @@ dirs = "5"
 #   - Windows: HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid
 #   - macOS:   IOPlatformUUID
 #   - Linux:   /etc/machine-id
-# Same machine boots → same uid; different machine → different uid.
+# Same machine boots 鈫?same uid; different machine 鈫?different uid.
 machine-uid = "0.5"
-# Pretty device label for the admin UI ("renjx 的 MacBook" instead of a hash)
+# Pretty device label for the admin UI ("renjx 鐨?MacBook" instead of a hash)
 # and OS hostname fallback. Small crate, no transitive heavies.
 whoami = "1.5"
 # Cookie struct + parser for the in-app YouTube login flow. Tauri's
@@ -64,12 +64,12 @@ url = "2"
 # WebSocket client for two consumers:
 #   1. Chrome DevTools Protocol over ws://localhost:<port> (system-browser login)
 #   2. Edge neural TTS over wss://speech.platform.bing.com (commands/edge_tts.rs)
-# (2) needs TLS, so we enable the native-tls feature — it reuses the native-tls
+# (2) needs TLS, so we enable the native-tls feature 鈥?it reuses the native-tls
 # crate reqwest already pulls in (schannel on Windows / Secure Transport on
 # macOS), so it adds no new system TLS stack.
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "native-tls"] }
 # CancellationToken for the per-import cancel signal. Threaded through
-# run_sidecar so that ✕ in the UI translates to killing yt-dlp / ffmpeg /
+# run_sidecar so that 鉁?in the UI translates to killing yt-dlp / ffmpeg /
 # whisper child processes mid-flight instead of letting them finish
 # silently in the background.
 tokio-util = "0.7"

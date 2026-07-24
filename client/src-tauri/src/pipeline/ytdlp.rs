@@ -155,22 +155,22 @@ fn yt_dlp_format(quality: &str) -> &'static str {
     match quality {
         "low" => "bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]\
                   /bv*[ext=mp4][height<=480]+ba[ext=m4a]\
-                  /bv*[height<=480]+ba\
+                  /bv*[height<=480]+ba[ext!=webm]\
                   /best[height<=480]/best",
         "high" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
-                   /bv*[height<=1080]+ba\
+                   /bv*[height<=1080]+ba[ext!=webm]\
                    /best[height<=1080]/best",
         "best" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
-                   /bv*[height<=1080]+ba\
+                   /bv*[height<=1080]+ba[ext!=webm]\
                    /best[height<=1080]/best",
         // "standard" (720p) is the default — chosen because subtitle learning
         // doesn't need 1080p+ and 720p downloads are 2-4× faster on most
         // connections. Anything unrecognized also lands here.
         _ => "bv*[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]\
               /bv*[ext=mp4][height<=720]+ba[ext=m4a]\
-              /bv*[height<=720]+ba\
+              /bv*[height<=720]+ba[ext!=webm]\
               /best[height<=720]/best",
     }
 }
@@ -321,9 +321,14 @@ pub async fn download(
         // extraction, ffmpeg exits 69 ("Conversion failed!"). Since
         // tiers 1+2 of yt_dlp_format already constrain `ba[ext=m4a]`
         // (= AAC) for >99% of videos, the transcode was never needed
-        // there and only created risk. The rare tier-3/4 fall-through
-        // with Opus audio on Mac is now a known soft limitation —
-        // users can re-import at a different quality if hit.
+        // there and only created risk.
+        //
+        // Tier 3 uses `ba[ext!=webm]` specifically to avoid selecting
+        // Opus-in-WebM audio: the MP4 muxer rejects Opus with `-c:a
+        // copy`, producing "Postprocessing: Conversion failed!" even
+        // though the download itself succeeded. Filtering out webm
+        // forces a fall-through to `best` (pre-merged stream) when
+        // only Opus audio is available — no merge step, no failure.
         "--postprocessor-args".into(),
         "Merger:-c:v copy -c:a copy".into(),
         "-o".into(),

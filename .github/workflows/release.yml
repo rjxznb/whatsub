@@ -44,9 +44,9 @@ on:
         required: true
         default: 'https://github.com/rjxznb/whatsub-releases/releases/download/build-deps/ffprobe711arm.zip'
       ffmpeg_url_windows:
-        description: 'Static ffmpeg Windows zip URL (must contain bin/ffmpeg.exe). gyan.dev is more stable than BtbN whose latest-tag asset names rotate.'
+        description: 'Static ffmpeg Windows zip URL (must contain ffmpeg.exe + ffprobe.exe). BtbN latest permalink — contains bin/ffmpeg.exe + bin/ffprobe.exe. Fallback: gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip (sometimes 503).'
         required: true
-        default: 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+        default: 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
       node_version:
         description: 'Node.js version bundled as sidecar (used by yt-dlp for YouTube n-challenge). Pick an LTS minor — see https://nodejs.org/en/about/previous-releases'
         required: true

@@ -540,11 +540,27 @@ pub async fn download(
             }
             Err(e) => {
                 let msg = e.to_string();
-                // A stall = the watchdog killed a hung yt-dlp. Recoverable by
-                // resuming from the .part — give it its own larger budget,
-                // regardless of foreground/background.
+                // A stall = the watchdog killed a hung yt-dlp. Two scenarios:
+                //
+                // 1. yt-dlp stuck downloading → .part file tracks progress,
+                //    --continue resumes the HTTP download. All good.
+                //
+                // 2. yt-dlp stuck during ffmpeg MERGE (bv+ba→source.mp4).
+                //    Merge produces NO [progress] lines, so the watchdog
+                //    fires after 120s of silence → yt-dlp+ffmpeg killed →
+                //    source.mp4 is PARTIALLY MERGED (e.g. 10min of a 30min
+                //    video, but playable). The fragment files are fully
+                //    downloaded. On retry yt-dlp sees source.mp4 exists and
+                //    skips the merge → exit 0 with a truncated file.
+                //
+                // Fix: delete source.mp4 before the stall retry. Fragment
+                // downloads are cached in yt-dlp's temp files and don't need
+                // re-downloading; only the merge step must re-run. If the
+                // stall was during download (case 1), the .part file is
+                // intact and --continue resumes normally.
                 if msg.contains("stalled") && stall_retries < STALL_MAX_RETRIES {
                     stall_retries += 1;
+                    let _ = std::fs::remove_file(&video_path);
                     emit(
                         app,
                         PipelineEvent::Log {

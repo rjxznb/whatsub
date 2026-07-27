@@ -441,7 +441,7 @@ pub async fn download(
         };
 
         // The watchdog observes parsed progress while downloading, then the
-        // growing source.mp4 once yt-dlp announces its ffmpeg merge phase.
+        // growing source.temp.mp4 once yt-dlp announces its ffmpeg merge phase.
         let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let progress_count_cb = progress_count.clone();
         let stall_watch = StallWatch::with_merge_output(
@@ -723,8 +723,8 @@ fn observe_merge_chunk(
 }
 
 /// Prepare a retry after the spawn watchdog kills a stalled process.
-/// Only the final merged output is removed; yt-dlp's `.part` and fragment
-/// cache remain available for `--continue` on the next process attempt.
+/// Both the temporary and final merge outputs are removed; yt-dlp's `.part`
+/// and fragment cache remain available for `--continue` on the next attempt.
 fn prepare_stall_retry(
     message: &str,
     retries: u32,
@@ -898,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn stall_retry_removes_only_final_output() {
+    fn stall_retry_removes_merge_outputs_but_preserves_fragments() {
         let dir = unique_temp_dir("stall-cleanup");
         std::fs::create_dir_all(&dir).unwrap();
         let output = dir.join("source.mp4");

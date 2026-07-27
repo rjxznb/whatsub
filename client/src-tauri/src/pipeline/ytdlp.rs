@@ -155,22 +155,22 @@ fn yt_dlp_format(quality: &str) -> &'static str {
     match quality {
         "low" => "bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]\
                   /bv*[ext=mp4][height<=480]+ba[ext=m4a]\
-                  /bv*[height<=480]+ba[ext!=webm]\
+                  /bv*[height<=480]+ba[acodec^=mp4a]\
                   /best[height<=480]/best",
         "high" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
-                   /bv*[height<=1080]+ba[ext!=webm]\
+                   /bv*[height<=1080]+ba[acodec^=mp4a]\
                    /best[height<=1080]/best",
         "best" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
-                   /bv*[height<=1080]+ba[ext!=webm]\
+                   /bv*[height<=1080]+ba[acodec^=mp4a]\
                    /best[height<=1080]/best",
         // "standard" (720p) is the default — chosen because subtitle learning
         // doesn't need 1080p+ and 720p downloads are 2-4× faster on most
         // connections. Anything unrecognized also lands here.
         _ => "bv*[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]\
               /bv*[ext=mp4][height<=720]+ba[ext=m4a]\
-              /bv*[height<=720]+ba[ext!=webm]\
+              /bv*[height<=720]+ba[acodec^=mp4a]\
               /best[height<=720]/best",
     }
 }
@@ -323,12 +323,11 @@ pub async fn download(
         // (= AAC) for >99% of videos, the transcode was never needed
         // there and only created risk.
         //
-        // Tier 3 uses `ba[ext!=webm]` specifically to avoid selecting
-        // Opus-in-WebM audio: the MP4 muxer rejects Opus with `-c:a
-        // copy`, producing "Postprocessing: Conversion failed!" even
-        // though the download itself succeeded. Filtering out webm
-        // forces a fall-through to `best` (pre-merged stream) when
-        // only Opus audio is available — no merge step, no failure.
+        // Tier 3 constrains the audio codec directly to MP4-compatible
+        // AAC (`mp4a`). Merely excluding WebM is insufficient because a
+        // different container can still carry a codec that the MP4 muxer
+        // rejects with `-c:a copy`. If no compatible separate audio exists,
+        // the selector falls through to a pre-merged `best` stream.
         "--postprocessor-args".into(),
         "Merger:-c:v copy -c:a copy".into(),
         "-o".into(),
@@ -446,6 +445,7 @@ pub async fn download(
         let stall_watch =
             StallWatch::with_merge_output(progress_count.clone(), PathBuf::from(&video_path));
         let stall_watch_cb = stall_watch.clone();
+        let mut merge_start_detector = MergeStartDetector::default();
         // Common stderr callback for both the bundled-sidecar path and
         // the AppData-direct path. Defined here so it's identical in
         // semantics (logs / progress / sub-step detection).
@@ -460,10 +460,10 @@ pub async fn download(
             // is lost, so the UI never leaves "准备中" until
             // ExtractingAudio fires.
             emit_log(chunk);
+            if merge_start_detector.push(chunk) {
+                stall_watch_cb.mark_merging();
+            }
             for actual_line in chunk.lines() {
-                if is_merge_start_line(actual_line) {
-                    stall_watch_cb.mark_merging();
-                }
                 if let Some(step) = detect_prepare_step(actual_line) {
                     emit_step(step);
                 }
@@ -665,6 +665,40 @@ fn is_merge_start_line(line: &str) -> bool {
     trimmed.starts_with("[Merger]") && trimmed.contains("Merging formats into")
 }
 
+#[derive(Default)]
+struct MergeStartDetector {
+    pending: String,
+}
+
+impl MergeStartDetector {
+    fn push(&mut self, chunk: &str) -> bool {
+        self.pending.push_str(chunk);
+
+        while let Some(newline) = self.pending.find('\n') {
+            let line = self.pending[..newline].to_string();
+            self.pending.drain(..=newline);
+            if is_merge_start_line(&line) {
+                return true;
+            }
+        }
+
+        if is_merge_start_line(&self.pending) {
+            self.pending.clear();
+            return true;
+        }
+
+        const MAX_PENDING_BYTES: usize = 512;
+        if self.pending.len() > MAX_PENDING_BYTES {
+            let mut keep_from = self.pending.len() - MAX_PENDING_BYTES;
+            while !self.pending.is_char_boundary(keep_from) {
+                keep_from += 1;
+            }
+            self.pending.drain(..keep_from);
+        }
+        false
+    }
+}
+
 /// Prepare a retry after the spawn watchdog kills a stalled process.
 /// Only the final merged output is removed; yt-dlp's `.part` and fragment
 /// cache remain available for `--continue` on the next process attempt.
@@ -813,6 +847,13 @@ mod tests {
     }
 
     #[test]
+    fn detects_merger_start_split_across_output_chunks() {
+        let mut detector = MergeStartDetector::default();
+        assert!(!detector.push("[download] 100%\n[Merger] Merg"));
+        assert!(detector.push("ing formats into \"source.mp4\"\n"));
+    }
+
+    #[test]
     fn stall_retry_removes_only_final_output() {
         let dir = unique_temp_dir("stall-cleanup");
         std::fs::create_dir_all(&dir).unwrap();
@@ -841,6 +882,26 @@ mod tests {
         assert!(output.exists());
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn all_quality_formats_require_mp4_compatible_separate_audio() {
+        for quality in ["low", "standard", "high", "best"] {
+            let format = yt_dlp_format(quality);
+            assert!(
+                !format.contains("ext!=webm"),
+                "{quality} still relies on a container exclusion: {format}"
+            );
+            for term in format.split('/') {
+                if term.contains("+ba") {
+                    assert!(
+                        term.contains("ba[ext=m4a]")
+                            || term.contains("ba[acodec^=mp4a]"),
+                        "{quality} has an unconstrained separate-audio term: {term}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandEvent;
@@ -12,6 +12,111 @@ use tokio_util::sync::CancellationToken;
 /// the spawn loop kills the child if it stops advancing. `None` = watchdog
 /// disabled (the default for ffmpeg + other sidecars).
 pub type StallCounter = std::sync::Arc<std::sync::atomic::AtomicU64>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StallPhase {
+    Preparing,
+    Downloading,
+    Merging,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StallSnapshot {
+    phase: StallPhase,
+    activity: u64,
+}
+
+/// Cloneable liveness probe consumed by the generic spawn loops.
+/// Whisper uses progress-only mode; yt-dlp can switch to observing merge
+/// output growth after its download phase completes.
+#[derive(Clone)]
+pub struct StallWatch {
+    progress: StallCounter,
+    merge_output: Option<PathBuf>,
+    merging: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StallWatch {
+    pub fn progress_only(progress: StallCounter) -> Self {
+        Self {
+            progress,
+            merge_output: None,
+            merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn with_merge_output(progress: StallCounter, merge_output: PathBuf) -> Self {
+        Self {
+            progress,
+            merge_output: Some(merge_output),
+            merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn mark_merging(&self) {
+        self.merging
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> StallSnapshot {
+        if self.merging.load(std::sync::atomic::Ordering::Relaxed) {
+            let activity = self
+                .merge_output
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            StallSnapshot {
+                phase: StallPhase::Merging,
+                activity,
+            }
+        } else {
+            let activity = self.progress.load(std::sync::atomic::Ordering::Relaxed);
+            StallSnapshot {
+                phase: if activity == 0 {
+                    StallPhase::Preparing
+                } else {
+                    StallPhase::Downloading
+                },
+                activity,
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct StallTracker {
+    last_phase: Option<StallPhase>,
+    last_activity: u64,
+    stale_ticks: u32,
+}
+
+impl StallTracker {
+    fn observe(&mut self, snapshot: StallSnapshot) -> bool {
+        if snapshot.phase == StallPhase::Preparing {
+            self.last_phase = None;
+            self.last_activity = 0;
+            self.stale_ticks = 0;
+            return false;
+        }
+
+        if self.last_phase != Some(snapshot.phase) {
+            self.last_phase = Some(snapshot.phase);
+            self.last_activity = snapshot.activity;
+            self.stale_ticks = 0;
+            return false;
+        }
+
+        if snapshot.activity != self.last_activity {
+            self.last_activity = snapshot.activity;
+            self.stale_ticks = 0;
+            return false;
+        }
+
+        self.stale_ticks += 1;
+        self.stale_ticks >= STALL_MAX_TICKS
+    }
+}
 
 // Stall watchdog tuning. The watchdog ARMS only after the counter first moves
 // (download actually started), so the legitimately-silent, sometimes
@@ -67,7 +172,7 @@ pub async fn run_sidecar_env<F>(
     bin_name: &str,
     args: &[&str],
     extra_env: &[(&str, &str)],
-    stall: Option<StallCounter>,
+    stall: Option<StallWatch>,
     stream_stdout: bool,
     mut on_output: F,
     cancel: Option<&CancellationToken>,
@@ -117,8 +222,7 @@ where
     let stall_enabled = stall.is_some();
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(STALL_TICK_SECS));
     ticker.tick().await; // consume the immediate first tick
-    let mut last_count = 0u64;
-    let mut stale_ticks = 0u32;
+    let mut stall_tracker = StallTracker::default();
 
     // Main event loop. Watch child output, the cancel token (so a ✕ click kills
     // the child immediately), AND the stall watchdog tick.
@@ -138,21 +242,10 @@ where
                 break;
             }
             _ = ticker.tick(), if stall_enabled => {
-                let c = stall.as_ref().unwrap().load(std::sync::atomic::Ordering::Relaxed);
-                // Only arm once progress has started (c > 0) — never kill the
-                // silent sigsolver/准备中 phase.
-                if c > 0 {
-                    if c == last_count {
-                        stale_ticks += 1;
-                    } else {
-                        stale_ticks = 0;
-                        last_count = c;
-                    }
-                    if stale_ticks >= STALL_MAX_TICKS {
-                        let _ = child.kill();
-                        stalled = true;
-                        break;
-                    }
+                if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
+                    let _ = child.kill();
+                    stalled = true;
+                    break;
                 }
             }
             ev = rx.recv() => {
@@ -280,7 +373,7 @@ fn handle_event<F: FnMut(&str)>(
 pub async fn run_external_with_callback<F>(
     exe: &Path,
     args: &[&str],
-    stall: Option<StallCounter>,
+    stall: Option<StallWatch>,
     stream_stdout: bool,
     mut on_output: F,
     cancel: Option<&CancellationToken>,
@@ -319,8 +412,7 @@ where
     let stall_enabled = stall.is_some();
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(STALL_TICK_SECS));
     ticker.tick().await; // consume the immediate first tick
-    let mut last_count = 0u64;
-    let mut stale_ticks = 0u32;
+    let mut stall_tracker = StallTracker::default();
 
     // Read both pipes concurrently, watch for cancellation, until both
     // are EOF (which happens when the child exits). Then child.wait()
@@ -342,22 +434,13 @@ where
                 return Err(AppError::Cancelled);
             }
             _ = ticker.tick(), if stall_enabled => {
-                let c = stall.as_ref().unwrap().load(std::sync::atomic::Ordering::Relaxed);
-                if c > 0 {
-                    if c == last_count {
-                        stale_ticks += 1;
-                    } else {
-                        stale_ticks = 0;
-                        last_count = c;
-                    }
-                    if stale_ticks >= STALL_MAX_TICKS {
-                        let _ = child.kill().await;
-                        return Err(AppError::Subprocess(format!(
-                            "{} stalled — no progress for ~{}s",
-                            exe.display(),
-                            STALL_TICK_SECS * STALL_MAX_TICKS as u64
-                        )));
-                    }
+                if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
+                    let _ = child.kill().await;
+                    return Err(AppError::Subprocess(format!(
+                        "{} stalled — no progress for ~{}s",
+                        exe.display(),
+                        STALL_TICK_SECS * STALL_MAX_TICKS as u64
+                    )));
                 }
             }
             r = stdout.read(&mut buf_out), if !stdout_done => {
@@ -429,6 +512,70 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snapshot(phase: StallPhase, activity: u64) -> StallSnapshot {
+        StallSnapshot { phase, activity }
+    }
+
+    #[test]
+    fn preparing_never_stalls() {
+        let mut tracker = StallTracker::default();
+
+        for _ in 0..(STALL_MAX_TICKS * 2) {
+            assert!(!tracker.observe(snapshot(StallPhase::Preparing, 0)));
+        }
+    }
+
+    #[test]
+    fn downloading_stalls_after_eight_unchanged_samples() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+        }
+        assert!(tracker.observe(snapshot(StallPhase::Downloading, 1)));
+    }
+
+    #[test]
+    fn merge_growth_resets_stale_samples() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+        }
+
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 20)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 20)));
+        }
+    }
+
+    #[test]
+    fn merge_stalls_after_eight_unchanged_sizes() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+        }
+        assert!(tracker.observe(snapshot(StallPhase::Merging, 10)));
+    }
+
+    #[test]
+    fn phase_change_resets_the_baseline() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+        }
+
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 0)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 0)));
+        }
+        assert!(tracker.observe(snapshot(StallPhase::Merging, 0)));
+    }
 
     #[test]
     fn stdout_is_retained_and_streamed_when_enabled() {

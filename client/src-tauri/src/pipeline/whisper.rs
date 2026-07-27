@@ -1,7 +1,7 @@
 use crate::core::paths;
 use crate::core::progress::{emit, GpuDevice, PipelineEvent};
 use crate::error::{AppError, AppResult};
-use crate::pipeline::spawn::run_sidecar_env;
+use crate::pipeline::spawn::{run_sidecar_env, StallWatch};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager};
@@ -678,7 +678,7 @@ async fn run_whisper_once(
         "whisper-cli",
         &whisper_args,
         env,
-        Some(progress_count.clone()),
+        Some(StallWatch::progress_only(progress_count.clone())),
         false,
         move |chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain

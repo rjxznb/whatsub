@@ -510,7 +510,9 @@ pub async fn download(
             run_external_with_callback(
                 &appdata_path,
                 &arg_refs,
-                Some(progress_count.clone()),
+                Some(crate::pipeline::spawn::StallWatch::progress_only(
+                    progress_count.clone(),
+                )),
                 true,
                 callback,
                 cancel,
@@ -522,7 +524,9 @@ pub async fn download(
                 "yt-dlp",
                 &arg_refs,
                 &[],
-                Some(progress_count.clone()),
+                Some(crate::pipeline::spawn::StallWatch::progress_only(
+                    progress_count.clone(),
+                )),
                 true,
                 callback,
                 cancel,

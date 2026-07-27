@@ -14,6 +14,12 @@ use tokio_util::sync::CancellationToken;
 pub type StallCounter = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StallPhase {
     Preparing,
     Downloading,
@@ -140,7 +146,7 @@ pub async fn run_sidecar<F>(
     app: &AppHandle,
     bin_name: &str,
     args: &[&str],
-    on_stderr_line: F,
+    mut on_stderr_line: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
@@ -153,15 +159,16 @@ where
         &[],
         None,
         false,
-        on_stderr_line,
+        move |_stream, chunk| on_stderr_line(chunk),
         cancel,
     )
     .await
 }
 
 /// Like [`run_sidecar`] but injects extra environment variables into the child
-/// process. `stream_stdout` additionally sends stdout chunks to the same callback
-/// while still retaining them in the returned string. Used by yt-dlp because its
+/// process. `stream_stdout` additionally sends stdout chunks to the callback
+/// with an [`OutputStream`] tag while still retaining them in the returned
+/// string. Used by yt-dlp because its
 /// normal extraction/progress messages are stdout, while warnings/errors are
 /// stderr. Whisper keeps this disabled because its callback contract is stderr.
 /// The extra environment is used by whisper.rs to pin the Vulkan device via
@@ -178,7 +185,7 @@ pub async fn run_sidecar_env<F>(
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
-    F: FnMut(&str),
+    F: FnMut(OutputStream, &str),
 {
     let mut cmd = app
         .shell()
@@ -320,7 +327,7 @@ where
 }
 
 /// Returns true when the event loop should exit (Terminated arrived).
-fn handle_event<F: FnMut(&str)>(
+fn handle_event<F: FnMut(OutputStream, &str)>(
     event: CommandEvent,
     stdout: &mut String,
     stderr_tail: &mut std::collections::VecDeque<String>,
@@ -334,13 +341,13 @@ fn handle_event<F: FnMut(&str)>(
             let chunk = String::from_utf8_lossy(&bytes).to_string();
             stdout.push_str(&chunk);
             if stream_stdout {
-                on_output(&chunk);
+                on_output(OutputStream::Stdout, &chunk);
             }
             false
         }
         CommandEvent::Stderr(bytes) => {
             let chunk = String::from_utf8_lossy(&bytes).to_string();
-            on_output(&chunk);
+            on_output(OutputStream::Stderr, &chunk);
             for line in chunk.lines() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -379,7 +386,7 @@ pub async fn run_external_with_callback<F>(
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
-    F: FnMut(&str),
+    F: FnMut(OutputStream, &str),
 {
     let mut cmd = tokio::process::Command::new(exe);
     cmd.args(args)
@@ -450,7 +457,7 @@ where
                         stdout_buf.extend_from_slice(&buf_out[..n]);
                         if stream_stdout {
                             let chunk = String::from_utf8_lossy(&buf_out[..n]).to_string();
-                            on_output(&chunk);
+                            on_output(OutputStream::Stdout, &chunk);
                         }
                     },
                     Err(_) => stdout_done = true,
@@ -461,7 +468,7 @@ where
                     Ok(0) => stderr_done = true,
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf_err[..n]).to_string();
-                        on_output(&chunk);
+                        on_output(OutputStream::Stderr, &chunk);
                         for line in chunk.lines() {
                             let t = line.trim();
                             if t.is_empty() { continue; }
@@ -578,10 +585,32 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_backed_watch_observes_merge_file_growth() {
+        let path = std::env::temp_dir().join(format!(
+            "whatsub-stall-watch-{}-{}.temp.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let watch = StallWatch::with_merge_output(counter, path.clone());
+
+        assert_eq!(watch.snapshot().phase, StallPhase::Preparing);
+        watch.mark_merging();
+        assert_eq!(watch.snapshot().activity, 0);
+        std::fs::write(&path, b"12345").unwrap();
+        assert_eq!(watch.snapshot().activity, 5);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn stdout_is_retained_and_streamed_when_enabled() {
         let mut stdout = String::new();
         let mut stderr_tail = std::collections::VecDeque::new();
-        let mut streamed = Vec::<String>::new();
+        let mut streamed = Vec::<(OutputStream, String)>::new();
         let mut exit_code = None;
 
         let terminated = handle_event(
@@ -590,13 +619,19 @@ mod tests {
             &mut stderr_tail,
             20,
             true,
-            &mut |chunk| streamed.push(chunk.to_string()),
+            &mut |stream, chunk| streamed.push((stream, chunk.to_string())),
             &mut exit_code,
         );
 
         assert!(!terminated);
         assert_eq!(stdout, "[youtube] Downloading webpage\n");
-        assert_eq!(streamed, vec!["[youtube] Downloading webpage\n"]);
+        assert_eq!(
+            streamed,
+            vec![(
+                OutputStream::Stdout,
+                "[youtube] Downloading webpage\n".to_string()
+            )]
+        );
         assert!(stderr_tail.is_empty());
     }
 
@@ -604,7 +639,7 @@ mod tests {
     fn stdout_is_only_retained_when_streaming_is_disabled() {
         let mut stdout = String::new();
         let mut stderr_tail = std::collections::VecDeque::new();
-        let mut streamed = Vec::<String>::new();
+        let mut streamed = Vec::<(OutputStream, String)>::new();
         let mut exit_code = None;
 
         handle_event(
@@ -613,7 +648,7 @@ mod tests {
             &mut stderr_tail,
             20,
             false,
-            &mut |chunk| streamed.push(chunk.to_string()),
+            &mut |stream, chunk| streamed.push((stream, chunk.to_string())),
             &mut exit_code,
         );
 

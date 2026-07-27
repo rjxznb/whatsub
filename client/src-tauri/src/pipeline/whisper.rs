@@ -680,7 +680,7 @@ async fn run_whisper_once(
         env,
         Some(StallWatch::progress_only(progress_count.clone())),
         false,
-        move |chunk| {
+        move |_stream, chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
             // multiple lines. emit_log / detect_backend already split
             // internally; parse_progress's `.find("progress =")` only

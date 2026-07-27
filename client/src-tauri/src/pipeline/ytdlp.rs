@@ -1,7 +1,9 @@
 use crate::commands::yt_dlp::resolve_appdata_yt_dlp;
 use crate::core::progress::{emit, PipelineEvent};
 use crate::error::AppResult;
-use crate::pipeline::spawn::{run_external_with_callback, run_sidecar_env, StallWatch};
+use crate::pipeline::spawn::{
+    run_external_with_callback, run_sidecar_env, OutputStream, StallWatch,
+};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
@@ -442,14 +444,16 @@ pub async fn download(
         // growing source.mp4 once yt-dlp announces its ffmpeg merge phase.
         let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let progress_count_cb = progress_count.clone();
-        let stall_watch =
-            StallWatch::with_merge_output(progress_count.clone(), PathBuf::from(&video_path));
+        let stall_watch = StallWatch::with_merge_output(
+            progress_count.clone(),
+            merge_temp_path(Path::new(&video_path)),
+        );
         let stall_watch_cb = stall_watch.clone();
         let mut merge_start_detector = MergeStartDetector::default();
         // Common stderr callback for both the bundled-sidecar path and
         // the AppData-direct path. Defined here so it's identical in
         // semantics (logs / progress / sub-step detection).
-        let callback = move |chunk: &str| {
+        let callback = move |stream: OutputStream, chunk: &str| {
             // run_sidecar hands us raw stderr CHUNKS (possibly
             // multi-line). emit_log already iterates `.lines()`
             // internally; parse_progress needs the same — its
@@ -460,7 +464,7 @@ pub async fn download(
             // is lost, so the UI never leaves "准备中" until
             // ExtractingAudio fires.
             emit_log(chunk);
-            if merge_start_detector.push(chunk) {
+            if observe_merge_chunk(&mut merge_start_detector, stream, chunk) {
                 stall_watch_cb.mark_merging();
             }
             for actual_line in chunk.lines() {
@@ -665,6 +669,17 @@ fn is_merge_start_line(line: &str) -> bool {
     trimmed.starts_with("[Merger]") && trimmed.contains("Merging formats into")
 }
 
+/// Match yt-dlp's `prepend_extension(filename, "temp")` naming used by
+/// `FFmpegMergerPP`: `source.mp4` becomes `source.temp.mp4`.
+fn merge_temp_path(output: &Path) -> PathBuf {
+    let mut extension = std::ffi::OsString::from("temp");
+    if let Some(original) = output.extension() {
+        extension.push(".");
+        extension.push(original);
+    }
+    output.with_extension(extension)
+}
+
 #[derive(Default)]
 struct MergeStartDetector {
     pending: String,
@@ -699,6 +714,14 @@ impl MergeStartDetector {
     }
 }
 
+fn observe_merge_chunk(
+    detector: &mut MergeStartDetector,
+    stream: OutputStream,
+    chunk: &str,
+) -> bool {
+    stream == OutputStream::Stdout && detector.push(chunk)
+}
+
 /// Prepare a retry after the spawn watchdog kills a stalled process.
 /// Only the final merged output is removed; yt-dlp's `.part` and fragment
 /// cache remain available for `--continue` on the next process attempt.
@@ -711,6 +734,7 @@ fn prepare_stall_retry(
     if !message.contains("stalled") || retries >= max_retries {
         return false;
     }
+    let _ = std::fs::remove_file(merge_temp_path(output));
     let _ = std::fs::remove_file(output);
     true
 }
@@ -854,19 +878,54 @@ mod tests {
     }
 
     #[test]
+    fn stderr_does_not_corrupt_split_stdout_merger_line() {
+        let mut detector = MergeStartDetector::default();
+        assert!(!observe_merge_chunk(
+            &mut detector,
+            OutputStream::Stdout,
+            "[Merger] Merg"
+        ));
+        assert!(!observe_merge_chunk(
+            &mut detector,
+            OutputStream::Stderr,
+            "WARNING: unrelated stderr\n"
+        ));
+        assert!(observe_merge_chunk(
+            &mut detector,
+            OutputStream::Stdout,
+            "ing formats into \"source.mp4\"\n"
+        ));
+    }
+
+    #[test]
     fn stall_retry_removes_only_final_output() {
         let dir = unique_temp_dir("stall-cleanup");
         std::fs::create_dir_all(&dir).unwrap();
         let output = dir.join("source.mp4");
+        let merge_temp = dir.join("source.temp.mp4");
         let part = dir.join("source.f137.mp4.part");
         std::fs::write(&output, b"partial merge").unwrap();
+        std::fs::write(&merge_temp, b"ffmpeg partial merge").unwrap();
         std::fs::write(&part, b"download cache").unwrap();
 
         assert!(prepare_stall_retry("yt-dlp stalled", 0, 5, &output));
         assert!(!output.exists());
+        assert!(!merge_temp.exists());
         assert!(part.exists());
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn merge_temp_path_matches_yt_dlp_prepend_extension() {
+        assert_eq!(
+            merge_temp_path(Path::new("downloads/source.mp4")),
+            PathBuf::from("downloads/source.temp.mp4")
+        );
+        assert_eq!(
+            merge_temp_path(Path::new("downloads/source")),
+            PathBuf::from("downloads/source.temp")
+        );
     }
 
     #[test]

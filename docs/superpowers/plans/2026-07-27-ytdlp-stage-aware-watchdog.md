@@ -4,7 +4,7 @@
 
 **Goal:** Prevent valid long ffmpeg merges from being killed as stalled, retain detection of genuinely frozen downloads/merges, and guarantee MP4-compatible separate audio selection.
 
-**Architecture:** Extend the shared spawn watchdog input from a bare progress counter to a cloneable `StallWatch` that produces phase-aware activity snapshots. yt-dlp marks the transition to merging from its machine-stable merger log and supplies `source.mp4` as the merge liveness probe; Whisper receives a progress-only watch so its behavior is unchanged. Keep retry cleanup and format selection in yt-dlp as small testable helpers.
+**Architecture:** Extend the shared spawn watchdog input from a bare progress counter to a cloneable `StallWatch` that produces phase-aware activity snapshots. yt-dlp marks the transition to merging from its machine-stable stdout merger log and supplies the actual `source.temp.mp4` ffmpeg output as the merge liveness probe; Whisper receives a progress-only watch so its behavior is unchanged. Keep retry cleanup and format selection in yt-dlp as small testable helpers.
 
 **Tech Stack:** Rust, Tokio, Tauri shell sidecars, yt-dlp, ffmpeg, built-in Rust unit tests.
 
@@ -117,8 +117,8 @@ fn detects_yt_dlp_merger_start() {
 
 #[test]
 fn stall_retry_removes_only_final_output() {
-    // Create source.mp4 and source.f137.mp4.part in a unique temp directory.
-    // Assert helper returns true, removes source.mp4, and preserves the part.
+    // Create source.mp4, source.temp.mp4, and source.f137.mp4.part.
+    // Assert helper removes both merge outputs and preserves the part.
 }
 
 #[test]

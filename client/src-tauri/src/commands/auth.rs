@@ -440,11 +440,19 @@ mod tests {
     use std::{
         cell::RefCell,
         future::ready,
-        io::{Read, Write},
-        net::TcpListener,
-        thread::JoinHandle,
-        time::Duration,
+        io::{self, Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::mpsc,
+        thread::{self, JoinHandle},
+        time::{Duration, Instant},
     };
+
+    const LOCAL_SERVER_ACCEPT_DEADLINE: Duration = Duration::from_secs(2);
+    const LOCAL_SERVER_IO_TIMEOUT: Duration = Duration::from_secs(2);
+    const LOCAL_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+    const STALLED_RESPONSE_DELAY: Duration = Duration::from_secs(2);
+
+    type TestServer = JoinHandle<io::Result<()>>;
 
     fn local_test_client(timeout: Duration) -> Client {
         Client::builder()
@@ -454,28 +462,104 @@ mod tests {
             .expect("localhost test client should build")
     }
 
-    fn spawn_raw_http_response(response: Vec<u8>) -> (String, JoinHandle<()>) {
+    fn spawn_local_server(
+        handler: impl FnOnce(TcpStream) -> io::Result<()> + Send + 'static,
+    ) -> (String, TestServer) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("localhost listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("localhost listener should become nonblocking");
         let address = listener
             .local_addr()
             .expect("localhost listener should have an address");
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("test request should connect");
-            let mut request = [0_u8; 2048];
-            let _ = stream.read(&mut request);
-            stream
-                .write_all(&response)
-                .expect("test response should write");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + LOCAL_SERVER_ACCEPT_DEADLINE;
+            loop {
+                match listener.accept() {
+                    Ok((stream, _)) => return handler(stream),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Ok(());
+                        }
+                        thread::sleep(LOCAL_SERVER_POLL_INTERVAL);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         });
         (format!("http://{address}/auth-test"), server)
     }
 
-    fn spawn_json_response(status: &str, body: &str) -> (String, JoinHandle<()>) {
+    fn configure_test_stream(stream: &TcpStream) -> io::Result<()> {
+        stream.set_read_timeout(Some(LOCAL_SERVER_IO_TIMEOUT))?;
+        stream.set_write_timeout(Some(LOCAL_SERVER_IO_TIMEOUT))
+    }
+
+    fn read_test_request(stream: &mut TcpStream) -> io::Result<bool> {
+        let mut request = [0_u8; 2048];
+        match stream.read(&mut request) {
+            Ok(0) => Ok(false),
+            Ok(_) => Ok(true),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn spawn_raw_http_response(response: Vec<u8>) -> (String, TestServer) {
+        spawn_local_server(move |mut stream| {
+            configure_test_stream(&stream)?;
+            if read_test_request(&mut stream)? {
+                stream.write_all(&response)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn spawn_json_response(status: &str, body: &str) -> (String, TestServer) {
         let response = format!(
             "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         spawn_raw_http_response(response.into_bytes())
+    }
+
+    fn join_test_server(server: TestServer) {
+        server
+            .join()
+            .expect("test server thread should not panic")
+            .expect("test server should complete without an I/O error");
+    }
+
+    fn assert_server_exits_within(server: TestServer, timeout: Duration) {
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let waiter = thread::spawn(move || {
+            finished_tx
+                .send(server.join())
+                .expect("test server completion receiver should remain open");
+        });
+        let result = finished_rx
+            .recv_timeout(timeout)
+            .expect("test server should exit within its bounded deadline");
+        waiter
+            .join()
+            .expect("test server waiter thread should not panic");
+        result
+            .expect("test server thread should not panic")
+            .expect("test server should complete without an I/O error");
+    }
+
+    #[test]
+    fn raw_http_server_exits_when_no_client_connects() {
+        let (_url, server) = spawn_raw_http_response(b"HTTP/1.1 200 OK\r\n\r\n".to_vec());
+
+        assert_server_exits_within(server, Duration::from_secs(5));
     }
 
     #[test]
@@ -492,22 +576,20 @@ mod tests {
 
     #[tokio::test]
     async fn reqwest_timeout_maps_to_uncertain() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("localhost listener should bind");
-        let address = listener
-            .local_addr()
-            .expect("localhost listener should have an address");
-        let server = std::thread::spawn(move || {
-            let (_stream, _) = listener.accept().expect("test request should connect");
-            std::thread::sleep(Duration::from_millis(200));
+        let (url, server) = spawn_local_server(|mut stream| {
+            configure_test_stream(&stream)?;
+            let _ = read_test_request(&mut stream)?;
+            thread::sleep(STALLED_RESPONSE_DELAY);
+            Ok(())
         });
 
-        let error = local_test_client(Duration::from_millis(50))
-            .get(format!("http://{address}/auth-test"))
+        let result = local_test_client(Duration::from_millis(250))
+            .get(url)
             .send()
-            .await
-            .expect_err("stalled localhost response should time out");
-        server.join().expect("test server should exit");
+            .await;
+        join_test_server(server);
 
+        let error = result.expect_err("stalled localhost response should time out");
         assert!(error.is_timeout());
         assert_eq!(AuthHttpError::from_send(&error), AuthHttpError::Uncertain);
     }
@@ -522,7 +604,7 @@ mod tests {
             "{}".to_string(),
         )
         .await;
-        server.join().expect("test server should exit");
+        join_test_server(server);
 
         let (status, body) = result.expect("HTTP errors are transport successes");
         assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
@@ -539,7 +621,7 @@ mod tests {
             "{}".to_string(),
         )
         .await;
-        server.join().expect("test server should exit");
+        join_test_server(server);
 
         assert_eq!(result.unwrap_err(), AuthHttpError::Protocol);
     }
@@ -563,7 +645,7 @@ mod tests {
             "{}".to_string(),
         )
         .await;
-        server.join().expect("test server should exit");
+        join_test_server(server);
 
         assert_eq!(result.unwrap_err(), AuthHttpError::Uncertain);
     }

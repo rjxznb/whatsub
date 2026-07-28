@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
@@ -17,32 +17,61 @@ static ANALYSIS_SAVE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_ne
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveAnalysisOutcome {
-    applied: bool,
+    pub(crate) applied: bool,
+    pub(crate) revision: Option<u64>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisGenerationState {
+    version: u8,
+    transcript_fingerprint: String,
+    deleted: bool,
     revision: Option<u64>,
+}
+
+impl AnalysisGenerationState {
+    fn active(fingerprint: &str, revision: u64) -> Self {
+        Self {
+            version: 1,
+            transcript_fingerprint: fingerprint.to_owned(),
+            deleted: false,
+            revision: Some(revision),
+        }
+    }
+
+    fn tombstone(fingerprint: &str, revision: Option<u64>) -> Self {
+        Self {
+            version: 1,
+            transcript_fingerprint: fingerprint.to_owned(),
+            deleted: true,
+            revision,
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn save_analysis(
     video_id: String,
     analysis: Value,
-    reset_generation: Option<bool>,
+    expected_generation: Option<String>,
 ) -> AppResult<SaveAnalysisOutcome> {
     let path = paths::video_dir(&video_id)?.join("analysis.json");
-    save_analysis_path_for_generation(&path, analysis, reset_generation.unwrap_or(false)).await
+    save_analysis_path_for_generation(&path, analysis, expected_generation.as_deref()).await
 }
 
 #[cfg(test)]
 async fn save_analysis_path(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
-    save_analysis_path_for_generation(path, analysis, false).await
+    save_analysis_path_for_generation(path, analysis, None).await
 }
 
 async fn save_analysis_path_for_generation(
     path: &Path,
     analysis: Value,
-    reset_generation: bool,
+    expected_generation: Option<&str>,
 ) -> AppResult<SaveAnalysisOutcome> {
     let _guard = ANALYSIS_SAVE_GATE.lock().await;
-    save_analysis_value_for_generation(path, analysis, reset_generation)
+    save_analysis_value_for_generation(path, analysis, expected_generation)
 }
 
 #[derive(Clone, Copy)]
@@ -61,18 +90,18 @@ fn analysis_version(analysis: &Value) -> Option<AnalysisVersion<'_>> {
 
 #[cfg(test)]
 fn save_analysis_value(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
-    save_analysis_value_for_generation(path, analysis, false)
+    save_analysis_value_for_generation(path, analysis, None)
 }
 
 fn save_analysis_value_for_generation(
     path: &Path,
     analysis: Value,
-    reset_generation: bool,
+    expected_generation: Option<&str>,
 ) -> AppResult<SaveAnalysisOutcome> {
     save_analysis_value_for_generation_with_replacer(
         path,
         analysis,
-        reset_generation,
+        expected_generation,
         replace_analysis_file,
     )
 }
@@ -86,13 +115,13 @@ fn save_analysis_value_with_replacer<F>(
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
 {
-    save_analysis_value_for_generation_with_replacer(path, analysis, false, replacer)
+    save_analysis_value_for_generation_with_replacer(path, analysis, None, replacer)
 }
 
 fn save_analysis_value_for_generation_with_replacer<F>(
     path: &Path,
     analysis: Value,
-    reset_generation: bool,
+    expected_generation: Option<&str>,
     replacer: F,
 ) -> AppResult<SaveAnalysisOutcome>
 where
@@ -101,6 +130,7 @@ where
     let temporary = path.with_extension("json.tmp");
     let backup = path.with_extension("json.bak");
     recover_interrupted_replacement(path, &temporary, &backup)?;
+    let state = read_generation_state_for_mutation(path)?;
 
     let incoming_version = analysis_version(&analysis);
     let current_analysis = if path.exists() {
@@ -110,22 +140,133 @@ where
         None
     };
     let current_version = current_analysis.as_ref().and_then(analysis_version);
+    let authoritative_fingerprint = state
+        .as_ref()
+        .map(|state| state.transcript_fingerprint.as_str())
+        .or_else(|| current_version.map(|version| version.fingerprint));
+    let visible_current_version = current_version.filter(|current| {
+        !state.as_ref().is_some_and(|state| state.deleted)
+            && authoritative_fingerprint == Some(current.fingerprint)
+    });
+    let current_revision = visible_current_version
+        .map(|version| version.revision)
+        .or_else(|| state.as_ref().and_then(|state| state.revision));
 
-    if let Some(current) = current_version {
-        let applies = match incoming_version {
-            Some(incoming) if incoming.fingerprint == current.fingerprint => {
-                incoming.revision > current.revision
-            }
-            Some(incoming) => reset_generation && incoming.revision == 0,
-            None => false,
+    let reject = || {
+        Ok(SaveAnalysisOutcome {
+            applied: false,
+            revision: current_revision,
+        })
+    };
+
+    if let Some(expected) = expected_generation {
+        let Some(incoming) = incoming_version else {
+            return reject();
         };
-        if !applies {
-            return Ok(SaveAnalysisOutcome {
-                applied: false,
-                revision: Some(current.revision),
-            });
+        if incoming.revision != 0
+            || incoming.fingerprint == expected
+            || authoritative_fingerprint != Some(expected)
+        {
+            return reject();
+        }
+
+        // The generation record is authoritative and transitions first. If the
+        // process stops before analysis.json is replaced, readers hide the old
+        // generation and a normal save from the new generation can retry.
+        write_generation_state(
+            path,
+            &AnalysisGenerationState::active(incoming.fingerprint, incoming.revision),
+        )?;
+    } else {
+        if state.as_ref().is_some_and(|state| state.deleted) {
+            return reject();
+        }
+
+        if let Some(authoritative) = authoritative_fingerprint {
+            let Some(incoming) = incoming_version else {
+                return reject();
+            };
+            if incoming.fingerprint != authoritative {
+                return reject();
+            }
+        }
+
+        if let Some(current) = visible_current_version {
+            let Some(incoming) = incoming_version else {
+                return reject();
+            };
+            if incoming.revision <= current.revision {
+                return reject();
+            }
         }
     }
+
+    write_json_atomically_with_replacer(path, &analysis, replacer)?;
+
+    Ok(SaveAnalysisOutcome {
+        applied: true,
+        revision: incoming_version.map(|version| version.revision),
+    })
+}
+
+fn generation_state_path(analysis_path: &Path) -> PathBuf {
+    analysis_path.with_file_name("analysis.generation.json")
+}
+
+fn read_generation_state_for_mutation(
+    analysis_path: &Path,
+) -> AppResult<Option<AnalysisGenerationState>> {
+    let state_path = generation_state_path(analysis_path);
+    recover_interrupted_replacement(
+        &state_path,
+        &state_path.with_extension("json.tmp"),
+        &state_path.with_extension("json.bak"),
+    )?;
+    read_generation_state_file(&state_path)
+}
+
+fn read_generation_state_snapshot(
+    analysis_path: &Path,
+) -> AppResult<Option<AnalysisGenerationState>> {
+    let state_path = generation_state_path(analysis_path);
+    for candidate in [state_path.clone(), state_path.with_extension("json.bak")] {
+        if candidate.exists() {
+            return read_generation_state_file(&candidate);
+        }
+    }
+    Ok(None)
+}
+
+fn read_generation_state_file(path: &Path) -> AppResult<Option<AnalysisGenerationState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let state: AnalysisGenerationState = serde_json::from_str(&fs::read_to_string(path)?)?;
+    if state.version != 1 {
+        return Err(AppError::InvalidInput(format!(
+            "unsupported analysis generation state version {}",
+            state.version
+        )));
+    }
+    Ok(Some(state))
+}
+
+fn write_generation_state(analysis_path: &Path, state: &AnalysisGenerationState) -> AppResult<()> {
+    let value = serde_json::to_value(state)?;
+    write_json_atomically_with_replacer(
+        &generation_state_path(analysis_path),
+        &value,
+        replace_analysis_file,
+    )
+}
+
+fn write_json_atomically_with_replacer<F>(path: &Path, value: &Value, replacer: F) -> AppResult<()>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    let temporary = path.with_extension("json.tmp");
+    let backup = path.with_extension("json.bak");
+    recover_interrupted_replacement(path, &temporary, &backup)?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -137,7 +278,7 @@ where
             .truncate(true)
             .write(true)
             .open(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, &analysis)?;
+        serde_json::to_writer_pretty(&mut file, value)?;
         file.write_all(b"\n")?;
         file.flush()?;
         file.sync_all()?;
@@ -154,11 +295,7 @@ where
         return Err(error.into());
     }
     let _ = fs::remove_file(&backup);
-
-    Ok(SaveAnalysisOutcome {
-        applied: true,
-        revision: incoming_version.map(|version| version.revision),
-    })
+    Ok(())
 }
 
 fn recover_interrupted_replacement(
@@ -262,11 +399,26 @@ fn replace_analysis_file(temporary: &Path, destination: &Path) -> std::io::Resul
 #[tauri::command]
 pub fn load_analysis(video_id: String) -> AppResult<Option<Value>> {
     let path = paths::video_dir(&video_id)?.join("analysis.json");
+    load_analysis_path(&path)
+}
+
+fn load_analysis_path(path: &Path) -> AppResult<Option<Value>> {
+    let state = read_generation_state_snapshot(path)?;
+    if state.as_ref().is_some_and(|state| state.deleted) {
+        return Ok(None);
+    }
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path)?;
-    Ok(Some(serde_json::from_str(&raw)?))
+    let analysis: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    if let Some(state) = state {
+        if analysis_version(&analysis).map(|version| version.fingerprint)
+            != Some(state.transcript_fingerprint.as_str())
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(analysis))
 }
 
 /// Remove a video's analysis.json. Used by the "重新解析" flow so a
@@ -281,6 +433,36 @@ pub async fn delete_analysis(video_id: String) -> AppResult<()> {
 
 async fn delete_analysis_path(path: &Path) -> AppResult<()> {
     let _guard = ANALYSIS_SAVE_GATE.lock().await;
+    let state = read_generation_state_for_mutation(path)?;
+    recover_interrupted_replacement(
+        path,
+        &path.with_extension("json.tmp"),
+        &path.with_extension("json.bak"),
+    )?;
+    let current_analysis = if path.exists() {
+        Some(serde_json::from_str::<Value>(&fs::read_to_string(path)?)?)
+    } else {
+        None
+    };
+    let current_version = current_analysis.as_ref().and_then(analysis_version);
+    let fingerprint = state
+        .as_ref()
+        .map(|state| state.transcript_fingerprint.as_str())
+        .or_else(|| current_version.map(|version| version.fingerprint));
+    let revision = current_version
+        .filter(|version| Some(version.fingerprint) == fingerprint)
+        .map(|version| version.revision)
+        .or_else(|| state.as_ref().and_then(|state| state.revision));
+
+    if let Some(fingerprint) = fingerprint {
+        // Persist the retirement before removing the user-visible file. Loads
+        // treat this record as authoritative, including after process restart.
+        write_generation_state(
+            path,
+            &AnalysisGenerationState::tombstone(fingerprint, revision),
+        )?;
+    }
+
     for candidate in [
         path.to_path_buf(),
         path.with_extension("json.tmp"),
@@ -737,13 +919,49 @@ mod tests {
         let outcome = save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:new", 0, "new-generation"),
-            true,
+            Some("sha256:old"),
         )
         .unwrap();
 
         assert!(outcome.applied);
         assert_eq!(outcome.revision, Some(0));
         assert_eq!(read_analysis(&path)["marker"], "new-generation");
+
+        let newer = save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:new", 2, "new-generation-revision-2"),
+        )
+        .unwrap();
+        let stale = save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:new", 1, "new-generation-stale"),
+        )
+        .unwrap();
+        assert!(newer.applied);
+        assert!(!stale.applied);
+        assert_eq!(read_analysis(&path)["marker"], "new-generation-revision-2");
+    }
+
+    #[test]
+    fn generation_transition_hides_old_analysis_until_new_save_arrives() {
+        let dir = TestDir::new("generation-transition-interrupted");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:old", 8, "old-generation"),
+        )
+        .unwrap();
+
+        write_generation_state(&path, &AnalysisGenerationState::active("sha256:new", 0)).unwrap();
+
+        assert!(load_analysis_path(&path).unwrap().is_none());
+        let retry = save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:new", 0, "new-generation-retry"),
+        )
+        .unwrap();
+        assert!(retry.applied);
+        assert_eq!(read_analysis(&path)["marker"], "new-generation-retry");
     }
 
     #[test]
@@ -758,7 +976,7 @@ mod tests {
         save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:new", 0, "new-generation"),
-            true,
+            Some("sha256:old"),
         )
         .unwrap();
 
@@ -771,6 +989,39 @@ mod tests {
         assert!(!stale.applied);
         assert_eq!(stale.revision, Some(0));
         assert_eq!(read_analysis(&path)["marker"], "new-generation");
+    }
+
+    #[test]
+    fn delayed_reset_cannot_overwrite_a_later_generation() {
+        let dir = TestDir::new("generation-delayed-reset");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:a", 8, "generation-a"),
+        )
+        .unwrap();
+        save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:b", 0, "generation-b"),
+            Some("sha256:a"),
+        )
+        .unwrap();
+        save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:c", 0, "generation-c"),
+            Some("sha256:b"),
+        )
+        .unwrap();
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:b", 0, "delayed-generation-b"),
+            Some("sha256:a"),
+        )
+        .unwrap();
+
+        assert!(!delayed.applied);
+        assert_eq!(read_analysis(&path)["marker"], "generation-c");
     }
 
     #[test]
@@ -865,6 +1116,41 @@ mod tests {
         drop(guard);
         delete.await.unwrap().unwrap();
         assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn late_save_after_delete_cannot_resurrect_retired_generation() {
+        let dir = TestDir::new("delete-generation-tombstone");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:retired", 4, "before-delete"),
+        )
+        .unwrap();
+
+        delete_analysis_path(&path).await.unwrap();
+        let tombstone = read_analysis(&generation_state_path(&path));
+        assert_eq!(tombstone["transcriptFingerprint"], "sha256:retired");
+        assert_eq!(tombstone["deleted"], true);
+        assert!(load_analysis_path(&path).unwrap().is_none());
+
+        let late = save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:retired", 5, "late-after-delete"),
+        )
+        .unwrap();
+
+        assert!(!late.applied);
+        assert!(!path.exists());
+
+        let reset = save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:future", 0, "after-delete-reset"),
+            Some("sha256:retired"),
+        )
+        .unwrap();
+        assert!(reset.applied);
+        assert_eq!(read_analysis(&path)["marker"], "after-delete-reset");
     }
 
     #[test]

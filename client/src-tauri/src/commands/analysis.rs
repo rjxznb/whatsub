@@ -19,6 +19,19 @@ pub fn begin_analysis_session(
 }
 
 #[tauri::command]
+pub fn begin_analysis_session_from_transcript(
+    video_id: String,
+    reset: bool,
+    expected_generation: Option<String>,
+) -> AppResult<Option<crate::commands::analysis_store::AnalysisTranscriptSessionStart>> {
+    crate::commands::analysis_store::begin_transcript_session(
+        &video_id,
+        reset,
+        expected_generation.as_deref(),
+    )
+}
+
+#[tauri::command]
 pub fn save_analysis_session(
     video_id: String,
     lease: String,

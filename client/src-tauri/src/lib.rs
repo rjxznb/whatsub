@@ -36,6 +36,7 @@ pub fn run() {
             commands::library::library_freeze_paths,
             commands::library::reveal_in_explorer,
             commands::analysis::begin_analysis_session,
+            commands::analysis::begin_analysis_session_from_transcript,
             commands::analysis::save_analysis_session,
             commands::analysis::end_analysis_session,
             commands::analysis::load_analysis,

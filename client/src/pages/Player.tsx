@@ -8,7 +8,7 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
 import { ExportVideoModal } from "../components/ExportVideoModal";
 import { subtitlesToSrt, sanitizeFilename } from "../utils/srt";
-import { useAnalysis } from "../store/analysis";
+import { useAnalysis, type AnalysisPhase } from "../store/analysis";
 import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { usePlayerState } from "../store/playerState";
@@ -23,10 +23,9 @@ import { AutoScrollIcon } from "../components/AutoScrollIcon";
 import { KeyPhraseList } from "../components/KeyPhraseList";
 import { ProgressBanner } from "../components/ProgressBanner";
 import { TinyModelHint } from "../components/TinyModelHint";
-import { parseSrt } from "../llm/parseSrt";
 import {
   executeAnalysisSession,
-  openAnalysisSession,
+  openStoredAnalysisSession,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
 import { getProvider } from "../llm/providers";
@@ -46,6 +45,10 @@ import { LessonResumeBanner } from "../components/tutor/LessonResumeBanner";
 import { notify, confirmDialog } from "../store/appDialog";
 
 type Tab = "subtitles" | "keyPhrases";
+
+export function canEditSubtitles(phase: AnalysisPhase): boolean {
+  return phase !== "analyzing";
+}
 
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
@@ -132,6 +135,10 @@ export function Player() {
 
   const [editingSubtitle, setEditingSubtitle] = useState(false);
   const [tutorPreparing, setTutorPreparing] = useState(false);
+  const subtitleEditingAllowed = canEditSubtitles(analysis.phase);
+  useEffect(() => {
+    if (!subtitleEditingAllowed) setEditingSubtitle(false);
+  }, [subtitleEditingAllowed]);
 
   // Resizable split between video pane (left) and subtitle pane (right).
   // Persisted as a percentage in localStorage; clamped to 25%-80%.
@@ -230,7 +237,9 @@ export function Player() {
   const manualSaveTailRef = useRef<Promise<void>>(Promise.resolve());
 
   const persistManualEdits = () => {
+    if (!canEditSubtitles(useAnalysis.getState().phase)) return;
     manualSaveTailRef.current = manualSaveTailRef.current.then(async () => {
+      if (!canEditSubtitles(useAnalysis.getState().phase)) return;
       const session = sessionRef.current;
       const cues = cuesRef.current;
       if (!session || !cues) return;
@@ -330,7 +339,11 @@ export function Player() {
 
   const startAnalysis = () => {
     if (analysisRunRef.current) return;
-    const run = driveForegroundAnalysis();
+    // Lock editing synchronously, then wait for any edit already queued before
+    // taking the next AI checkpoint revision.  This prevents two candidates
+    // from being built from the same revision.
+    analysis.setPhase("analyzing");
+    const run = manualSaveTailRef.current.then(driveForegroundAnalysis);
     analysisRunRef.current = run;
     const clear = () => {
       if (analysisRunRef.current === run) analysisRunRef.current = null;
@@ -493,9 +506,24 @@ export function Player() {
         return;
       }
 
-      const srt = await invoke<string | null>("load_transcript", { videoId });
-      if (cancelled) return;
-      if (!srt) {
+      let stored;
+      try {
+        stored = await openStoredAnalysisSession(videoId);
+      } catch (error) {
+        if (!cancelled) {
+          analysis.setError(
+            error instanceof Error ? error.message : String(error),
+            false,
+            "analysis",
+          );
+        }
+        return;
+      }
+      if (cancelled) {
+        await stored?.session.close().catch(() => {});
+        return;
+      }
+      if (!stored) {
         const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
         if (cancelled) return;
         if (cached) {
@@ -514,26 +542,8 @@ export function Player() {
         return;
       }
 
-      const cues = parseSrt(srt);
+      const { cues, session } = stored;
       cuesRef.current = cues;
-      let session: PersistedAnalysisSession;
-      try {
-        session = await openAnalysisSession(videoId, cues);
-      } catch (error) {
-        if (!cancelled) {
-          analysis.setError(
-            error instanceof Error ? error.message : String(error),
-            false,
-            "analysis",
-          );
-        }
-        return;
-      }
-      if (cancelled) {
-        await session.close().catch(() => {});
-        return;
-      }
-
       sessionRef.current = session;
       analysis.startFor(videoId);
       analysis.setCommittedAnalysis(session.analysis, cues.length);
@@ -985,14 +995,17 @@ export function Player() {
                 </button>
                 <button
                   type="button"
+                  disabled={!subtitleEditingAllowed}
                   onClick={() => setEditingSubtitle((v) => !v)}
                   title={
-                    editingSubtitle
+                    !subtitleEditingAllowed
+                      ? "AI 正在解析并保存字幕，完成或暂停后可编辑"
+                      : editingSubtitle
                       ? "退出编辑模式"
                       : "进入编辑模式：修改文本、时间戳、增删、拖拽排序"
                   }
                   className={
-                    "text-xs px-2 py-1 rounded border transition-colors " +
+                    "text-xs px-2 py-1 rounded border transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
                     (editingSubtitle
                       ? "border-amber-500/50 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
                       : "border-zinc-700 text-zinc-400 hover:bg-zinc-800")
@@ -1010,7 +1023,7 @@ export function Player() {
                 currentIdx={currentIdx}
                 onJump={jump}
                 autoScroll={autoScrollSubtitle}
-                editing={editingSubtitle}
+                editing={editingSubtitle && subtitleEditingAllowed}
                 onChanged={persistManualEdits}
                 vocabMap={vocabMapForVideo}
                 videoId={videoId ?? ""}

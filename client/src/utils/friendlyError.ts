@@ -127,6 +127,17 @@ export function friendlyError(
     | string,
   sourceUrl?: string,
 ): FriendlyError {
+  // yt-dlp uses this exact marker for every extractor miss.  It is a
+  // deterministic capability error, not a cookie/network failure, so it must
+  // win before known-site login suggestions are attached.
+  if (/unsupported url/i.test(raw)) {
+    return {
+      title: "不支持该链接",
+      suggestion: "yt-dlp 暂不支持这个链接，请换成该平台可直接播放的视频页面链接。",
+      details: raw,
+    };
+  }
+
   const fe = classifyError(raw, phase);
 
   // Pattern detector already attached an action → that means a

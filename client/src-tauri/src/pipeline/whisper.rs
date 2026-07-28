@@ -131,6 +131,9 @@ impl WhisperRecovery {
             Err(AppError::Cancelled) => {
                 WhisperRecoveryDecision::Failed(AppError::Cancelled)
             }
+            Err(error) if crate::pipeline::spawn::is_sidecar_shutdown_unconfirmed(&error) => {
+                WhisperRecoveryDecision::Failed(error)
+            }
             Err(error) if should_fallback_to_cpu(&error, self.mode) => {
                 self.gpu_error = Some(error.to_string());
                 self.mode = WhisperRunMode::Cpu;
@@ -1058,6 +1061,24 @@ mod tests {
             recovery.handle_attempt(Err(AppError::Cancelled)),
             WhisperRecoveryDecision::Failed(AppError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn unconfirmed_shutdown_during_cpu_recovery_remains_structural() {
+        let mut recovery = WhisperRecovery::new(false);
+
+        assert!(matches!(
+            recovery.handle_attempt(Err(gpu_access_violation())),
+            WhisperRecoveryDecision::RetryOnCpu { .. }
+        ));
+        let terminal = recovery.handle_attempt(Err(
+            AppError::SidecarShutdownUnconfirmed("test channel closed".into()),
+        ));
+
+        let WhisperRecoveryDecision::Failed(error) = terminal else {
+            panic!("unconfirmed shutdown must be terminal");
+        };
+        assert!(crate::pipeline::spawn::is_sidecar_shutdown_unconfirmed(&error));
     }
 
     #[test]

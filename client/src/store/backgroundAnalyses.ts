@@ -2,11 +2,11 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import {
   executeAnalysisSession,
-  resetAnalysisSession,
+  openStoredAnalysisSession,
+  StaleAnalysisSessionError,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
 import { getProvider } from "../llm/providers";
-import { parseSrt } from "../llm/parseSrt";
 import { useSettings } from "./settings";
 import { useLibrary } from "./library";
 import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
@@ -46,6 +46,7 @@ interface BgRuntime {
   cues: SrtCue[] | null;
   controller: AbortController;
   disposition: RuntimeDisposition;
+  needsSessionReload: boolean;
   runner: Promise<void>;
 }
 
@@ -81,6 +82,7 @@ export function runInBackground(opts: RunInBackgroundOptions): void {
     cues: opts.cues,
     controller: new AbortController(),
     disposition: "background",
+    needsSessionReload: false,
     runner: Promise.resolve(),
   };
   runtimes.set(opts.videoId, runtime);
@@ -116,6 +118,7 @@ export function retranscribeAndAnalyzeInBackground(opts: RetranscribeBgOptions):
     cues: null,
     controller: new AbortController(),
     disposition: "background",
+    needsSessionReload: false,
     runner: Promise.resolve(),
   };
   runtimes.set(opts.videoId, runtime);
@@ -148,14 +151,16 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
     });
     if (runtime.controller.signal.aborted) return;
 
-    const srt = await invoke<string | null>("load_transcript", {
-      videoId: runtime.videoId,
-    });
-    if (!srt) throw new Error("找不到 transcript.srt — 重新转录可能失败了");
-    if (runtime.controller.signal.aborted) return;
+    const stored = await openStoredAnalysisSession(runtime.videoId, true);
+    if (!stored) throw new Error("找不到 transcript.srt — 重新转录可能失败了");
+    if (runtime.controller.signal.aborted) {
+      await stored.session.close().catch(() => {});
+      return;
+    }
 
-    runtime.cues = parseSrt(srt);
-    runtime.session = await resetAnalysisSession(runtime.videoId, runtime.cues);
+    runtime.cues = stored.cues;
+    runtime.session = stored.session;
+    runtime.needsSessionReload = false;
     if (runtime.controller.signal.aborted) return;
     publishAnalysis(runtime, runtime.session.analysis, "analyzing");
     await driveAnalysis(runtime);
@@ -243,12 +248,41 @@ function publishAnalysis(
 
 function failRuntime(runtime: BgRuntime, error: unknown): void {
   if (runtime.controller.signal.aborted) return;
+  // Once a lease is known stale, keep recovery in transcript-reopen mode
+  // across temporary load/open failures.  Clearing this bit while session is
+  // null would incorrectly route the next retry through Whisper.
+  runtime.needsSessionReload ||= error instanceof StaleAnalysisSessionError;
   updateJob(runtime.videoId, (job) => ({
     ...job,
     phase: "error",
     retryMessage: null,
     errorMessage: error instanceof Error ? error.message : String(error),
   }));
+}
+
+async function reopenStaleSessionAndContinue(runtime: BgRuntime): Promise<void> {
+  try {
+    const staleSession = runtime.session;
+    runtime.session = null;
+    await staleSession?.close().catch(() => {});
+    if (runtime.controller.signal.aborted || runtime.disposition !== "background") return;
+
+    const stored = await openStoredAnalysisSession(runtime.videoId);
+    if (!stored) throw new Error("找不到 transcript.srt — 无法恢复解析进度");
+    const { cues, session } = stored;
+    if (runtime.controller.signal.aborted || runtime.disposition !== "background") {
+      await session.close().catch(() => {});
+      return;
+    }
+
+    runtime.cues = cues;
+    runtime.session = session;
+    runtime.needsSessionReload = false;
+    publishAnalysis(runtime, session.analysis, "analyzing");
+    await driveAnalysis(runtime);
+  } catch (error) {
+    failRuntime(runtime, error);
+  }
 }
 
 /** Retry a failed background stage while preserving its lease/checkpoint. */
@@ -265,9 +299,11 @@ export function resumeBackgroundAnalysis(videoId: string): void {
     errorMessage: null,
     retryMessage: null,
   }));
-  runtime.runner = runtime.session
-    ? driveAnalysis(runtime)
-    : driveRetranscribeThenAnalyze(runtime);
+  runtime.runner = runtime.needsSessionReload || (runtime.mode === "analysis" && !runtime.session)
+    ? reopenStaleSessionAndContinue(runtime)
+    : runtime.session
+      ? driveAnalysis(runtime)
+      : driveRetranscribeThenAnalyze(runtime);
 }
 
 /** Cancel background work, then close its lease after the current task exits. */

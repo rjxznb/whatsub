@@ -6,12 +6,19 @@ import {
   type AnalysisRetryEvent,
 } from "./analyze";
 import { parsePersistedAnalysis, prepareAnalysis } from "./analysisCheckpoint";
+import { parseSrt } from "./parseSrt";
 import type { Provider } from "./providers/types";
 import type { CheckpointedAnalysis, SrtCue } from "./types";
 
 interface AnalysisSessionStart {
   lease: string;
   analysis: unknown | null;
+}
+
+interface AnalysisTranscriptSessionStart {
+  transcript: string;
+  transcriptGeneration: string;
+  session: AnalysisSessionStart;
 }
 
 type SessionSaveStatus = "applied" | "alreadyCurrent" | "rejected";
@@ -34,6 +41,11 @@ export interface PersistedAnalysisSession {
   readonly analysis: CheckpointedAnalysis;
   save(next: CheckpointedAnalysis): Promise<CheckpointedAnalysis>;
   close(): Promise<void>;
+}
+
+export interface StoredAnalysisSession {
+  cues: SrtCue[];
+  session: PersistedAnalysisSession;
 }
 
 export class StaleAnalysisSessionError extends Error {
@@ -80,6 +92,75 @@ export async function resetAnalysisSession(
   const release = await acquireLocalSessionSlot(videoId);
   try {
     return await beginPreparedSession(videoId, cues, await begin(videoId, true), release);
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+/**
+ * Read transcript.srt and issue its producer lease in one Rust-side critical
+ * section. The lease is also bound to the exact transcript generation, so a
+ * later cloud/local transcript replacement makes every old save stale.
+ */
+export async function openStoredAnalysisSession(
+  videoId: string,
+  reset = false,
+): Promise<StoredAnalysisSession | null> {
+  const release = await acquireLocalSessionSlot(videoId);
+  try {
+    const started = await beginFromTranscript(videoId, reset, null);
+    if (!started) {
+      release();
+      return null;
+    }
+
+    let cues = parseSrt(started.transcript);
+    if (reset) {
+      const session = await beginPreparedSession(
+        videoId,
+        cues,
+        started.session,
+        release,
+      );
+      return { cues, session };
+    }
+
+    let prepared: Awaited<ReturnType<typeof prepareAnalysis>>;
+    try {
+      prepared = await prepareAnalysis(cues, started.session.analysis);
+    } catch (error) {
+      await endIgnoringFailure(videoId, started.session.lease);
+      throw error;
+    }
+    if (prepared.reason !== "fingerprint-mismatch") {
+      const session = await createPreparedSession(
+        videoId,
+        cues,
+        started.session,
+        prepared,
+        release,
+      );
+      return { cues, session };
+    }
+
+    await end(videoId, started.session.lease);
+    const restarted = await beginFromTranscript(
+      videoId,
+      true,
+      started.transcriptGeneration,
+    );
+    if (!restarted) {
+      throw new Error(`transcript disappeared while opening analysis session for ${videoId}`);
+    }
+    cues = parseSrt(restarted.transcript);
+    const session = await beginPreparedSession(
+      videoId,
+      cues,
+      restarted.session,
+      release,
+    );
+    return { cues, session };
   } catch (error) {
     release();
     throw error;
@@ -196,6 +277,17 @@ async function validateCandidate(
 
 async function begin(videoId: string, reset: boolean): Promise<AnalysisSessionStart> {
   return invoke<AnalysisSessionStart>("begin_analysis_session", { videoId, reset });
+}
+
+async function beginFromTranscript(
+  videoId: string,
+  reset: boolean,
+  expectedGeneration: string | null,
+): Promise<AnalysisTranscriptSessionStart | null> {
+  return invoke<AnalysisTranscriptSessionStart | null>(
+    "begin_analysis_session_from_transcript",
+    { videoId, reset, expectedGeneration },
+  );
 }
 
 async function end(videoId: string, lease: string): Promise<void> {

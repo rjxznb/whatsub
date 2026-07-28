@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   executeAnalysisSession,
   openAnalysisSession,
+  openStoredAnalysisSession,
   StaleAnalysisSessionError,
 } from "./analysisSession";
 import { fingerprintTranscript } from "./analysisCheckpoint";
@@ -140,6 +141,59 @@ describe("immutable analysis sessions", () => {
         expect.objectContaining({ videoId: "changed", lease: "lease-reset" }),
       ],
     ]);
+  });
+
+  it("reopens a mismatched stored transcript only against the same generation", async () => {
+    const mismatched = await checkpointed(4, 1);
+    mismatched.checkpoint.transcriptFingerprint = "sha256:different";
+    const transcript = [
+      "1",
+      "00:00:00,000 --> 00:00:01,000",
+      "First",
+      "",
+      "2",
+      "00:00:01,000 --> 00:00:02,000",
+      "Second",
+    ].join("\n");
+    let begins = 0;
+    mockInvoke.mockImplementation(async (command, args) => {
+      if (command === "begin_analysis_session_from_transcript") {
+        begins += 1;
+        if (begins === 1) {
+          expect(args).toEqual({
+            videoId: "stored",
+            reset: false,
+            expectedGeneration: null,
+          });
+          return {
+            transcript,
+            transcriptGeneration: "sha256:file-old",
+            session: { lease: "lease-old", analysis: mismatched },
+          };
+        }
+        expect(args).toEqual({
+          videoId: "stored",
+          reset: true,
+          expectedGeneration: "sha256:file-old",
+        });
+        return {
+          transcript,
+          transcriptGeneration: "sha256:file-old",
+          session: { lease: "lease-reset", analysis: null },
+        };
+      }
+      if (command === "end_analysis_session") return undefined;
+      if (command === "save_analysis_session") {
+        expect(args).toMatchObject({ videoId: "stored", lease: "lease-reset" });
+        return { status: "applied", revision: 0 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const stored = await openStoredAnalysisSession("stored");
+
+    expect(stored?.cues).toEqual(cues);
+    expect(stored?.session.lease).toBe("lease-reset");
   });
 
   it("publishes a batch only after its checkpoint save succeeds", async () => {

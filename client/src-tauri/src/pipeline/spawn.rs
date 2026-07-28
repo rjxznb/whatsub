@@ -133,6 +133,10 @@ impl StallTracker {
 const STALL_TICK_SECS: u64 = 15;
 const STALL_MAX_TICKS: u32 = 8; // 8 × 15s = 120s of zero progress → stalled
 
+pub(crate) fn is_sidecar_shutdown_unconfirmed(error: &AppError) -> bool {
+    matches!(error, AppError::SidecarShutdownUnconfirmed(_))
+}
+
 /// Run a sidecar to completion, capturing stdout. Streams stderr to a callback
 /// for progress parsing AND retains a tail buffer that gets included in the
 /// error message on non-zero exit, so users see yt-dlp/ffmpeg/whisper's actual
@@ -243,14 +247,18 @@ where
         tokio::select! {
             biased;
             _ = cancel_fut => {
-                // Best-effort kill — the child may already have exited.
+                // `CommandChild::kill` only sends the termination request.
+                // Keep the job registered until this exact sidecar confirms
+                // that it has actually exited.
                 let _ = child.kill();
+                wait_for_sidecar_shutdown(&mut rx).await?;
                 cancelled = true;
                 break;
             }
             _ = ticker.tick(), if stall_enabled => {
                 if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
                     let _ = child.kill();
+                    wait_for_sidecar_shutdown(&mut rx).await?;
                     stalled = true;
                     break;
                 }
@@ -324,6 +332,30 @@ where
             )))
         }
     }
+}
+
+async fn wait_for_sidecar_shutdown(
+    rx: &mut tauri::async_runtime::Receiver<CommandEvent>,
+) -> AppResult<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match rx.recv().await {
+                Some(CommandEvent::Terminated(_)) => return Ok(()),
+                None => {
+                    return Err(AppError::SidecarShutdownUnconfirmed(
+                        "event channel closed before Terminated".to_string(),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        AppError::SidecarShutdownUnconfirmed(
+            "no Terminated event within 10s".to_string(),
+        )
+    })?
 }
 
 /// Returns true when the event loop should exit (Terminated arrived).
@@ -519,6 +551,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sidecar_shutdown_waits_for_the_terminated_event() {
+        let (tx, mut rx) = tauri::async_runtime::channel(2);
+        let mut waiting = Box::pin(wait_for_sidecar_shutdown(&mut rx));
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+
+        tx.send(CommandEvent::Terminated(
+            tauri_plugin_shell::process::TerminatedPayload {
+                code: None,
+                signal: Some(9),
+            },
+        ))
+        .await
+        .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn closed_sidecar_event_channel_is_not_exit_confirmation() {
+        let (tx, mut rx) = tauri::async_runtime::channel(1);
+        drop(tx);
+
+        let error = wait_for_sidecar_shutdown(&mut rx).await.unwrap_err();
+
+        assert!(is_sidecar_shutdown_unconfirmed(&error));
+        assert!(error.to_string().contains("closed before Terminated"));
+    }
 
     fn snapshot(phase: StallPhase, activity: u64) -> StallSnapshot {
         StallSnapshot { phase, activity }

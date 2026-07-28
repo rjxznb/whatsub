@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   cancelBackground,
   resumeBackgroundAnalysis,
@@ -15,9 +16,14 @@ import { StaleAnalysisSessionError } from "../llm/analysisSession";
 const mocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
   reload: vi.fn(async () => undefined),
+  openStoredAnalysisSession: vi.fn(),
 }));
 
 vi.mock("../llm/providers", () => ({ getProvider: mocks.getProvider }));
+vi.mock("../llm/analysisSession", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../llm/analysisSession")>();
+  return { ...actual, openStoredAnalysisSession: mocks.openStoredAnalysisSession };
+});
 vi.mock("./settings", () => ({
   useSettings: { getState: () => ({ settings: {} }) },
 }));
@@ -89,6 +95,8 @@ describe("background analysis lease handoff", () => {
     useBgAnalyses.setState({ jobs: {} });
     mocks.getProvider.mockReset();
     mocks.reload.mockClear();
+    mocks.openStoredAnalysisSession.mockReset();
+    vi.mocked(invoke).mockReset();
   });
 
   it("resumes offset 50 even when only 47 output subtitles exist", async () => {
@@ -202,14 +210,24 @@ describe("background analysis lease handoff", () => {
     expect(prompts[0]).toContain("GLOBAL keyPhrases summary");
   });
 
-  it("surfaces stale-lease rejection without reopening or replacing the session", async () => {
+  it("reopens from the persisted transcript after a stale lease", async () => {
     mocks.getProvider.mockReturnValue({
-      async *stream() {
-        yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+      async *stream(request: { userPrompt: string }) {
+        if (request.userPrompt.includes("GLOBAL keyPhrases summary")) {
+          yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
+        } else {
+          yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+        }
       },
     });
     const { session, close } = fakeSession(initialAnalysis(), () => {
       throw new StaleAnalysisSessionError("video-1");
+    });
+    const recovered = fakeSession(initialAnalysis("summary", 1));
+    const recoveredCues = [{ index: 1, time: 0, endTime: 1, text: "Recovered cue" }];
+    mocks.openStoredAnalysisSession.mockResolvedValue({
+      cues: recoveredCues,
+      session: recovered.session,
     });
     runInBackground({
       videoId: "video-1",
@@ -220,10 +238,53 @@ describe("background analysis lease handoff", () => {
     });
     await waitFor(() => expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("error"));
 
-    expect(close).not.toHaveBeenCalled();
     resumeBackgroundAnalysis("video-1");
+    await waitFor(() => expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("done"));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(mocks.openStoredAnalysisSession).toHaveBeenCalledWith("video-1");
+  });
+
+  it("retries a failed stale-session reopen without ever retranscribing", async () => {
+    mocks.getProvider.mockReturnValue({
+      async *stream(request: { userPrompt: string }) {
+        if (request.userPrompt.includes("GLOBAL keyPhrases summary")) {
+          yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
+        } else {
+          yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+        }
+      },
+    });
+    const stale = fakeSession(initialAnalysis(), () => {
+      throw new StaleAnalysisSessionError("video-1");
+    });
+    const recovered = fakeSession(initialAnalysis("summary", 1));
+    const recoveredCues = [{ index: 1, time: 0, endTime: 1, text: "Recovered cue" }];
+    mocks.openStoredAnalysisSession
+      .mockRejectedValueOnce(new Error("temporary reopen failure"))
+      .mockResolvedValueOnce({ cues: recoveredCues, session: recovered.session });
+
+    runInBackground({
+      videoId: "video-1",
+      label: "Video",
+      cues,
+      session: stale.session,
+      style: "colloquial",
+    });
     await waitFor(() => expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("error"));
-    expect(close).not.toHaveBeenCalled();
+
+    resumeBackgroundAnalysis("video-1");
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.errorMessage).toContain(
+        "temporary reopen failure",
+      ),
+    );
+    resumeBackgroundAnalysis("video-1");
+    await waitFor(() => expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("done"));
+
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith(
+      "retranscribe_video",
+      expect.anything(),
+    );
   });
 
   it("shows transient retry copy while the provider retry is pending", async () => {

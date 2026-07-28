@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAnalysis } from "../store/analysis";
 import type { CheckpointedAnalysis, Subtitle } from "../llm/types";
+import { canEditSubtitles } from "./Player";
 
 const subtitle = (index: number): Subtitle => ({
   time: index,
@@ -59,5 +60,11 @@ describe("Player committed resume state", () => {
     expect(state.subtitles).toEqual(persisted.subtitles);
     expect(state.summary?.keyPhrases).toEqual(persisted.keyPhrases);
     expect(state.retryMessage).toBeNull();
+  });
+
+  it("locks manual subtitle edits while the analysis producer is saving", () => {
+    expect(canEditSubtitles("analyzing")).toBe(false);
+    expect(canEditSubtitles("paused")).toBe(true);
+    expect(canEditSubtitles("complete")).toBe(true);
   });
 });

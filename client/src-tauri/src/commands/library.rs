@@ -178,25 +178,24 @@ pub fn library_upsert(entry: LibraryEntry) -> AppResult<()> {
 
 #[tauri::command]
 pub fn library_delete(id: String) -> AppResult<()> {
-    // Retire every producer before touching either the index or filesystem.
-    // Even if a later write/remove fails, stale work cannot resurrect data.
-    crate::commands::analysis_store::revoke_analysis_sessions(&id)?;
-    let mut lib = read_index()?;
-    lib.videos.retain(|v| v.id != id);
-    // Also clean up references so a later reorder doesn't see this id dangling
-    // in top_level_order — set_top_level_order_in_memory used to reject the
-    // whole reorder on any unknown id, snapping the Library cards back.
-    lib.top_level_order
-        .retain(|r| !matches!(r, LibraryItemRef::Video { id: vid } if vid == &id));
-    for f in lib.folders.iter_mut() {
-        f.video_ids.retain(|vid| vid != &id);
-    }
-    write_index(&lib)?;
-    let dir = paths::video_dir(&id)?;
-    if dir.exists() {
-        fs::remove_dir_all(dir)?;
-    }
-    Ok(())
+    crate::commands::analysis_store::with_destructive_boundary(&id, || {
+        let mut lib = read_index()?;
+        lib.videos.retain(|v| v.id != id);
+        // Also clean up references so a later reorder doesn't see this id
+        // dangling in top_level_order — set_top_level_order_in_memory used to
+        // reject the whole reorder on any unknown id, snapping cards back.
+        lib.top_level_order
+            .retain(|r| !matches!(r, LibraryItemRef::Video { id: vid } if vid == &id));
+        for f in lib.folders.iter_mut() {
+            f.video_ids.retain(|vid| vid != &id);
+        }
+        write_index(&lib)?;
+        let dir = paths::video_dir(&id)?;
+        if dir.exists() {
+            fs::remove_dir_all(dir)?;
+        }
+        Ok(())
+    })
 }
 
 fn set_status_in_memory(

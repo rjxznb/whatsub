@@ -7,7 +7,7 @@
  *  2. Marks it "processing"
  *  3. Runs the existing desktop pipeline:
  *       import_video  (yt-dlp download + Whisper transcription)
- *     → load_transcript + parseSrt  (get SrtCue[])
+ *     → atomically open transcript analysis session
  *     → runInBackground             (LLM analysis → writes analysis.json + sets library status=ready)
  *     → await "done" phase (poll useBgAnalyses)
  *     → library_sync_to_cloud       (push to backend)
@@ -23,13 +23,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listPending, setStatus, claimItem } from "../lib/api/importQueue";
 import { runInBackground, useBgAnalyses } from "./backgroundAnalyses";
-import { openAnalysisSession } from "../llm/analysisSession";
-import { parseSrt } from "../llm/parseSrt";
+import { openStoredAnalysisSession } from "../llm/analysisSession";
 import { useSettings } from "./settings";
 import { syncToCloud } from "../lib/api/librarySync";
 import { useLibrary } from "./library";
 import { useDownloadQueue } from "./downloadQueue";
-import type { SrtCue } from "../llm/types";
 
 const POLL_INTERVAL_MS = 30_000;
 /** Maximum time to wait for LLM analysis to reach "done". 10 minutes. */
@@ -138,18 +136,17 @@ async function processNextPendingItem(): Promise<void> {
     const videoId = importResult.videoId;
     console.info(`[importQueue] import_video done, videoId=${videoId}`);
 
-    // ---- Step 2: load transcript cues ----
-    const srtContent = await invoke<string | null>("load_transcript", { videoId });
-    if (!srtContent) {
+    // ---- Step 2: atomically bind transcript cues to their analysis lease ----
+    const stored = await openStoredAnalysisSession(videoId);
+    if (!stored) {
       throw new Error("transcript_not_found_after_import");
     }
-    const cues: SrtCue[] = parseSrt(srtContent);
+    const { cues, session } = stored;
     console.info(`[importQueue] loaded ${cues.length} cues for ${videoId}`);
 
     // ---- Step 3: start LLM analysis in background ----
     // runInBackground is fire-and-forget; it writes analysis.json and flips
     // library status to "ready" on completion.
-    const session = await openAnalysisSession(videoId, cues);
     runInBackground({
       videoId,
       label: item.url,

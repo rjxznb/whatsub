@@ -42,14 +42,18 @@ window, after which the old cleanup or unregister path can affect the new job.
 ### Runtime lease
 
 Rust owns a process-local coordinator keyed by `videoId`. Starting an analysis
-session returns an opaque lease token. Every subsequent save must include that
-token. The coordinator accepts a save only when the token is still the active
-lease for that video.
+session from persisted media reads `transcript.srt` and returns an opaque lease
+token under the same coordinator lock. The lease captures a SHA-256 generation
+of the exact transcript file. Every subsequent save must include that token;
+the coordinator accepts it only while both the token and transcript generation
+remain current.
 
-Deleting analysis, deleting the video, cancelling an import cleanup, or
-explicitly starting a replacement analysis revokes the prior lease before any
-destructive filesystem work begins. Late results from the old producer are
-therefore rejected even when they arrive after a new import starts.
+Deleting a video or cleaning up a cancelled import holds the coordinator lock
+from lease revocation until filesystem cleanup completes; a replacement
+producer cannot begin in that interval. Cloud materialization stages the new
+transcript and analysis together and publishes analysis last while holding the
+same lock. Late results are therefore rejected and no visible analysis can be
+paired with a transcript from another materialization.
 
 Leases are intentionally not persisted. After a process termination, no old
 producer remains alive. The restarted application validates the durable
@@ -102,6 +106,12 @@ beginAnalysisSession(videoId, mode): Promise<{
   analysis: unknown | null;
 }>;
 
+beginAnalysisSessionFromTranscript(videoId, mode, expectedGeneration?): Promise<{
+  transcript: string;
+  transcriptGeneration: string;
+  session: { lease: string; analysis: unknown | null };
+} | null>;
+
 saveAnalysisSession(videoId, lease, analysis): Promise<{
   status: "applied" | "alreadyCurrent" | "rejected";
   revision: number | null;
@@ -110,11 +120,13 @@ saveAnalysisSession(videoId, lease, analysis): Promise<{
 revokeAnalysisSessions(videoId): Promise<void>;
 ```
 
-`mode` distinguishes continuation from an explicit reset. Continuation loads
-and validates the existing file. Reset revokes the old lease and authorizes a
-new revision-zero analysis. The lease is captured when the producer starts and
-is passed through every commit; producers never look up the current lease at
-save time.
+`mode` distinguishes continuation from an explicit reset. Production media
+flows use the transcript-bound command, so transcript read and lease issue
+cannot straddle cloud replacement. Continuation loads and validates the
+existing file. Reset after a fingerprint mismatch supplies the generation read
+by the first call; Rust refuses to clear analysis if the transcript changed in
+between. The lease is captured when the producer starts and is passed through
+every commit; producers never look up the current lease at save time.
 
 The TypeScript session publishes a commit to Zustand/UI state only after Rust
 confirms the corresponding atomic save. A rejected lease becomes a stale
@@ -165,11 +177,17 @@ active same-video job.
 
 1. Identify the exact active job.
 2. Signal cancellation.
-3. Wait for its sidecar process to exit.
+3. Kill the exact sidecar and wait for its `Terminated` event. Timeout or event
+   channel closure is not exit confirmation and leaves the job fenced.
 4. Revoke analysis leases for that video.
 5. Complete working-directory and library cleanup.
-6. Remove the registry entry only if it still belongs to that job.
-7. Return success.
+6. Remove the registry entry only if cleanup succeeded and it still belongs to
+   that job. A cleanup-only failure may be retried serially by a later
+   `cancel_import`; recovery holds the registry lock from exact job-id check
+   through cleanup/removal. An unconfirmed process exit keeps the fence until
+   restart.
+7. Publish completion only after unregistering, then return success; otherwise
+   preserve the registration and return the exact lifecycle error.
 
 Only after step 7 may the frontend start the same video again. A missing active
 job remains an idempotent success, but the command must not claim that a known

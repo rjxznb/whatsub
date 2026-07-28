@@ -84,8 +84,9 @@ export class RelayError extends ProviderHttpError {
     status: number,
     body = "",
     retryAfterMs: number | null = null,
+    options?: { cause?: unknown },
   ) {
-    super(info.message, status, body, retryAfterMs);
+    super(info.message, status, body, retryAfterMs, options);
     this.name = "RelayError";
     this.code = info.code;
     this.status = status;

@@ -77,6 +77,33 @@ export function createOpenAICompatibleProvider(
     return "Bearer ";
   }
 
+  async function throwResponseFailure(resp: Response): Promise<never> {
+    let body = "";
+    let bodyReadCause: unknown;
+    try {
+      body = await resp.text();
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      bodyReadCause = error;
+    }
+    const retryAfterMs = parseRetryAfter(resp.headers.get("retry-after"));
+    if (isWhatsubRelay) {
+      const info = parseRelayError(resp.status, body);
+      if (info) {
+        throw new RelayError(info, resp.status, body, retryAfterMs, {
+          cause: bodyReadCause,
+        });
+      }
+    }
+    throw new ProviderHttpError(
+      `OpenAI-compatible API ${resp.status}: ${body}`,
+      resp.status,
+      body,
+      retryAfterMs,
+      { cause: bodyReadCause },
+    );
+  }
+
   return {
     ...(vendorId === "deepseek" || vendorId === "whatsub-managed"
       ? { retryProfile: "deepseek-analysis" as const }
@@ -110,20 +137,7 @@ export function createOpenAICompatibleProvider(
       }
 
       if (!resp.ok) {
-        const text = await readResponseText(resp);
-        const retryAfterMs = parseRetryAfter(resp.headers.get("retry-after"));
-        // For the whatSub relay, turn the structured {error,message} body into
-        // a friendly RelayError (e.g. quota wall) instead of a raw status dump.
-        if (isWhatsubRelay) {
-          const info = parseRelayError(resp.status, text);
-          if (info) throw new RelayError(info, resp.status, text, retryAfterMs);
-        }
-        throw new ProviderHttpError(
-          `OpenAI-compatible API ${resp.status}: ${text}`,
-          resp.status,
-          text,
-          retryAfterMs,
-        );
+        await throwResponseFailure(resp);
       }
       if (!resp.body) {
         throw new ProviderProtocolError("response body missing");
@@ -170,22 +184,8 @@ export function createOpenAICompatibleProvider(
           cause: error,
         });
       }
-      if (!resp.ok || !resp.body) {
-        const text = resp.body ? await readResponseText(resp) : "no body";
-        let message = `OpenAI-compatible API ${resp.status}: ${text}`;
-        let upsell = false;
-        // Relay rejections carry a friendly message — surface it as-is so the
-        // agent bubble shows "额度已用完→升级 Pro" rather than a status dump.
-        if (isWhatsubRelay) {
-          const info = parseRelayError(resp.status, text);
-          if (info) {
-            message = info.message;
-            upsell = info.upsell;
-          }
-        }
-        yield { type: "error", message, upsell };
-        return;
-      }
+      if (!resp.ok) await throwResponseFailure(resp);
+      if (!resp.body) throw new ProviderProtocolError("response body missing");
       const reader = resp.body
         .pipeThrough(new TextDecoderStream())
         .getReader();
@@ -238,8 +238,10 @@ export async function* parseOpenAIStream(
       let parsed: any;
       try {
         parsed = JSON.parse(data);
-      } catch {
-        continue;
+      } catch (error) {
+        throw new ProviderProtocolError("Malformed OpenAI-compatible SSE data", {
+          cause: error,
+        });
       }
       const choice = parsed?.choices?.[0];
       const delta = choice?.delta;
@@ -396,21 +398,12 @@ async function* parseSSEStream(
         const obj = JSON.parse(payload);
         const delta = obj?.choices?.[0]?.delta?.content;
         if (typeof delta === "string") yield delta;
-      } catch {
-        // skip malformed lines
+      } catch (error) {
+        throw new ProviderProtocolError("Malformed OpenAI-compatible SSE data", {
+          cause: error,
+        });
       }
     }
-  }
-}
-
-async function readResponseText(resp: Response): Promise<string> {
-  try {
-    return await resp.text();
-  } catch (error) {
-    if (isAbortError(error)) throw error;
-    throw new ProviderTransportError("OpenAI-compatible response read failed", "read", {
-      cause: error,
-    });
   }
 }
 

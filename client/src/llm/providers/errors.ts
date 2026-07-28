@@ -1,13 +1,17 @@
 type ErrorOptions = { cause?: unknown };
 
 export class ProviderHttpError extends Error {
+  readonly cause?: unknown;
+
   constructor(
     message: string,
     readonly status: number,
     readonly body: string,
     readonly retryAfterMs: number | null,
+    options?: ErrorOptions,
   ) {
     super(message);
+    this.cause = options?.cause;
     this.name = "ProviderHttpError";
   }
 }

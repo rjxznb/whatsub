@@ -26,4 +26,10 @@ describe('auth error mapping', () => {
       'secret-url',
     );
   });
+
+  it('returns the verify fallback for a non-stringifiable error value', () => {
+    expect(authCommandErrorToChinese(Object.create(null), 'verify')).toBe(
+      '\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002',
+    );
+  });
 });

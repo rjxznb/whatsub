@@ -22,9 +22,9 @@ export function authCommandErrorToChinese(
   error: unknown,
   operation?: 'send' | 'verify',
 ): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return authCommandErrorMessages[message]
-    ?? (operation === 'send'
+  const fallback = operation === 'send'
       ? '\u53d1\u9001\u9a8c\u8bc1\u7801\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002'
-      : '\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002');
+      : '\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002';
+  return (typeof error === 'string' ? authCommandErrorMessages[error] : undefined)
+    ?? fallback;
 }

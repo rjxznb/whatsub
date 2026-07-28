@@ -33,9 +33,13 @@ enum AuthHttpError {
 
 impl AuthHttpError {
     fn from_send(error: &reqwest::Error) -> Self {
-        if error.is_timeout() {
+        Self::from_send_flags(error.is_timeout(), error.is_connect())
+    }
+
+    fn from_send_flags(is_timeout: bool, is_connect: bool) -> Self {
+        if is_timeout {
             Self::Uncertain
-        } else if error.is_connect() {
+        } else if is_connect {
             Self::Connect
         } else {
             Self::Uncertain
@@ -69,6 +73,58 @@ where
         }
     }
     operation().await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthEndpoint {
+    SendCode,
+    VerifyCode,
+    Me,
+    FromLicense,
+}
+
+impl AuthEndpoint {
+    fn url(self) -> String {
+        let path = match self {
+            Self::SendCode => "/auth/send-code",
+            Self::VerifyCode => "/auth/verify-code",
+            Self::Me => "/auth/me",
+            Self::FromLicense => "/auth/from-license",
+        };
+        format!("{SERVER_BASE}{path}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthRequestPolicy {
+    Once,
+    RetryConnect,
+}
+
+fn auth_request_policy(endpoint: AuthEndpoint) -> AuthRequestPolicy {
+    match endpoint {
+        AuthEndpoint::VerifyCode => AuthRequestPolicy::RetryConnect,
+        AuthEndpoint::SendCode | AuthEndpoint::Me | AuthEndpoint::FromLicense => {
+            AuthRequestPolicy::Once
+        }
+    }
+}
+
+async fn execute_auth_request<T, Op, OpFuture, Sleep, SleepFuture>(
+    endpoint: AuthEndpoint,
+    mut operation: Op,
+    sleep: Sleep,
+) -> Result<T, AuthHttpError>
+where
+    Op: FnMut() -> OpFuture,
+    OpFuture: Future<Output = Result<T, AuthHttpError>>,
+    Sleep: FnMut(Duration) -> SleepFuture,
+    SleepFuture: Future<Output = ()>,
+{
+    match auth_request_policy(endpoint) {
+        AuthRequestPolicy::Once => operation().await,
+        AuthRequestPolicy::RetryConnect => retry_connect_only(operation, sleep).await,
+    }
 }
 
 #[derive(Serialize)]
@@ -156,10 +212,14 @@ pub async fn auth_send_code(email: String) -> Result<AuthResult, String> {
     let client = http_client().map_err(|error| error.code().to_string())?;
     let body = serde_json::to_string(&SendCodeReq { email: &email })
         .map_err(|_| AuthHttpError::Protocol.code().to_string())?;
-    let (status, body_val) =
-        post_json_body(&client, &format!("{}/auth/send-code", SERVER_BASE), body)
-            .await
-            .map_err(|error| error.code().to_string())?;
+    let url = AuthEndpoint::SendCode.url();
+    let (status, body_val) = execute_auth_request(
+        AuthEndpoint::SendCode,
+        || post_json_body(&client, &url, body.clone()),
+        |delay| tokio::time::sleep(delay),
+    )
+    .await
+    .map_err(|error| error.code().to_string())?;
     if status.is_success() {
         Ok(AuthResult {
             ok: true,
@@ -185,8 +245,9 @@ pub async fn auth_verify_code<R: Runtime>(
         code: &code,
     })
     .map_err(|_| AuthHttpError::Protocol.code().to_string())?;
-    let url = format!("{}/auth/verify-code", SERVER_BASE);
-    let (status, body_val) = retry_connect_only(
+    let url = AuthEndpoint::VerifyCode.url();
+    let (status, body_val) = execute_auth_request(
+        AuthEndpoint::VerifyCode,
         || post_json_body(&client, &url, body.clone()),
         |delay| tokio::time::sleep(delay),
     )
@@ -242,10 +303,21 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
         });
     }
     let client = http_client().map_err(|error| error.code().to_string())?;
-    let resp = build_me_request(&client, &auth.session_token)
-        .send()
-        .await
-        .map_err(|error| AuthHttpError::from_send(&error).code().to_string())?;
+    let resp = execute_auth_request(
+        AuthEndpoint::Me,
+        || {
+            let request = build_me_request(&client, &auth.session_token);
+            async move {
+                request
+                    .send()
+                    .await
+                    .map_err(|error| AuthHttpError::from_send(&error))
+            }
+        },
+        |delay| tokio::time::sleep(delay),
+    )
+    .await
+    .map_err(|error| error.code().to_string())?;
     let status = resp.status();
     let text = resp
         .text()
@@ -331,10 +403,14 @@ pub async fn auth_from_license<R: Runtime>(
         license_key: &license_key,
     })
     .map_err(|_| AuthHttpError::Protocol.code().to_string())?;
-    let (status, body_val) =
-        post_json_body(&client, &format!("{}/auth/from-license", SERVER_BASE), body)
-            .await
-            .map_err(|error| error.code().to_string())?;
+    let url = AuthEndpoint::FromLicense.url();
+    let (status, body_val) = execute_auth_request(
+        AuthEndpoint::FromLicense,
+        || post_json_body(&client, &url, body.clone()),
+        |delay| tokio::time::sleep(delay),
+    )
+    .await
+    .map_err(|error| error.code().to_string())?;
     if status.is_success() {
         let v: FromLicenseResp = serde_json::from_value(body_val)
             .map_err(|_| AuthHttpError::Protocol.code().to_string())?;
@@ -361,7 +437,180 @@ pub async fn auth_from_license<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, future::ready, time::Duration};
+    use std::{
+        cell::RefCell,
+        future::ready,
+        io::{Read, Write},
+        net::TcpListener,
+        thread::JoinHandle,
+        time::Duration,
+    };
+
+    fn local_test_client(timeout: Duration) -> Client {
+        Client::builder()
+            .no_proxy()
+            .timeout(timeout)
+            .build()
+            .expect("localhost test client should build")
+    }
+
+    fn spawn_raw_http_response(response: Vec<u8>) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("localhost listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("localhost listener should have an address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("test request should connect");
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(&response)
+                .expect("test response should write");
+        });
+        (format!("http://{address}/auth-test"), server)
+    }
+
+    fn spawn_json_response(status: &str, body: &str) -> (String, JoinHandle<()>) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        spawn_raw_http_response(response.into_bytes())
+    }
+
+    #[test]
+    fn send_error_classification_prioritizes_timeout_over_connect() {
+        assert_eq!(
+            AuthHttpError::from_send_flags(true, true),
+            AuthHttpError::Uncertain
+        );
+        assert_eq!(
+            AuthHttpError::from_send_flags(false, true),
+            AuthHttpError::Connect
+        );
+    }
+
+    #[tokio::test]
+    async fn reqwest_timeout_maps_to_uncertain() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("localhost listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("localhost listener should have an address");
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("test request should connect");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+
+        let error = local_test_client(Duration::from_millis(50))
+            .get(format!("http://{address}/auth-test"))
+            .send()
+            .await
+            .expect_err("stalled localhost response should time out");
+        server.join().expect("test server should exit");
+
+        assert!(error.is_timeout());
+        assert_eq!(AuthHttpError::from_send(&error), AuthHttpError::Uncertain);
+    }
+
+    #[tokio::test]
+    async fn post_json_body_returns_http_4xx_status_and_business_body() {
+        let (url, server) = spawn_json_response("400 Bad Request", r#"{"error":"bad_code"}"#);
+
+        let result = post_json_body(
+            &local_test_client(Duration::from_secs(1)),
+            &url,
+            "{}".to_string(),
+        )
+        .await;
+        server.join().expect("test server should exit");
+
+        let (status, body) = result.expect("HTTP errors are transport successes");
+        assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+        assert_eq!(body, serde_json::json!({ "error": "bad_code" }));
+    }
+
+    #[tokio::test]
+    async fn post_json_body_maps_malformed_json_to_protocol() {
+        let (url, server) = spawn_json_response("200 OK", "not-json");
+
+        let result = post_json_body(
+            &local_test_client(Duration::from_secs(1)),
+            &url,
+            "{}".to_string(),
+        )
+        .await;
+        server.join().expect("test server should exit");
+
+        assert_eq!(result.unwrap_err(), AuthHttpError::Protocol);
+    }
+
+    #[tokio::test]
+    async fn post_json_body_maps_truncated_body_to_uncertain() {
+        let body = br#"{"ok":true}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len() + 10
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect();
+        let (url, server) = spawn_raw_http_response(response);
+
+        let result = post_json_body(
+            &local_test_client(Duration::from_secs(1)),
+            &url,
+            "{}".to_string(),
+        )
+        .await;
+        server.join().expect("test server should exit");
+
+        assert_eq!(result.unwrap_err(), AuthHttpError::Uncertain);
+    }
+
+    #[test]
+    fn endpoint_policy_retries_only_verify_code() {
+        assert_eq!(
+            auth_request_policy(AuthEndpoint::VerifyCode),
+            AuthRequestPolicy::RetryConnect
+        );
+        for endpoint in [
+            AuthEndpoint::SendCode,
+            AuthEndpoint::Me,
+            AuthEndpoint::FromLicense,
+        ] {
+            assert_eq!(auth_request_policy(endpoint), AuthRequestPolicy::Once);
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_policy_does_not_retry_http_business_result() {
+        let attempts = RefCell::new(0);
+        let delays = RefCell::new(Vec::new());
+
+        let result: Result<(reqwest::StatusCode, serde_json::Value), AuthHttpError> =
+            execute_auth_request(
+                AuthEndpoint::VerifyCode,
+                || {
+                    *attempts.borrow_mut() += 1;
+                    ready(Ok((
+                        reqwest::StatusCode::BAD_REQUEST,
+                        serde_json::json!({ "error": "bad_code" }),
+                    )))
+                },
+                |delay| {
+                    delays.borrow_mut().push(delay);
+                    ready(())
+                },
+            )
+            .await;
+
+        let (status, body) = result.expect("HTTP business response should stay successful");
+        assert_eq!(status, reqwest::StatusCode::BAD_REQUEST);
+        assert_eq!(body, serde_json::json!({ "error": "bad_code" }));
+        assert_eq!(*attempts.borrow(), 1);
+        assert!(delays.borrow().is_empty());
+    }
 
     #[tokio::test]
     async fn retry_connect_only_retries_twice_with_fixed_delays_then_succeeds() {

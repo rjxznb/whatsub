@@ -317,16 +317,70 @@ where
 
     if !current_is_authoritative {
         if state.content_hash.as_deref() == Some(incoming_hash.as_str()) {
-            if current_analysis.as_ref() != Some(&analysis) {
-                write_json_atomically_with_replacer(path, &analysis, replacer)?;
+            if state.revision != incoming_revision {
+                return reject(&state);
             }
-            return Ok(save_outcome(
-                SaveAnalysisStatus::Applied,
-                Some(state.generation),
-                incoming_revision,
-            ));
+
+            if current_analysis.is_none() {
+                write_json_atomically_with_replacer(path, &analysis, replacer)?;
+                return Ok(save_outcome(
+                    SaveAnalysisStatus::Applied,
+                    Some(state.generation),
+                    incoming_revision,
+                ));
+            }
+
+            let Some(current) = current_analysis.as_ref().and_then(analysis_version) else {
+                return reject(&state);
+            };
+            let Some(incoming) = incoming_version else {
+                return reject(&state);
+            };
+            if current.fingerprint != incoming.fingerprint {
+                // A generation transition commits its revision-0 target to
+                // the sidecar first. A different on-disk fingerprint proves
+                // that the visible file is still from the previous epoch.
+                if state.previous_generation.is_some() && incoming.revision == 0 {
+                    write_json_atomically_with_replacer(path, &analysis, replacer)?;
+                    return Ok(save_outcome(
+                        SaveAnalysisStatus::Applied,
+                        Some(state.generation),
+                        incoming_revision,
+                    ));
+                }
+                return reject(&state);
+            }
+            match current.revision.cmp(&incoming.revision) {
+                std::cmp::Ordering::Greater => {
+                    if state.previous_generation.is_some() && incoming.revision == 0 {
+                        return reject(&state);
+                    }
+                    state.revision = Some(current.revision);
+                    state.content_hash = current_hash.clone();
+                    state.pending_write = None;
+                    write_generation_state(path, &state)?;
+                    return reject(&state);
+                }
+                std::cmp::Ordering::Equal => return reject(&state),
+                std::cmp::Ordering::Less => {
+                    write_json_atomically_with_replacer(path, &analysis, replacer)?;
+                    return Ok(save_outcome(
+                        SaveAnalysisStatus::Applied,
+                        Some(state.generation),
+                        incoming_revision,
+                    ));
+                }
+            }
         }
         if current_analysis.as_ref() == Some(&analysis) {
+            let can_repair_sidecar = match (state.revision, incoming_revision) {
+                (Some(committed), Some(on_disk)) => on_disk > committed,
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            if !can_repair_sidecar {
+                return reject(&state);
+            }
             state.revision = incoming_revision;
             state.content_hash = Some(incoming_hash);
             state.pending_write = None;
@@ -1826,6 +1880,149 @@ mod tests {
         let recovered_sidecar = read_analysis(&generation_state_path(&path));
         assert_eq!(recovered_sidecar["revision"], 5);
         assert!(recovered_sidecar.get("pendingWrite").is_none());
+    }
+
+    #[test]
+    fn no_pending_write_preserves_newer_same_generation_analysis() {
+        let dir = TestDir::new("normal-save-legacy-crash-residue");
+        let path = dir.analysis_path();
+        let revision_four = checkpointed(4, "revision-four");
+        save_analysis_value(&path, revision_four.clone()).unwrap();
+
+        // Model legacy crash residue from before pendingWrite existed: the
+        // analysis replacement reached disk, but the same-generation sidecar
+        // still describes the prior revision and has no transaction intent.
+        let revision_five = checkpointed(5, "revision-five");
+        fs::write(&path, serde_json::to_vec_pretty(&revision_five).unwrap()).unwrap();
+        let stale_sidecar = read_analysis(&generation_state_path(&path));
+        assert_eq!(stale_sidecar["generation"], 1);
+        assert_eq!(stale_sidecar["revision"], 4);
+        assert_eq!(
+            stale_sidecar["contentHash"],
+            analysis_content_hash(&revision_four).unwrap()
+        );
+        assert!(stale_sidecar.get("pendingWrite").is_none());
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            revision_four,
+            Some("generation-1"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(delayed.revision, Some(5));
+        assert_eq!(read_revision(&path), Some(5));
+        assert_eq!(read_analysis(&path)["marker"], "revision-five");
+        let repaired_sidecar = read_analysis(&generation_state_path(&path));
+        assert_eq!(repaired_sidecar["revision"], 5);
+        assert_eq!(
+            repaired_sidecar["contentHash"],
+            analysis_content_hash(&revision_five).unwrap()
+        );
+        assert!(repaired_sidecar.get("pendingWrite").is_none());
+    }
+
+    #[test]
+    fn no_pending_write_rejects_an_unprovable_fingerprint_mismatch() {
+        let dir = TestDir::new("normal-save-unprovable-crash-residue");
+        let path = dir.analysis_path();
+        let revision_four = checkpointed_generation("sha256:one", 4, "revision-four");
+        save_analysis_value(&path, revision_four.clone()).unwrap();
+
+        let unrelated_revision_five =
+            checkpointed_generation("sha256:other", 5, "unrelated-revision-five");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&unrelated_revision_five).unwrap(),
+        )
+        .unwrap();
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            revision_four,
+            Some("generation-1"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(read_revision(&path), Some(5));
+        assert_eq!(read_analysis(&path)["marker"], "unrelated-revision-five");
+        let unchanged_sidecar = read_analysis(&generation_state_path(&path));
+        assert_eq!(unchanged_sidecar["revision"], 4);
+    }
+
+    #[test]
+    fn no_pending_revision_zero_transition_does_not_downgrade_newer_same_fingerprint_disk() {
+        let dir = TestDir::new("normal-save-ambiguous-revision-zero-residue");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(8, "generation-one")).unwrap();
+        let generation_two_revision_zero = checkpointed(0, "generation-two-revision-zero");
+        save_analysis_value_for_generation(
+            &path,
+            generation_two_revision_zero.clone(),
+            None,
+            Some("generation-1"),
+        )
+        .unwrap();
+
+        // With the same transcript fingerprint, previousGeneration cannot
+        // prove whether this higher disk revision belongs to the old epoch or
+        // is a newer same-generation write whose sidecar commit was lost.
+        let revision_five = checkpointed(5, "ambiguous-revision-five");
+        fs::write(&path, serde_json::to_vec_pretty(&revision_five).unwrap()).unwrap();
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            generation_two_revision_zero,
+            Some("generation-2"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(read_revision(&path), Some(5));
+        assert_eq!(read_analysis(&path)["marker"], "ambiguous-revision-five");
+        let unchanged_sidecar = read_analysis(&generation_state_path(&path));
+        assert_eq!(unchanged_sidecar["generation"], 2);
+        assert_eq!(unchanged_sidecar["revision"], 0);
+        assert!(unchanged_sidecar.get("pendingWrite").is_none());
+    }
+
+    #[test]
+    fn no_pending_write_does_not_downgrade_a_higher_valid_sidecar_revision() {
+        let dir = TestDir::new("normal-save-higher-sidecar-residue");
+        let path = dir.analysis_path();
+        let revision_five = checkpointed(5, "revision-five");
+        save_analysis_value(&path, revision_five.clone()).unwrap();
+
+        // The committed sidecar is newer, but only revision 4 survived on
+        // disk. With no revision-5 payload available, recovery cannot safely
+        // replace either side, and must not adopt the lower disk revision.
+        let revision_four = checkpointed(4, "revision-four");
+        fs::write(&path, serde_json::to_vec_pretty(&revision_four).unwrap()).unwrap();
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            revision_four,
+            Some("generation-1"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(delayed.revision, Some(5));
+        assert_eq!(read_revision(&path), Some(4));
+        assert_eq!(read_analysis(&path)["marker"], "revision-four");
+        let unchanged_sidecar = read_analysis(&generation_state_path(&path));
+        assert_eq!(unchanged_sidecar["revision"], 5);
+        assert_eq!(
+            unchanged_sidecar["contentHash"],
+            analysis_content_hash(&revision_five).unwrap()
+        );
+        assert!(unchanged_sidecar.get("pendingWrite").is_none());
     }
 
     #[test]

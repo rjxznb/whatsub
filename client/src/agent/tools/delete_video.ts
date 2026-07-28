@@ -5,6 +5,7 @@
 // optionally library_unsync_from_cloud (if alsoCloud is true).
 
 import { invoke } from "@tauri-apps/api/core";
+import { deleteVideoAndInvalidateAnalysis } from "../../llm/analysisPersistence";
 import type { ToolDef } from "../types";
 
 export interface DeleteVideoArgs {
@@ -49,7 +50,7 @@ export const deleteVideoTool: ToolDef<DeleteVideoArgs, DeleteVideoResult> = {
       }
     }
 
-    await invoke<void>("library_delete", { id: videoId });
+    await deleteVideoAndInvalidateAnalysis(videoId);
 
     return {
       deletedLocal: true,

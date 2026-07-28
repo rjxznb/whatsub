@@ -8,6 +8,7 @@ import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
 import { getTier } from "../llm/modelTiers";
+import { cancelImportAndInvalidateAnalysis } from "../llm/analysisPersistence";
 import type { WhisperModelSize } from "../types/settings";
 import { friendlyError, siteKeyForUrl, loginAction } from "../utils/friendlyError";
 import type { SiteLoginAction } from "../utils/friendlyError";
@@ -364,7 +365,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     const id = currentVideoIdRef.current;
     if (!id) return;
     try {
-      await invoke("cancel_import", { videoId: id });
+      await cancelImportAndInvalidateAnalysis(id);
     } catch (e) {
       console.warn("cancel_import failed", e);
     }

@@ -6,6 +6,7 @@ import type {
   LibraryStatus,
   LibraryItemRef,
 } from "../types/library";
+import { deleteVideoAndInvalidateAnalysis } from "../llm/analysisPersistence";
 
 interface LibraryState {
   library: Library;
@@ -53,7 +54,7 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     await get().reload();
   },
   async remove(id) {
-    await invoke("library_delete", { id });
+    await deleteVideoAndInvalidateAnalysis(id);
     await get().reload();
   },
   async rename(id, title) {

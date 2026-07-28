@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { cancelImportAndInvalidateAnalysis } from "../llm/analysisPersistence";
 
 /**
  * Global background-download queue. Tracks every import_video call
@@ -83,7 +83,7 @@ export const useDownloadQueue = create<DownloadQueueState>((set, get) => ({
   cancel: async (videoId) => {
     get().remove(videoId);
     try {
-      await invoke("cancel_import", { videoId });
+      await cancelImportAndInvalidateAnalysis(videoId);
     } catch (e) {
       console.warn("cancel_import (queue) failed", e);
     }

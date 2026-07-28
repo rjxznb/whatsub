@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Loader2, X } from 'lucide-react';
 import { useAuth } from '../store/auth';
 import { useLicense } from '../store/license';
+import { authCommandErrorToChinese, authReasonToChinese } from '../utils/authError';
 
 /** In-app email-OTP login, usable anywhere (Settings 账号区 / Corpus gate).
  *
@@ -67,10 +68,10 @@ export function AccountLoginDialog({
     setSending(true);
     try {
       const res = await sendCode(trimmed);
-      if (!res.ok) setError(reasonToChinese(res.reason));
+      if (!res.ok) setError(authReasonToChinese(res.reason));
       else setPhase('code');
     } catch (err) {
-      setError('发送失败：' + String(err));
+      setError(authCommandErrorToChinese(err, 'send'));
     } finally {
       setSending(false);
     }
@@ -95,7 +96,7 @@ export function AccountLoginDialog({
     try {
       const res = await verifyCode(email.trim(), code.trim());
       if (!res.ok) {
-        setError(reasonToChinese(res.reason));
+        setError(authReasonToChinese(res.reason));
         setPhase('code');
         return;
       }
@@ -104,7 +105,7 @@ export function AccountLoginDialog({
       reset();
       onClose();
     } catch (err) {
-      setError('登录失败：' + String(err));
+      setError(authCommandErrorToChinese(err, 'verify'));
       setPhase('code');
     }
   }
@@ -218,26 +219,4 @@ export function AccountLoginDialog({
     </div>,
     document.body,
   );
-}
-
-/** Map backend error reasons (auth_send_code / auth_verify_code) to Chinese. */
-function reasonToChinese(reason?: string): string {
-  switch (reason) {
-    case 'invalid_email':
-      return '邮箱格式不对';
-    case 'invalid_input':
-      return '邮箱或验证码无效，请重新获取验证码后再试';
-    case 'invalid_json':
-      return '请求格式有误，请重试';
-    case 'no_code':
-      return '请先获取验证码';
-    case 'wrong_code':
-      return '验证码错误';
-    case 'too_many_attempts':
-      return '尝试次数过多，请重新获取验证码';
-    case 'rate_limited':
-      return '请求过快，请稍后再试';
-    default:
-      return reason ? `登录失败 (${reason})` : '登录失败';
-  }
 }

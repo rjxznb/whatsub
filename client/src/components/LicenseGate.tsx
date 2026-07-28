@@ -4,6 +4,7 @@ import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft, Mail, ChevronDown, Key
 import { useLicense, type ActivateError } from '../store/license';
 import { MONTHLY_PRICE_TEXT, YEARLY_PRICE_TEXT } from '../config/subscriptionPricing';
 import { TrialBanner } from './TrialBanner';
+import { authCommandErrorToChinese, authReasonToChinese } from '../utils/authError';
 
 /**
  * Wraps the app router. While `mode === 'INITIALIZING'` shows a loading
@@ -509,12 +510,12 @@ function SubLoginForm() {
         { email: trimmed },
       );
       if (!res.ok) {
-        setError(reasonToChinese(res.reason));
+        setError(authReasonToChinese(res.reason));
       } else {
         setPhase('code');
       }
     } catch (e) {
-      setError('发送失败：' + String(e));
+      setError(authCommandErrorToChinese(e, 'send'));
     } finally {
       setSending(false);
     }
@@ -534,7 +535,7 @@ function SubLoginForm() {
         { email: email.trim(), code: code.trim() },
       );
       if (!res.ok) {
-        setError(reasonToChinese(res.reason));
+        setError(authReasonToChinese(res.reason));
         setPhase('code');
         return;
       }
@@ -549,7 +550,7 @@ function SubLoginForm() {
         '该邮箱没有有效订阅，无法解锁。请输入授权码，或用持有订阅的邮箱登录。',
       );
     } catch (e) {
-      setError('登录失败：' + String(e));
+      setError(authCommandErrorToChinese(e, 'verify'));
       setPhase('code');
     }
   }
@@ -641,19 +642,6 @@ function SubLoginForm() {
       </p>
     </div>
   );
-}
-
-/** Map backend error reasons (auth_send_code / auth_verify_code) to
- *  Chinese copy. Unknown reasons fall back to the raw string. */
-function reasonToChinese(reason?: string): string {
-  switch (reason) {
-    case 'invalid_email': return '邮箱格式不对';
-    case 'no_code': return '请先获取验证码';
-    case 'wrong_code': return '验证码错误';
-    case 'too_many_attempts': return '尝试次数过多，请重新获取验证码';
-    case 'rate_limited': return '请求过快，请稍后再试';
-    default: return reason ? `登录失败 (${reason})` : '登录失败';
-  }
 }
 
 function ErrorDisplay({ error }: { error: ActivateError }) {

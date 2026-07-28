@@ -487,7 +487,7 @@ function CollapseCard({
  *  stays 'verifying' forever = an infinite spinner with no error. Auth had in
  *  fact succeeded. Always reset, and tell the user their email has no active
  *  subscription instead of silently spinning. */
-function SubLoginForm() {
+export function SubLoginForm() {
   const { init } = useLicense();
   const [phase, setPhase] = useState<'email' | 'code' | 'verifying'>('email');
   const [email, setEmail] = useState('');

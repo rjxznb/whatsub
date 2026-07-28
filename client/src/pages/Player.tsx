@@ -225,6 +225,7 @@ export function Player() {
   // is persisted before it is published to Zustand/the UI.
   const sessionRef = useRef<PersistedAnalysisSession | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const analysisRunRef = useRef<Promise<void> | null>(null);
   const cuesRef = useRef<SrtCue[] | null>(null);
   const manualSaveTailRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -252,7 +253,7 @@ export function Player() {
     });
   };
 
-  const startAnalysis = async () => {
+  const driveForegroundAnalysis = async () => {
     if (!videoId) return;
     const cues = cuesRef.current;
     const session = sessionRef.current;
@@ -327,23 +328,30 @@ export function Player() {
     }
   };
 
+  const startAnalysis = () => {
+    if (analysisRunRef.current) return;
+    const run = driveForegroundAnalysis();
+    analysisRunRef.current = run;
+    const clear = () => {
+      if (analysisRunRef.current === run) analysisRunRef.current = null;
+    };
+    void run.then(clear, clear);
+  };
+
   const onStop = () => {
     abortRef.current?.abort();
     analysis.setPhase("paused");
   };
 
   const onContinue = () => {
-    void startAnalysis();
+    startAnalysis();
   };
 
   /**
    * Hand off the in-flight analysis to the background scheduler so the
-   * user can navigate away without losing progress. Snapshots the
-   * current state, starts a BG run that resumes from the snapshot, then
-   * aborts the foreground controller + navigates back. The BG run
-   * writes its progress into useBgAnalyses (visible in the queue
-   * widget) and persists to disk every 800ms — same cadence as the
-   * foreground loop.
+   * user can navigate away without losing progress. The current request is
+   * aborted, then the exact same lease/session is handed to the background.
+   * Only committed checkpoints are rendered in the queue widget.
    *
    * When the user returns to this Player later for the same videoId,
    * the mount effect calls takeOverBackground() and promotes whatever
@@ -353,20 +361,19 @@ export function Player() {
   const onMoveToBackground = () => {
     if (!videoId) return;
     const cues = cuesRef.current;
-    if (!cues) return;
-    const snap = useAnalysis.getState();
+    const session = sessionRef.current;
+    if (!cues || !session) return;
     const entry = library.videos.find((v) => v.id === videoId);
+    abortRef.current?.abort();
+    sessionRef.current = null;
     runInBackground({
       videoId,
       label: entry?.title ?? videoId,
       cues,
-      previouslyAnalyzed: snap.subtitles.slice(),
-      previousSummary: snap.summary,
+      session,
       style: entry?.analysisStyle ?? "colloquial",
+      waitFor: analysisRunRef.current ?? Promise.resolve(),
     });
-    // Stop the foreground run (its writes would race with BG's). The
-    // BG store now owns the analysis state.
-    abortRef.current?.abort();
     // Clear useAnalysis so:
     //  (1) the unmount cleanup below doesn't transition phase to
     //      "paused" (would otherwise make Library card show "继续解析"
@@ -432,6 +439,11 @@ export function Player() {
       { title: "重新解析", okText: "继续" },
     );
     if (!ok) return;
+    abortRef.current?.abort();
+    await analysisRunRef.current?.catch(() => {});
+    const oldSession = sessionRef.current;
+    sessionRef.current = null;
+    await oldSession?.close().catch(() => {});
     const e = library.videos.find((v) => v.id === videoId);
     retranscribeAndAnalyzeInBackground({
       videoId,
@@ -460,12 +472,27 @@ export function Player() {
       cuesRef.current = null;
     }
 
-    // Stop any detached producer before opening the foreground session. Task 6
-    // transfers the same lease; until then the committed disk checkpoint is
-    // the only authoritative takeover boundary.
-    takeOverBackground(videoId);
-
     (async () => {
+      const reclaimed = await takeOverBackground(videoId);
+      if (cancelled) {
+        await reclaimed?.session.close().catch(() => {});
+        return;
+      }
+      if (reclaimed) {
+        cuesRef.current = reclaimed.cues;
+        sessionRef.current = reclaimed.session;
+        analysis.startFor(videoId);
+        analysis.setCommittedAnalysis(reclaimed.analysis, reclaimed.cues.length);
+        if (reclaimed.analysis.checkpoint.phase === "complete") {
+          analysis.setPhase("complete", 100);
+        } else if (reclaimed.errorMessage) {
+          analysis.setError(reclaimed.errorMessage, false, "analysis");
+        } else {
+          startAnalysis();
+        }
+        return;
+      }
+
       const srt = await invoke<string | null>("load_transcript", { videoId });
       if (cancelled) return;
       if (!srt) {
@@ -531,7 +558,7 @@ export function Player() {
       if (checkpoint.nextCueOffset > 0 || checkpoint.phase === "summary") {
         analysis.setPhase("paused");
       } else {
-        void startAnalysis();
+        startAnalysis();
       }
     })();
 

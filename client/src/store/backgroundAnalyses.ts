@@ -1,55 +1,31 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { runAnalysis } from "../llm/analyze";
-import { deleteAnalysisForReset, saveAnalysis } from "../llm/analysisPersistence";
+import {
+  executeAnalysisSession,
+  resetAnalysisSession,
+  type PersistedAnalysisSession,
+} from "../llm/analysisSession";
 import { getProvider } from "../llm/providers";
 import { parseSrt } from "../llm/parseSrt";
-import { dedupSubtitles } from "./analysis";
 import { useSettings } from "./settings";
 import { useLibrary } from "./library";
-import type { Subtitle, SrtCue, AnalysisResult } from "../llm/types";
+import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import type { TranslationStyle } from "../types/settings";
-
-/**
- * Background-analysis store. Parallel to `useAnalysis` (which stays
- * single-slot for the active Player view); this one tracks every
- * detached analysis loop keyed by videoId so multiple can run at the
- * same time.
- *
- * Lifecycle:
- *  1. User clicks 「在后台解析」 in Player → snapshot of useAnalysis is
- *     handed to runInBackground(); foreground AbortController is aborted;
- *     Player navigates away.
- *  2. runInBackground spawns its own AbortController, registers a job,
- *     calls runAnalysis with onCue/onSummary writing into THIS store
- *     + scheduling save_analysis to disk every 800ms.
- *  3. On completion: save final, mark "done", linger 4s, remove.
- *  4. On user cancel from queue widget: AbortController.abort(), remove
- *     immediately.
- *  5. On Player re-mount for the same videoId: caller (Player effect)
- *     can call `takeOver()` which cancels the BG run, returns the
- *     accumulated state, and the Player resumes in the foreground from
- *     where BG left off.
- */
 
 export interface BgAnalysisJob {
   videoId: string;
-  /** Short human label (uses library title once available; falls back
-   *  to videoId). */
   label: string;
-  /** "transcribing" = whisper re-transcribe step of a background
-   *  re-analyze (no cue progress yet); "analyzing" = LLM phase. */
   phase: "transcribing" | "analyzing" | "done" | "error";
-  /** Count of cues analyzed so far (for the progress bar). */
+  /** Visible model outputs. This may be lower than committedCueOffset. */
   subtitleCount: number;
-  /** Total cues from the transcript — used to compute percent. */
+  /** Authoritative count of transcript inputs committed to analysis.json. */
+  committedCueOffset: number;
   totalCues: number;
   errorMessage: string | null;
+  retryMessage: string | null;
   startedAt: number;
-  /** Accumulated analyzed subtitles. Drives the takeover hand-back. */
   subtitles: Subtitle[];
-  /** Accumulated keyPhrases summary (phase 2 of runAnalysis). */
-  summary: Omit<AnalysisResult, "subtitles"> | null;
+  summary: { keyPhrases: CheckpointedAnalysis["keyPhrases"] } | null;
 }
 
 interface BgStore {
@@ -58,382 +34,295 @@ interface BgStore {
 
 export const useBgAnalyses = create<BgStore>(() => ({ jobs: {} }));
 
-// Module-level AbortController registry. NOT in the zustand store
-// because AbortControllers are not serializable and don't fit into
-// pure state mutations.
-const bgControllers = new Map<string, AbortController>();
-// Throttled-save timer per video so multiple cue arrivals coalesce
-// into ~1 disk write per second.
-const bgSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+type RuntimeDisposition = "background" | "takeover" | "cancel";
+
+interface BgRuntime {
+  videoId: string;
+  label: string;
+  style: TranslationStyle;
+  mode: "analysis" | "retranscribe";
+  whisperModel?: string;
+  session: PersistedAnalysisSession | null;
+  cues: SrtCue[] | null;
+  controller: AbortController;
+  disposition: RuntimeDisposition;
+  runner: Promise<void>;
+}
+
+const runtimes = new Map<string, BgRuntime>();
 
 export interface RunInBackgroundOptions {
   videoId: string;
   label: string;
-  /** All cues from the transcript (full SRT). */
   cues: SrtCue[];
-  /** Snapshot of cues already analyzed at handoff time. The BG run
-   *  resumes from index = previouslyAnalyzed.length. */
-  previouslyAnalyzed: Subtitle[];
-  /** Snapshot of the keyPhrases summary if phase 2 of runAnalysis
-   *  already fired (rare for handoff timing, but possible). */
-  previousSummary: Omit<AnalysisResult, "subtitles"> | null;
-  /** Translation register chosen at import time. */
+  session: PersistedAnalysisSession;
   style: TranslationStyle;
+  /** Foreground request teardown that must finish before background consumes the lease. */
+  waitFor?: Promise<unknown>;
 }
 
-/**
- * Start a background analysis. Idempotent on (videoId): if a job is
- * already running for the same id, the previous one is cancelled and a
- * fresh one starts from the given snapshot. The caller (Player) is
- * responsible for first aborting its own foreground AbortController.
- */
+export interface BackgroundTakeover {
+  session: PersistedAnalysisSession;
+  cues: SrtCue[];
+  analysis: CheckpointedAnalysis;
+  errorMessage: string | null;
+}
+
+/** Transfer an existing producer lease into the background without reopening it. */
 export function runInBackground(opts: RunInBackgroundOptions): void {
-  const { videoId } = opts;
+  if (runtimes.has(opts.videoId)) return;
 
-  // If a job is already running for this video, replace it.
-  const existing = bgControllers.get(videoId);
-  if (existing) {
-    existing.abort();
-    bgControllers.delete(videoId);
-  }
-  clearSaveTimer(videoId);
-
-  const ac = new AbortController();
-  bgControllers.set(videoId, ac);
-
-  useBgAnalyses.setState((state) => ({
-    jobs: {
-      ...state.jobs,
-      [videoId]: {
-        videoId,
-        label: opts.label,
-        phase: "analyzing",
-        subtitleCount: opts.previouslyAnalyzed.length,
-        totalCues: opts.cues.length,
-        errorMessage: null,
-        startedAt: Date.now(),
-        subtitles: opts.previouslyAnalyzed.slice(),
-        summary: opts.previousSummary,
-      },
-    },
-  }));
-
-  // Fire-and-forget. Errors are captured below and surfaced via the
-  // job's `phase = "error"`; we deliberately don't reject upward.
-  void driveBgAnalysis(ac, opts);
+  const runtime: BgRuntime = {
+    videoId: opts.videoId,
+    label: opts.label,
+    style: opts.style,
+    mode: "analysis",
+    session: opts.session,
+    cues: opts.cues,
+    controller: new AbortController(),
+    disposition: "background",
+    runner: Promise.resolve(),
+  };
+  runtimes.set(opts.videoId, runtime);
+  publishAnalysis(runtime, opts.session.analysis, "analyzing");
+  runtime.runner = (async () => {
+    try {
+      await opts.waitFor;
+      if (runtime.controller.signal.aborted) return;
+      await driveAnalysis(runtime);
+    } catch (error) {
+      failRuntime(runtime, error);
+    }
+  })();
 }
 
 export interface RetranscribeBgOptions {
   videoId: string;
   label: string;
-  /** Translation register chosen at import time. */
   style: TranslationStyle;
-  /** Whisper model id (settings.whisperModel). */
   whisperModel: string;
 }
 
-/**
- * Background "重新解析": re-run whisper (overwriting transcript.srt),
- * clear the stale analysis.json, then hand off to runInBackground for
- * the LLM phase (which writes the new analysis.json + flips library
- * status to ready on completion). Survives navigation — the Player can
- * be unmounted the moment this is called. Shows up in the queue widget
- * as a "transcribing" job during whisper, then "analyzing".
- */
+/** Explicit re-transcription starts without a lease, then creates one for the new transcript. */
 export function retranscribeAndAnalyzeInBackground(opts: RetranscribeBgOptions): void {
-  const { videoId } = opts;
-
-  // Replace any existing job/run for this video.
-  const existing = bgControllers.get(videoId);
-  if (existing) {
-    existing.abort();
-    bgControllers.delete(videoId);
-  }
-  clearSaveTimer(videoId);
-
-  const ac = new AbortController();
-  bgControllers.set(videoId, ac);
-
+  if (runtimes.has(opts.videoId)) return;
+  const runtime: BgRuntime = {
+    videoId: opts.videoId,
+    label: opts.label,
+    style: opts.style,
+    mode: "retranscribe",
+    whisperModel: opts.whisperModel,
+    session: null,
+    cues: null,
+    controller: new AbortController(),
+    disposition: "background",
+    runner: Promise.resolve(),
+  };
+  runtimes.set(opts.videoId, runtime);
   useBgAnalyses.setState((state) => ({
     jobs: {
       ...state.jobs,
-      [videoId]: {
-        videoId,
+      [opts.videoId]: {
+        videoId: opts.videoId,
         label: opts.label,
         phase: "transcribing",
         subtitleCount: 0,
+        committedCueOffset: 0,
         totalCues: 0,
         errorMessage: null,
+        retryMessage: null,
         startedAt: Date.now(),
         subtitles: [],
         summary: null,
       },
     },
   }));
-
-  void driveRetranscribeThenAnalyze(ac, opts);
+  runtime.runner = driveRetranscribeThenAnalyze(runtime);
 }
 
-async function driveRetranscribeThenAnalyze(
-  ac: AbortController,
-  opts: RetranscribeBgOptions,
-): Promise<void> {
-  const { videoId } = opts;
+async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
   try {
-    // 1. Re-transcribe (Rust; runs to completion regardless of the UI).
     await invoke("retranscribe_video", {
-      videoId,
-      whisperModel: opts.whisperModel,
+      videoId: runtime.videoId,
+      whisperModel: runtime.whisperModel,
     });
-    if (ac.signal.aborted) return;
+    if (runtime.controller.signal.aborted) return;
 
-    // 2. Drop the stale analysis so the LLM phase starts fresh.
-    await deleteAnalysisForReset(videoId);
-    if (ac.signal.aborted) return;
-
-    // 3. Load the freshly written transcript.
-    const srt = await invoke<string | null>("load_transcript", { videoId });
-    if (ac.signal.aborted) return;
-    if (!srt) throw new Error("找不到 transcript.srt — 重新转写可能失败了");
-    const cues = parseSrt(srt);
-
-    // 4. If the user cancelled the job from the widget during transcribe,
-    //    the job entry is gone — don't resurrect it.
-    if (!useBgAnalyses.getState().jobs[videoId]) return;
-
-    // 5. Hand off to the existing LLM-background machinery. It aborts +
-    //    replaces our controller, re-registers the job as "analyzing",
-    //    and flips library status to ready when phase 2 completes.
-    runInBackground({
-      videoId,
-      label: opts.label,
-      cues,
-      previouslyAnalyzed: [],
-      previousSummary: null,
-      style: opts.style,
+    const srt = await invoke<string | null>("load_transcript", {
+      videoId: runtime.videoId,
     });
-  } catch (e: unknown) {
-    if (ac.signal.aborted) {
-      bgControllers.delete(videoId);
-      return;
+    if (!srt) throw new Error("找不到 transcript.srt — 重新转录可能失败了");
+    if (runtime.controller.signal.aborted) return;
+
+    runtime.cues = parseSrt(srt);
+    runtime.session = await resetAnalysisSession(runtime.videoId, runtime.cues);
+    if (runtime.controller.signal.aborted) return;
+    publishAnalysis(runtime, runtime.session.analysis, "analyzing");
+    await driveAnalysis(runtime);
+  } catch (error) {
+    failRuntime(runtime, error);
+  } finally {
+    if (runtime.controller.signal.aborted && runtime.disposition === "cancel") {
+      await runtime.session?.close().catch(() => {});
     }
-    useBgAnalyses.setState((state) => {
-      const job = state.jobs[videoId];
-      if (!job) return state;
-      return {
-        jobs: {
-          ...state.jobs,
-          [videoId]: { ...job, phase: "error", errorMessage: e instanceof Error ? e.message : String(e) },
-        },
-      };
-    });
-    bgControllers.delete(videoId);
   }
 }
 
-async function driveBgAnalysis(ac: AbortController, opts: RunInBackgroundOptions): Promise<void> {
-  const { videoId } = opts;
-  const remaining = opts.cues.slice(opts.previouslyAnalyzed.length);
-  const provider = getProvider(useSettings.getState().settings);
+async function driveAnalysis(runtime: BgRuntime): Promise<void> {
+  const session = runtime.session;
+  const cues = runtime.cues;
+  if (!session || !cues || runtime.controller.signal.aborted) return;
 
   try {
-    if (remaining.length > 0) {
-      await runAnalysis({
-        provider,
-        cues: remaining,
-        previouslyAnalyzed: opts.previouslyAnalyzed,
-        style: opts.style,
-        signal: ac.signal,
-        onCue: (c: Subtitle) => {
-          if (ac.signal.aborted) return;
-          useBgAnalyses.setState((state) => {
-            const job = state.jobs[videoId];
-            if (!job) return state;
-            // Dedup-on-append: same (time, endTime, text) means a
-            // retry produced a duplicate — drop it. Matches the
-            // foreground useAnalysis behaviour.
-            const key = cueKey(c);
-            if (job.subtitles.some((x) => cueKey(x) === key)) return state;
-            return {
-              jobs: {
-                ...state.jobs,
-                [videoId]: {
-                  ...job,
-                  subtitles: [...job.subtitles, c],
-                  subtitleCount: job.subtitleCount + 1,
-                },
-              },
-            };
-          });
-          schedulePartialSave(videoId);
-        },
-        onSummary: (s) => {
-          if (ac.signal.aborted) return;
-          useBgAnalyses.setState((state) => {
-            const job = state.jobs[videoId];
-            if (!job) return state;
-            return {
-              jobs: { ...state.jobs, [videoId]: { ...job, summary: s } },
-            };
-          });
-          schedulePartialSave(videoId);
-        },
-      });
-    }
-
-    if (ac.signal.aborted) return;
-
-    // Phase 2 (summary) completed — write final analysis.json and flip
-    // library status to ready. If phase 2 didn't run (no cues, or LLM
-    // skipped), the partial-save loop above already persisted what we
-    // have.
-    clearSaveTimer(videoId);
-    const finalJob = useBgAnalyses.getState().jobs[videoId];
-    if (finalJob) {
-      const finalAnalysis: AnalysisResult = {
-        subtitles: dedupSubtitles(finalJob.subtitles),
-        keyPhrases: finalJob.summary?.keyPhrases ?? [],
-      };
-      await saveAnalysis(videoId, finalAnalysis);
-      if (finalAnalysis.keyPhrases.length > 0) {
-        await invoke("library_set_status", {
-          id: videoId,
-          status: "ready",
-          error: null,
-        });
-        // Refresh the in-memory library so any Library card visible
-        // RIGHT NOW flips from "Analyzing"/spinner to "ready" without
-        // requiring the user to navigate away and back. Without this
-        // the disk state was correct but the on-screen card looked
-        // stuck on "未完成" until refresh.
-        await useLibrary.getState().reload();
-      }
-    }
-
-    // Mark done; linger 4s so user sees the green check, then drop.
-    useBgAnalyses.setState((state) => {
-      const job = state.jobs[videoId];
-      if (!job) return state;
-      return {
-        jobs: { ...state.jobs, [videoId]: { ...job, phase: "done" } },
-      };
+    const completed = await executeAnalysisSession({
+      session,
+      provider: getProvider(useSettings.getState().settings),
+      cues,
+      style: runtime.style,
+      signal: runtime.controller.signal,
+      onCommitted: (analysis) => {
+        if (runtimes.get(runtime.videoId) !== runtime) return;
+        publishAnalysis(runtime, analysis, "analyzing");
+      },
+      onRetry: ({ nextAttempt, maxAttempts }) => {
+        updateJob(runtime.videoId, (job) => ({
+          ...job,
+          retryMessage: `网络波动，正在进行第 ${nextAttempt}/${maxAttempts} 次尝试…`,
+        }));
+      },
     });
-    bgControllers.delete(videoId);
+
+    if (runtime.controller.signal.aborted || runtime.disposition !== "background") return;
+    if (completed.checkpoint.phase !== "complete") return;
+
+    await invoke("library_set_status", {
+      id: runtime.videoId,
+      status: "ready",
+      error: null,
+    });
+    await useLibrary.getState().reload();
+    publishAnalysis(runtime, completed, "done");
+    const completedJob = useBgAnalyses.getState().jobs[runtime.videoId];
+    runtimes.delete(runtime.videoId);
+    await session.close();
     setTimeout(() => {
-      useBgAnalyses.setState((state) => {
-        if (!state.jobs[videoId]) return state;
-        const next = { ...state.jobs };
-        delete next[videoId];
-        return { jobs: next };
-      });
-    }, 4000);
-  } catch (e: unknown) {
-    const isAbort =
-      ac.signal.aborted ||
-      (e instanceof DOMException && e.name === "AbortError") ||
-      (typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError");
-    if (isAbort) {
-      // User cancelled — flush partial, then drop the job. Cancel by
-      // takeover removes the job upstream; we still try the disk
-      // save here so what was generated isn't lost.
-      clearSaveTimer(videoId);
-      const job = useBgAnalyses.getState().jobs[videoId];
-      if (job && job.subtitles.length > 0) {
-        const partial: AnalysisResult = {
-          subtitles: dedupSubtitles(job.subtitles),
-          keyPhrases: job.summary?.keyPhrases ?? [],
-        };
-        saveAnalysis(videoId, partial).catch((err) =>
-          console.warn("BG abort partial save failed", err)
-        );
+      if (useBgAnalyses.getState().jobs[runtime.videoId] === completedJob) {
+        removeJob(runtime.videoId);
       }
-      bgControllers.delete(videoId);
-      return;
-    }
-    useBgAnalyses.setState((state) => {
-      const job = state.jobs[videoId];
-      if (!job) return state;
-      return {
-        jobs: {
-          ...state.jobs,
-          [videoId]: { ...job, phase: "error", errorMessage: e instanceof Error ? e.message : String(e) },
-        },
-      };
-    });
-    bgControllers.delete(videoId);
+    }, 4000);
+  } catch (error) {
+    failRuntime(runtime, error);
   }
 }
 
-/**
- * User-initiated cancel from the queue widget. Aborts the in-flight
- * controller and removes the job from the store. The catch handler in
- * driveBgAnalysis sees the abort and writes a partial save for resume.
- */
-export function cancelBackground(videoId: string): void {
-  const ac = bgControllers.get(videoId);
-  if (ac) {
-    ac.abort();
-    bgControllers.delete(videoId);
+function publishAnalysis(
+  runtime: BgRuntime,
+  analysis: CheckpointedAnalysis,
+  phase: BgAnalysisJob["phase"],
+): void {
+  const previous = useBgAnalyses.getState().jobs[runtime.videoId];
+  useBgAnalyses.setState((state) => ({
+    jobs: {
+      ...state.jobs,
+      [runtime.videoId]: {
+        videoId: runtime.videoId,
+        label: runtime.label,
+        phase,
+        subtitleCount: analysis.subtitles.length,
+        committedCueOffset: analysis.checkpoint.nextCueOffset,
+        totalCues: runtime.cues?.length ?? 0,
+        errorMessage: null,
+        retryMessage: null,
+        startedAt: previous?.startedAt ?? Date.now(),
+        subtitles: analysis.subtitles,
+        summary: { keyPhrases: analysis.keyPhrases },
+      },
+    },
+  }));
+}
+
+function failRuntime(runtime: BgRuntime, error: unknown): void {
+  if (runtime.controller.signal.aborted) return;
+  updateJob(runtime.videoId, (job) => ({
+    ...job,
+    phase: "error",
+    retryMessage: null,
+    errorMessage: error instanceof Error ? error.message : String(error),
+  }));
+}
+
+/** Retry a failed background stage while preserving its lease/checkpoint. */
+export function resumeBackgroundAnalysis(videoId: string): void {
+  const runtime = runtimes.get(videoId);
+  const job = useBgAnalyses.getState().jobs[videoId];
+  if (!runtime || job?.phase !== "error") return;
+
+  runtime.controller = new AbortController();
+  runtime.disposition = "background";
+  updateJob(videoId, (current) => ({
+    ...current,
+    phase: runtime.session ? "analyzing" : "transcribing",
+    errorMessage: null,
+    retryMessage: null,
+  }));
+  runtime.runner = runtime.session
+    ? driveAnalysis(runtime)
+    : driveRetranscribeThenAnalyze(runtime);
+}
+
+/** Cancel background work, then close its lease after the current task exits. */
+export async function cancelBackground(videoId: string): Promise<void> {
+  const runtime = runtimes.get(videoId);
+  if (!runtime) {
+    removeJob(videoId);
+    return;
   }
-  clearSaveTimer(videoId);
+  runtime.disposition = "cancel";
+  runtime.controller.abort();
+  if (runtime.mode === "retranscribe" && !runtime.session) {
+    await invoke("cancel_import", { videoId }).catch(() => {});
+  }
+  await runtime.runner.catch(() => {});
+  await runtime.session?.close().catch(() => {});
+  if (runtimes.get(videoId) === runtime) runtimes.delete(videoId);
+  removeJob(videoId);
+}
+
+/** Reverse handoff: abort only the uncommitted batch and return the same lease. */
+export async function takeOverBackground(videoId: string): Promise<BackgroundTakeover | null> {
+  const runtime = runtimes.get(videoId);
+  if (!runtime) return null;
+  const errorMessage = useBgAnalyses.getState().jobs[videoId]?.errorMessage ?? null;
+  runtime.disposition = "takeover";
+  runtime.controller.abort();
+  if (runtime.mode === "retranscribe" && !runtime.session) {
+    await invoke("cancel_import", { videoId }).catch(() => {});
+  }
+  await runtime.runner.catch(() => {});
+  if (runtimes.get(videoId) === runtime) runtimes.delete(videoId);
+  removeJob(videoId);
+  if (!runtime.session || !runtime.cues) return null;
+  return {
+    session: runtime.session,
+    cues: runtime.cues,
+    analysis: runtime.session.analysis,
+    errorMessage,
+  };
+}
+
+function updateJob(videoId: string, update: (job: BgAnalysisJob) => BgAnalysisJob): void {
+  useBgAnalyses.setState((state) => {
+    const job = state.jobs[videoId];
+    if (!job) return state;
+    return { jobs: { ...state.jobs, [videoId]: update(job) } };
+  });
+}
+
+function removeJob(videoId: string): void {
   useBgAnalyses.setState((state) => {
     if (!state.jobs[videoId]) return state;
-    const next = { ...state.jobs };
-    delete next[videoId];
-    return { jobs: next };
+    const jobs = { ...state.jobs };
+    delete jobs[videoId];
+    return { jobs };
   });
-}
-
-/**
- * Called by Player on mount for a videoId that has a BG job. Cancels
- * the BG controller (no more BG writes) and returns the accumulated
- * state so Player can promote it into useAnalysis and continue in
- * the foreground from where BG left off.
- */
-export function takeOverBackground(
-  videoId: string,
-): { subtitles: Subtitle[]; summary: Omit<AnalysisResult, "subtitles"> | null } | null {
-  const job = useBgAnalyses.getState().jobs[videoId];
-  if (!job) return null;
-  const ac = bgControllers.get(videoId);
-  if (ac) {
-    ac.abort();
-    bgControllers.delete(videoId);
-  }
-  clearSaveTimer(videoId);
-  // Drop the job from the queue UI — Player owns it from here.
-  useBgAnalyses.setState((state) => {
-    const next = { ...state.jobs };
-    delete next[videoId];
-    return { jobs: next };
-  });
-  return { subtitles: job.subtitles, summary: job.summary };
-}
-
-function schedulePartialSave(videoId: string): void {
-  clearSaveTimer(videoId);
-  const t = setTimeout(() => {
-    const job = useBgAnalyses.getState().jobs[videoId];
-    if (!job) return;
-    const partial: AnalysisResult = {
-      subtitles: dedupSubtitles(job.subtitles),
-      keyPhrases: job.summary?.keyPhrases ?? [],
-    };
-    saveAnalysis(videoId, partial).catch((e) =>
-      console.warn("BG partial save failed", e)
-    );
-  }, 800);
-  bgSaveTimers.set(videoId, t);
-}
-
-function clearSaveTimer(videoId: string): void {
-  const t = bgSaveTimers.get(videoId);
-  if (t) {
-    clearTimeout(t);
-    bgSaveTimers.delete(videoId);
-  }
-}
-
-function cueKey(c: Subtitle): string {
-  return `${c.time}|${c.endTime}|${c.text}`;
 }

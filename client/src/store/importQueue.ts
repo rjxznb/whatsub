@@ -23,6 +23,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listPending, setStatus, claimItem } from "../lib/api/importQueue";
 import { runInBackground, useBgAnalyses } from "./backgroundAnalyses";
+import { openAnalysisSession } from "../llm/analysisSession";
 import { parseSrt } from "../llm/parseSrt";
 import { useSettings } from "./settings";
 import { syncToCloud } from "../lib/api/librarySync";
@@ -148,12 +149,12 @@ async function processNextPendingItem(): Promise<void> {
     // ---- Step 3: start LLM analysis in background ----
     // runInBackground is fire-and-forget; it writes analysis.json and flips
     // library status to "ready" on completion.
+    const session = await openAnalysisSession(videoId, cues);
     runInBackground({
       videoId,
       label: item.url,
       cues,
-      previouslyAnalyzed: [],
-      previousSummary: null,
+      session,
       style: "neutral",
     });
 

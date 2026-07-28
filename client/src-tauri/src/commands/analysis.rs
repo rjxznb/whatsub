@@ -13,6 +13,28 @@ use tauri::{AppHandle, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+#[tauri::command]
+pub fn begin_analysis_session(
+    video_id: String,
+    reset: bool,
+) -> AppResult<crate::commands::analysis_store::AnalysisSessionStart> {
+    crate::commands::analysis_store::begin_session(&video_id, reset)
+}
+
+#[tauri::command]
+pub fn save_analysis_session(
+    video_id: String,
+    lease: String,
+    analysis: Value,
+) -> AppResult<crate::commands::analysis_store::SessionSaveOutcome> {
+    crate::commands::analysis_store::save_session(&video_id, &lease, analysis)
+}
+
+#[tauri::command]
+pub fn end_analysis_session(video_id: String, lease: String) -> AppResult<()> {
+    crate::commands::analysis_store::end_session(&video_id, &lease)
+}
+
 static ANALYSIS_SAVE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const ANALYSIS_GENERATION_STATE_VERSION: u8 = 2;
 
@@ -2114,4 +2136,3 @@ mod tests {
         assert!(!temporary.exists());
     }
 }
-

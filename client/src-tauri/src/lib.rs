@@ -36,6 +36,9 @@ pub fn run() {
             commands::library::library_freeze_paths,
             commands::library::reveal_in_explorer,
             commands::analysis::save_analysis,
+            commands::analysis::begin_analysis_session,
+            commands::analysis::save_analysis_session,
+            commands::analysis::end_analysis_session,
             commands::analysis::load_analysis,
             commands::analysis::load_analysis_state,
             commands::analysis::delete_analysis,
@@ -122,4 +125,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

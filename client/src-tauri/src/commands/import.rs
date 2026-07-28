@@ -1,3 +1,4 @@
+use crate::commands::analysis_store;
 use crate::commands::library::{
     library_delete, library_get, library_upsert, LibraryEntry, LibrarySource, LibraryStatus,
 };
@@ -9,8 +10,10 @@ use crate::pipeline::{ffmpeg, whisper, ytdlp};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 /// Per-import cancellation registry. Each in-flight import_video registers
@@ -21,35 +24,94 @@ use tokio_util::sync::CancellationToken;
 ///
 /// Stored in Tauri's `.manage()`. Mutex-only (not async) because all
 /// access points hold the lock for a single map operation.
-#[derive(Default)]
 pub struct ImportState {
-    pub active: Mutex<HashMap<String, CancellationToken>>,
+    active: Mutex<HashMap<String, ActiveImport>>,
+    next_job_id: AtomicU64,
+}
+
+struct ActiveImport {
+    job_id: u64,
+    token: CancellationToken,
+    done: watch::Receiver<bool>,
+}
+
+struct ImportRegistration {
+    job_id: u64,
+    token: CancellationToken,
+    done_tx: watch::Sender<bool>,
+}
+
+impl Default for ImportState {
+    fn default() -> Self {
+        Self {
+            active: Mutex::new(HashMap::new()),
+            next_job_id: AtomicU64::new(0),
+        }
+    }
 }
 
 impl ImportState {
-    fn register(&self, video_id: &str) -> CancellationToken {
+    fn register(&self, video_id: &str) -> AppResult<ImportRegistration> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| AppError::Other("import registry poisoned".to_string()))?;
+        if active.contains_key(video_id) {
+            return Err(AppError::Other(format!(
+                "import already running: {video_id}"
+            )));
+        }
+
+        let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed) + 1;
         let token = CancellationToken::new();
-        if let Ok(mut g) = self.active.lock() {
-            g.insert(video_id.to_string(), token.clone());
-        }
-        token
+        let (done_tx, done) = watch::channel(false);
+        active.insert(
+            video_id.to_string(),
+            ActiveImport {
+                job_id,
+                token: token.clone(),
+                done,
+            },
+        );
+        Ok(ImportRegistration {
+            job_id,
+            token,
+            done_tx,
+        })
     }
 
-    fn unregister(&self, video_id: &str) {
-        if let Ok(mut g) = self.active.lock() {
-            g.remove(video_id);
+    fn cancel_and_waiter(&self, video_id: &str) -> Option<watch::Receiver<bool>> {
+        let active = self.active.lock().ok()?;
+        let job = active.get(video_id)?;
+        job.token.cancel();
+        Some(job.done.clone())
+    }
+
+    fn unregister_if_same(&self, video_id: &str, job_id: u64) -> bool {
+        let Ok(mut active) = self.active.lock() else {
+            return false;
+        };
+        if active.get(video_id).is_some_and(|job| job.job_id == job_id) {
+            active.remove(video_id);
+            true
+        } else {
+            false
         }
     }
 
-    fn cancel(&self, video_id: &str) -> bool {
-        if let Ok(g) = self.active.lock() {
-            if let Some(token) = g.get(video_id) {
-                token.cancel();
-                return true;
-            }
-        }
-        false
+    fn finish(&self, video_id: &str, registration: ImportRegistration) {
+        self.unregister_if_same(video_id, registration.job_id);
+        let _ = registration.done_tx.send(true);
     }
+}
+
+async fn wait_for_completion(done: &mut watch::Receiver<bool>) -> AppResult<()> {
+    while !*done.borrow() {
+        done.changed()
+            .await
+            .map_err(|_| AppError::Other("import ended without cleanup confirmation".to_string()))?;
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -111,21 +173,27 @@ pub async fn import_video(
 
     // Register cancellation token BEFORE emitting Started so a fast ✕
     // click can land immediately.
-    let cancel = state.register(&video_id);
+    let registration = state.register(&video_id)?;
 
-    let result = run_import(&app, &video_id, &out_dir, &req, &cancel).await;
-
-    // Always unregister regardless of outcome — keeping a cancelled
-    // token in the map would make later imports of the same video_id
-    // start "already cancelled".
-    state.unregister(&video_id);
+    let result = run_import(
+        &app,
+        &video_id,
+        &out_dir,
+        &req,
+        &registration.token,
+    )
+    .await;
 
     // On cancel: best-effort cleanup so the user's next import of the
     // same URL starts from scratch (per the design decision — clean
     // half-downloads rather than support resume).
     if matches!(result, Err(AppError::Cancelled)) {
+        let _ = analysis_store::revoke_analysis_sessions(&video_id);
         cleanup_partial(&video_id, &out_dir);
     }
+
+    // Signal completion only after all cancellation cleanup has finished.
+    state.finish(&video_id, registration);
 
     result
 }
@@ -260,19 +328,25 @@ fn cleanup_partial(video_id: &str, out_dir: &std::path::Path) {
     let _ = library_delete(video_id.to_string());
 }
 
-/// Cancel an in-flight import. Looks up the registered CancellationToken
-/// by video_id and triggers `.cancel()` — this propagates into the
-/// run_sidecar event loop, which kills the child process. The
-/// `import_video` task then sees `AppError::Cancelled`, runs cleanup,
-/// unregisters itself, and returns.
+/// Cancel an in-flight import and wait until its child process has exited
+/// and cancellation cleanup has finished. A same-video retry therefore
+/// cannot race stale cleanup from the cancelled task.
 ///
 /// Returns Ok even when video_id isn't in the registry (the import
 /// already completed / failed / wasn't started), so the UI can treat
 /// "cancel" as idempotent.
 #[tauri::command]
 pub async fn cancel_import(state: State<'_, ImportState>, video_id: String) -> AppResult<()> {
-    state.cancel(&video_id);
-    Ok(())
+    let Some(mut done) = state.cancel_and_waiter(&video_id) else {
+        return Ok(());
+    };
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        wait_for_completion(&mut done),
+    )
+    .await
+    .map_err(|_| AppError::Other("cancel timed out while waiting for import cleanup".to_string()))?
 }
 
 /// Re-run audio extraction + whisper transcription for an already-downloaded
@@ -284,9 +358,7 @@ pub async fn cancel_import(state: State<'_, ImportState>, video_id: String) -> A
 /// pipeline events as `import_video` so the existing progress listeners on
 /// the frontend (ProgressBanner / store) just work.
 ///
-/// Not cancellable through ImportState (doesn't register a token) —
-/// retranscribe is typically fast and the user can just wait. If we ever
-/// add cancellation here, it'd plug in the same way `import_video` does.
+/// Uses the same completion-aware cancellation registry as `import_video`.
 #[tauri::command]
 pub async fn retranscribe_video(
     app: AppHandle,
@@ -306,12 +378,20 @@ pub async fn retranscribe_video(
     // Register a cancel token (same registry + `cancel_import` command as
     // import_video) so the foreground 「前台解析」 can kill the ffmpeg /
     // whisper child process if the user leaves the Player page mid-run.
-    let cancel = state.register(&video_id);
-    let result =
-        run_retranscribe(&app, &video_id, &out_dir, &video_path, &whisper_model, &cancel).await;
-    // Always unregister so a later run of the same video_id doesn't start
-    // "already cancelled".
-    state.unregister(&video_id);
+    let registration = state.register(&video_id)?;
+    let result = run_retranscribe(
+        &app,
+        &video_id,
+        &out_dir,
+        &video_path,
+        &whisper_model,
+        &registration.token,
+    )
+    .await;
+    if matches!(result, Err(AppError::Cancelled)) {
+        let _ = analysis_store::revoke_analysis_sessions(&video_id);
+    }
+    state.finish(&video_id, registration);
     result
 }
 
@@ -379,3 +459,58 @@ async fn run_retranscribe(
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn same_video_registration_is_rejected_until_the_old_job_finishes() {
+        let state = ImportState::default();
+        let first = state.register("v1").unwrap();
+
+        assert!(state.register("v1").is_err());
+
+        state.finish("v1", first);
+        assert!(state.register("v1").is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancellation_waiter_does_not_finish_before_job_cleanup() {
+        let state = ImportState::default();
+        let registration = state.register("v1").unwrap();
+        let mut waiter = state.cancel_and_waiter("v1").unwrap();
+
+        assert!(registration.token.is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), wait_for_completion(&mut waiter))
+                .await
+                .is_err()
+        );
+
+        state.finish("v1", registration);
+        tokio::time::timeout(Duration::from_millis(100), wait_for_completion(&mut waiter))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_unregister_cannot_remove_a_replacement_job() {
+        let state = ImportState::default();
+        let old = state.register("v1").unwrap();
+        let old_job_id = old.job_id;
+        state.finish("v1", old);
+
+        let replacement = state.register("v1").unwrap();
+        assert!(!state.unregister_if_same("v1", old_job_id));
+        assert!(state.cancel_and_waiter("v1").is_some());
+        assert!(replacement.token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_absent_job_is_idempotent() {
+        let state = ImportState::default();
+        assert!(state.cancel_and_waiter("missing").is_none());
+    }
+}

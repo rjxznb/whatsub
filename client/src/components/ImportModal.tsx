@@ -221,15 +221,6 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   } | null>(null);
   const [savingLogin, setSavingLogin] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  // One automatic login launch per source/site during this modal session.
-  // If fresh cookies still cannot download the video, do not trap the user in
-  // an endless browser → retry → browser loop; show the focused diagnosis and
-  // leave the next login attempt explicit.
-  const autoLoginAttemptedRef = useRef(new Set<string>());
-
-  useEffect(() => {
-    autoLoginAttemptedRef.current.clear();
-  }, [urlValue]);
 
   async function beginSiteLogin(action: SiteLoginAction) {
     setLoginError(null);
@@ -261,27 +252,8 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
 
     lastShownErrorRef.current = error;
     console.error("[whatsub import error]", error);
-
-    const fe = friendlyError(
-      error,
-      tab === "url" ? "downloading" : phase,
-      tab === "url" ? urlValue : undefined,
-    );
-    if (tab === "url" && fe.loginRequired && fe.action) {
-      const key = `${urlValue.trim()}\u0000${fe.action.siteKey}`;
-      if (!autoLoginAttemptedRef.current.has(key)) {
-        autoLoginAttemptedRef.current.add(key);
-        setShowErrorDialog(false);
-        void beginSiteLogin(fe.action);
-        return;
-      }
-    }
-
     setShowErrorDialog(true);
-    // beginSiteLogin intentionally omitted: this effect is driven only by a
-    // newly-arrived raw error, not by function identity on each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [error, phase, tab, urlValue]);
+  }, [error]);
 
   // submit() is defined further down + captures form state via closure;
   // we ref it so the site-login-success listener (mounted once with

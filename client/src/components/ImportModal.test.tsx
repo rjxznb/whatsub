@@ -177,17 +177,43 @@ describe("ImportModal — diagnosed download failures", () => {
     eventHandlers.clear();
   });
 
-  it("opens the YouTube login flow immediately for a bot-check error", async () => {
+  it("shows the YouTube auth diagnosis without starting login", async () => {
     const r = await startImport();
-    pipelineHandler?.({
-      payload: {
-        stage: "Failed",
-        video_id: "auth-video",
-        error: "ERROR: [youtube] Sign in to confirm you’re not a bot. Use --cookies.",
-      },
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "ERROR: [youtube] Sign in to confirm you’re not a bot. Use --cookies.",
+        },
+      });
     });
 
-    await waitFor(() => {
+    await waitFor(() =>
+      expect(r.getByText("YouTube 要求登录验证")).toBeInTheDocument(),
+    );
+    expect(r.getAllByText(/触发了反机器人检测/)).not.toHaveLength(0);
+    expect(r.getByRole("button", { name: "重新登录 YouTube" })).toBeInTheDocument();
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "site_login_start"),
+    ).toHaveLength(0);
+  });
+
+  it("starts YouTube login only after the diagnosis action is clicked", async () => {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "The provided account cookies are no longer valid. Please refresh your cookies.",
+        },
+      });
+    });
+
+    fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
+
+    await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("site_login_start", {
         args: {
           key: "youtube",
@@ -195,23 +221,28 @@ describe("ImportModal — diagnosed download failures", () => {
           loginUrl: "https://www.youtube.com/",
           harvestDomains: ["youtube.com", "google.com", "googleusercontent.com"],
         },
-      });
-    });
+      }),
+    );
     expect(r.getByText("等待 YouTube 登录完成")).toBeInTheDocument();
   });
 
   it("automatically retries once after fresh cookies are saved", async () => {
-    await startImport();
-    pipelineHandler?.({
-      payload: {
-        stage: "Failed",
-        video_id: "auth-video",
-        error: "The provided account cookies are no longer valid. Please refresh your cookies.",
-      },
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "The provided account cookies are no longer valid. Please refresh your cookies.",
+        },
+      });
     });
+    fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("site_login_start", expect.anything()));
 
-    eventHandlers.get("site-login-success")?.({ payload: {} });
+    await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+    });
 
     await waitFor(() => {
       expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(2);

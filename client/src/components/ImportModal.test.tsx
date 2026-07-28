@@ -11,17 +11,35 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 // Capture the pipeline-event handler so tests can drive real events.
 let pipelineHandler: ((e: { payload: unknown }) => void) | null = null;
 const eventHandlers = new Map<string, (e: { payload: unknown }) => void>();
+let deferSiteLoginListenerRegistrations = false;
+const deferredSiteLoginUnlistenResolvers: Array<() => void> = [];
+const lateSiteLoginUnlistenMock = vi.fn();
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (name: string, cb: (e: { payload: unknown }) => void) => {
+  listen: vi.fn((name: string, cb: (e: { payload: unknown }) => void) => {
     eventHandlers.set(name, cb);
     if (name === "pipeline-event") pipelineHandler = cb;
-    return () => {};
+    if (
+      deferSiteLoginListenerRegistrations &&
+      (name === "site-login-success" || name === "site-login-cancelled")
+    ) {
+      return new Promise<() => void>((resolve) => {
+        deferredSiteLoginUnlistenResolvers.push(() => resolve(lateSiteLoginUnlistenMock));
+      });
+    }
+    return Promise.resolve(() => {});
   }),
 }));
 // Controllable invoke: `import_video` never settles, so the modal stays on the
 // progress view — the state the ✕-cancel tests exercise.
+let deferSiteLoginCancel = false;
+let resolveDeferredSiteLoginCancel: (() => void) | null = null;
 const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
   if (cmd === "import_video") return new Promise(() => {});
+  if (cmd === "site_login_cancel" && deferSiteLoginCancel) {
+    return new Promise<void>((resolve) => {
+      resolveDeferredSiteLoginCancel = resolve;
+    });
+  }
   return Promise.resolve(null);
 });
 vi.mock("@tauri-apps/api/core", () => ({
@@ -51,6 +69,18 @@ vi.mock("../store/analysis", () => ({
 function urlInput(): HTMLInputElement {
   return document.querySelector<HTMLInputElement>('[data-tour="url-input"]')!;
 }
+
+function resolveDeferredSiteLoginListeners() {
+  deferredSiteLoginUnlistenResolvers.splice(0).forEach((resolve) => resolve());
+}
+
+beforeEach(() => {
+  deferSiteLoginListenerRegistrations = false;
+  deferredSiteLoginUnlistenResolvers.splice(0);
+  lateSiteLoginUnlistenMock.mockClear();
+  deferSiteLoginCancel = false;
+  resolveDeferredSiteLoginCancel = null;
+});
 
 describe("ImportModal — onboarding sample-URL affordance", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -163,12 +193,32 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
 
 describe("ImportModal — diagnosed download failures", () => {
   const flush = () => new Promise((r) => setTimeout(r, 0));
+  const loginButtonName = "\u91cd\u65b0\u767b\u5f55 YouTube";
+  const cancelButtonName = "\u53d6\u6d88";
+  const pendingLoginText = "\u7b49\u5f85 YouTube \u767b\u5f55\u5b8c\u6210";
+  const diagnosisText = "YouTube \u8981\u6c42\u767b\u5f55\u9a8c\u8bc1";
 
   async function startImport() {
     const r = render(<ImportModal onClose={() => {}} />);
     fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
     fireEvent.click(r.getByRole("button", { name: "开始解析" }));
     await flush();
+    return r;
+  }
+
+  async function startPendingYouTubeLogin() {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "ERROR: Sign in to confirm you're not a bot. Use --cookies.",
+        },
+      });
+    });
+    fireEvent.click(await r.findByRole("button", { name: loginButtonName }));
+    await waitFor(() => expect(r.getByText(pendingLoginText)).toBeInTheDocument());
     return r;
   }
 
@@ -271,6 +321,65 @@ describe("ImportModal — diagnosed download failures", () => {
 
     await waitFor(() => expect(r.getByText("YouTube 要求登录验证")).toBeInTheDocument());
     expect(invokeMock).toHaveBeenCalledWith("site_login_cancel");
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+    expect(urlInput().value).toBe(SAMPLE_URL);
+  });
+
+  it("revokes authorized late login listeners after unmount", async () => {
+    deferSiteLoginListenerRegistrations = true;
+    const r = await startPendingYouTubeLogin();
+
+    r.unmount();
+    await act(async () => {
+      resolveDeferredSiteLoginListeners();
+      await Promise.resolve();
+    });
+    expect(lateSiteLoginUnlistenMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+    });
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+  });
+
+  it("does not retry when success arrives while local cancellation is pending", async () => {
+    const r = await startPendingYouTubeLogin();
+    deferSiteLoginCancel = true;
+
+    fireEvent.click(r.getByRole("button", { name: cancelButtonName }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("site_login_cancel"));
+
+    await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+    });
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+
+    expect(resolveDeferredSiteLoginCancel).not.toBeNull();
+    await act(async () => {
+      resolveDeferredSiteLoginCancel?.();
+    });
+    await waitFor(() => expect(r.getByText(diagnosisText)).toBeInTheDocument());
+  });
+
+  it("ignores a site-login-cancelled event without an authorized login", async () => {
+    await startImport();
+
+    await act(async () => {
+      eventHandlers.get("site-login-cancelled")?.({ payload: {} });
+    });
+
+    expect(document.querySelector('[data-tour="url-input"]')).toBeNull();
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+  });
+
+  it("restores the diagnosis when site-login-cancelled arrives during login", async () => {
+    const r = await startPendingYouTubeLogin();
+
+    await act(async () => {
+      eventHandlers.get("site-login-cancelled")?.({ payload: {} });
+    });
+
+    await waitFor(() => expect(r.getByText(diagnosisText)).toBeInTheDocument());
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
     expect(urlInput().value).toBe(SAMPLE_URL);
   });

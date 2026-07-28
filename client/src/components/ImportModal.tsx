@@ -274,6 +274,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
 
   useEffect(() => {
     const unlistens: Array<() => void> = [];
+    let disposed = false;
     void Promise.all([
       listen("site-login-success", () => {
         if (!retryAfterLoginRef.current) return;
@@ -285,12 +286,21 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         // Auto-retry the original import. Cookies are now in the jar
         // so yt-dlp will pick them up on the next invocation.
         void submitRef.current();
-      }).then((un) => unlistens.push(un)),
+      }).then((un) => {
+        if (disposed) un();
+        else unlistens.push(un);
+      }),
       listen("site-login-cancelled", () => {
+        if (!retryAfterLoginRef.current) return;
         restoreDiagnosisAfterLoginCancel();
-      }).then((un) => unlistens.push(un)),
+      }).then((un) => {
+        if (disposed) un();
+        else unlistens.push(un);
+      }),
     ]);
     return () => {
+      disposed = true;
+      retryAfterLoginRef.current = false;
       unlistens.forEach((u) => u());
     };
   }, []);
@@ -308,12 +318,12 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   }
 
   async function cancelLoginInModal() {
+    restoreDiagnosisAfterLoginCancel();
     try {
       await invoke("site_login_cancel");
     } catch {
       // ignore — even if cancel fails, we still want to clear UI state
     }
-    restoreDiagnosisAfterLoginCancel();
   }
 
   // Esc dismisses overlays in priority order: error dialog → close modal.

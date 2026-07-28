@@ -2,6 +2,7 @@ use crate::core::paths;
 use crate::core::progress::{emit, PipelineEvent};
 use crate::error::{AppError, AppResult};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -13,11 +14,21 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 static ANALYSIS_SAVE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const ANALYSIS_GENERATION_STATE_VERSION: u8 = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveAnalysisStatus {
+    Applied,
+    AlreadyCurrent,
+    Rejected,
+}
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveAnalysisOutcome {
-    pub(crate) applied: bool,
+    pub(crate) status: SaveAnalysisStatus,
+    pub(crate) generation: Option<String>,
     pub(crate) revision: Option<u64>,
 }
 
@@ -25,53 +36,82 @@ pub struct SaveAnalysisOutcome {
 #[serde(rename_all = "camelCase")]
 struct AnalysisGenerationState {
     version: u8,
-    transcript_fingerprint: String,
+    #[serde(default)]
+    generation: u64,
+    #[serde(default)]
+    previous_generation: Option<u64>,
     deleted: bool,
     revision: Option<u64>,
+    #[serde(default)]
+    content_hash: Option<String>,
 }
 
 impl AnalysisGenerationState {
-    fn active(fingerprint: &str, revision: u64) -> Self {
+    fn active(
+        generation: u64,
+        previous_generation: Option<u64>,
+        revision: Option<u64>,
+        content_hash: String,
+    ) -> Self {
         Self {
-            version: 1,
-            transcript_fingerprint: fingerprint.to_owned(),
+            version: ANALYSIS_GENERATION_STATE_VERSION,
+            generation,
+            previous_generation,
             deleted: false,
-            revision: Some(revision),
+            revision,
+            content_hash: Some(content_hash),
         }
     }
 
-    fn tombstone(fingerprint: &str, revision: Option<u64>) -> Self {
+    fn tombstone(generation: u64, revision: Option<u64>) -> Self {
         Self {
-            version: 1,
-            transcript_fingerprint: fingerprint.to_owned(),
+            version: ANALYSIS_GENERATION_STATE_VERSION,
+            generation,
+            previous_generation: None,
             deleted: true,
             revision,
+            content_hash: None,
         }
     }
 }
 
 #[tauri::command]
+/// Save contract:
+/// - normal mutation: `generation` is the current opaque epoch;
+/// - generation CAS: `expected_generation` is current and Rust advances it;
+/// - neither: initialize an absent state or prove exact idempotent content.
+/// Supplying both identities, a stale identity, or changed content without an
+/// identity returns `Rejected` without replacing user-visible analysis.
 pub async fn save_analysis(
     video_id: String,
     analysis: Value,
+    generation: Option<String>,
     expected_generation: Option<String>,
 ) -> AppResult<SaveAnalysisOutcome> {
     let path = paths::video_dir(&video_id)?.join("analysis.json");
-    save_analysis_path_for_generation(&path, analysis, expected_generation.as_deref()).await
+    save_analysis_path_for_generation(
+        &path,
+        analysis,
+        generation.as_deref(),
+        expected_generation.as_deref(),
+    )
+    .await
 }
 
 #[cfg(test)]
 async fn save_analysis_path(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
-    save_analysis_path_for_generation(path, analysis, None).await
+    let generation = current_generation_token(path)?;
+    save_analysis_path_for_generation(path, analysis, generation.as_deref(), None).await
 }
 
 async fn save_analysis_path_for_generation(
     path: &Path,
     analysis: Value,
+    generation: Option<&str>,
     expected_generation: Option<&str>,
 ) -> AppResult<SaveAnalysisOutcome> {
     let _guard = ANALYSIS_SAVE_GATE.lock().await;
-    save_analysis_value_for_generation(path, analysis, expected_generation)
+    save_analysis_value_for_generation(path, analysis, generation, expected_generation)
 }
 
 #[derive(Clone, Copy)]
@@ -90,17 +130,20 @@ fn analysis_version(analysis: &Value) -> Option<AnalysisVersion<'_>> {
 
 #[cfg(test)]
 fn save_analysis_value(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
-    save_analysis_value_for_generation(path, analysis, None)
+    let generation = current_generation_token(path)?;
+    save_analysis_value_for_generation(path, analysis, generation.as_deref(), None)
 }
 
 fn save_analysis_value_for_generation(
     path: &Path,
     analysis: Value,
+    generation: Option<&str>,
     expected_generation: Option<&str>,
 ) -> AppResult<SaveAnalysisOutcome> {
     save_analysis_value_for_generation_with_replacer(
         path,
         analysis,
+        generation,
         expected_generation,
         replace_analysis_file,
     )
@@ -115,12 +158,20 @@ fn save_analysis_value_with_replacer<F>(
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
 {
-    save_analysis_value_for_generation_with_replacer(path, analysis, None, replacer)
+    let generation = current_generation_token(path)?;
+    save_analysis_value_for_generation_with_replacer(
+        path,
+        analysis,
+        generation.as_deref(),
+        None,
+        replacer,
+    )
 }
 
 fn save_analysis_value_for_generation_with_replacer<F>(
     path: &Path,
     analysis: Value,
+    generation: Option<&str>,
     expected_generation: Option<&str>,
     replacer: F,
 ) -> AppResult<SaveAnalysisOutcome>
@@ -130,83 +181,249 @@ where
     let temporary = path.with_extension("json.tmp");
     let backup = path.with_extension("json.bak");
     recover_interrupted_replacement(path, &temporary, &backup)?;
-    let state = read_generation_state_for_mutation(path)?;
-
     let incoming_version = analysis_version(&analysis);
+    let incoming_revision = incoming_version.map(|version| version.revision);
+    let incoming_hash = analysis_content_hash(&analysis)?;
     let current_analysis = if path.exists() {
         let current: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
         Some(current)
     } else {
         None
     };
-    let current_version = current_analysis.as_ref().and_then(analysis_version);
-    let authoritative_fingerprint = state
-        .as_ref()
-        .map(|state| state.transcript_fingerprint.as_str())
-        .or_else(|| current_version.map(|version| version.fingerprint));
-    let visible_current_version = current_version.filter(|current| {
-        !state.as_ref().is_some_and(|state| state.deleted)
-            && authoritative_fingerprint == Some(current.fingerprint)
-    });
-    let current_revision = visible_current_version
-        .map(|version| version.revision)
-        .or_else(|| state.as_ref().and_then(|state| state.revision));
+    let mut state = ensure_generation_state(
+        path,
+        read_generation_state_for_mutation(path)?,
+        current_analysis.as_ref(),
+    )?;
 
-    let reject = || {
-        Ok(SaveAnalysisOutcome {
-            applied: false,
-            revision: current_revision,
-        })
+    if state.is_none() {
+        if generation.is_some_and(|token| parse_generation_token(token) != Some(1))
+            || expected_generation.is_some()
+        {
+            return Ok(save_outcome(SaveAnalysisStatus::Rejected, None, None));
+        }
+        let initial =
+            AnalysisGenerationState::active(1, None, incoming_revision, incoming_hash.clone());
+        write_generation_state(path, &initial)?;
+        state = Some(initial);
+    }
+
+    let mut state = state.expect("generation state initialized");
+    let reject = |state: &AnalysisGenerationState| {
+        Ok(save_outcome(
+            SaveAnalysisStatus::Rejected,
+            Some(state.generation),
+            state.revision,
+        ))
     };
 
+    if generation.is_some() && expected_generation.is_some() {
+        return reject(&state);
+    }
+
     if let Some(expected) = expected_generation {
-        let Some(incoming) = incoming_version else {
-            return reject();
+        let Some(expected) = parse_generation_token(expected) else {
+            return reject(&state);
         };
-        if incoming.revision != 0
-            || incoming.fingerprint == expected
-            || authoritative_fingerprint != Some(expected)
+        if incoming_version.is_some_and(|version| version.revision != 0) {
+            return reject(&state);
+        }
+
+        let started_generation = expected == state.generation;
+        if started_generation {
+            let next_generation = state.generation.checked_add(1).ok_or_else(|| {
+                AppError::Other("analysis generation epoch exhausted".to_string())
+            })?;
+            state = AnalysisGenerationState::active(
+                next_generation,
+                Some(expected),
+                incoming_revision,
+                incoming_hash.clone(),
+            );
+            write_generation_state(path, &state)?;
+        } else if state.previous_generation != Some(expected)
+            || state.deleted
+            || state.content_hash.as_deref() != Some(incoming_hash.as_str())
         {
-            return reject();
+            return reject(&state);
         }
 
-        // The generation record is authoritative and transitions first. If the
-        // process stops before analysis.json is replaced, readers hide the old
-        // generation and a normal save from the new generation can retry.
-        write_generation_state(
-            path,
-            &AnalysisGenerationState::active(incoming.fingerprint, incoming.revision),
-        )?;
-    } else {
-        if state.as_ref().is_some_and(|state| state.deleted) {
-            return reject();
+        if current_analysis.as_ref() == Some(&analysis) {
+            return Ok(save_outcome(
+                if started_generation {
+                    SaveAnalysisStatus::Applied
+                } else {
+                    SaveAnalysisStatus::AlreadyCurrent
+                },
+                Some(state.generation),
+                incoming_revision,
+            ));
         }
+        write_json_atomically_with_replacer(path, &analysis, replacer)?;
+        return Ok(save_outcome(
+            SaveAnalysisStatus::Applied,
+            Some(state.generation),
+            incoming_revision,
+        ));
+    }
 
-        if let Some(authoritative) = authoritative_fingerprint {
-            let Some(incoming) = incoming_version else {
-                return reject();
-            };
-            if incoming.fingerprint != authoritative {
-                return reject();
+    if state.deleted {
+        return reject(&state);
+    }
+
+    let current_hash = current_analysis
+        .as_ref()
+        .map(analysis_content_hash)
+        .transpose()?;
+    let current_is_authoritative = current_hash.as_deref() == state.content_hash.as_deref();
+
+    let Some(generation) = generation else {
+        if current_is_authoritative && current_analysis.as_ref() == Some(&analysis) {
+            return Ok(save_outcome(
+                SaveAnalysisStatus::AlreadyCurrent,
+                Some(state.generation),
+                state.revision,
+            ));
+        }
+        if current_analysis.is_none()
+            && state.content_hash.as_deref() == Some(incoming_hash.as_str())
+        {
+            write_json_atomically_with_replacer(path, &analysis, replacer)?;
+            return Ok(save_outcome(
+                SaveAnalysisStatus::Applied,
+                Some(state.generation),
+                incoming_revision,
+            ));
+        }
+        return reject(&state);
+    };
+
+    if parse_generation_token(generation) != Some(state.generation) {
+        return reject(&state);
+    }
+
+    if !current_is_authoritative {
+        if state.content_hash.as_deref() == Some(incoming_hash.as_str()) {
+            if current_analysis.as_ref() != Some(&analysis) {
+                write_json_atomically_with_replacer(path, &analysis, replacer)?;
             }
+            return Ok(save_outcome(
+                SaveAnalysisStatus::Applied,
+                Some(state.generation),
+                incoming_revision,
+            ));
         }
+        if current_analysis.as_ref() == Some(&analysis) {
+            state.revision = incoming_revision;
+            state.content_hash = Some(incoming_hash);
+            write_generation_state(path, &state)?;
+            return Ok(save_outcome(
+                SaveAnalysisStatus::AlreadyCurrent,
+                Some(state.generation),
+                incoming_revision,
+            ));
+        }
+        return reject(&state);
+    }
 
-        if let Some(current) = visible_current_version {
-            let Some(incoming) = incoming_version else {
-                return reject();
-            };
-            if incoming.revision <= current.revision {
-                return reject();
-            }
+    if current_analysis.as_ref() == Some(&analysis) {
+        return Ok(save_outcome(
+            SaveAnalysisStatus::AlreadyCurrent,
+            Some(state.generation),
+            state.revision,
+        ));
+    }
+
+    let current_version = current_analysis.as_ref().and_then(analysis_version);
+    if let Some(current) = current_version {
+        let Some(incoming) = incoming_version else {
+            return reject(&state);
+        };
+        if incoming.fingerprint != current.fingerprint || incoming.revision <= current.revision {
+            return reject(&state);
         }
     }
 
     write_json_atomically_with_replacer(path, &analysis, replacer)?;
+    state.revision = incoming_revision;
+    state.content_hash = Some(incoming_hash);
+    write_generation_state(path, &state)?;
+    Ok(save_outcome(
+        SaveAnalysisStatus::Applied,
+        Some(state.generation),
+        incoming_revision,
+    ))
+}
 
-    Ok(SaveAnalysisOutcome {
-        applied: true,
-        revision: incoming_version.map(|version| version.revision),
-    })
+fn save_outcome(
+    status: SaveAnalysisStatus,
+    generation: Option<u64>,
+    revision: Option<u64>,
+) -> SaveAnalysisOutcome {
+    SaveAnalysisOutcome {
+        status,
+        generation: generation.map(generation_token),
+        revision,
+    }
+}
+
+fn generation_token(generation: u64) -> String {
+    format!("generation-{generation}")
+}
+
+fn parse_generation_token(token: &str) -> Option<u64> {
+    let generation = token.strip_prefix("generation-")?.parse().ok()?;
+    (generation_token(generation) == token).then_some(generation)
+}
+
+fn analysis_content_hash(analysis: &Value) -> AppResult<String> {
+    let bytes = serde_json::to_vec(analysis)?;
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
+}
+
+#[cfg(test)]
+fn current_generation_token(path: &Path) -> AppResult<Option<String>> {
+    Ok(read_generation_state_for_mutation(path)?
+        .filter(|state| state.generation > 0)
+        .map(|state| generation_token(state.generation)))
+}
+
+fn ensure_generation_state(
+    path: &Path,
+    state: Option<AnalysisGenerationState>,
+    current_analysis: Option<&Value>,
+) -> AppResult<Option<AnalysisGenerationState>> {
+    let Some(mut state) = state else {
+        if let Some(analysis) = current_analysis {
+            let state = AnalysisGenerationState::active(
+                1,
+                None,
+                analysis_version(analysis).map(|version| version.revision),
+                analysis_content_hash(analysis)?,
+            );
+            write_generation_state(path, &state)?;
+            return Ok(Some(state));
+        }
+        return Ok(None);
+    };
+
+    if state.version < ANALYSIS_GENERATION_STATE_VERSION || state.generation == 0 {
+        state.version = ANALYSIS_GENERATION_STATE_VERSION;
+        if state.generation == 0 {
+            state.generation = 1;
+            state.previous_generation = None;
+        }
+        if state.deleted {
+            state.content_hash = None;
+        } else if state.content_hash.is_none() {
+            state.content_hash = current_analysis.map(analysis_content_hash).transpose()?;
+        }
+        write_generation_state(path, &state)?;
+    } else if !state.deleted && state.content_hash.is_none() {
+        state.content_hash = current_analysis.map(analysis_content_hash).transpose()?;
+        write_generation_state(path, &state)?;
+    }
+    Ok(Some(state))
 }
 
 fn generation_state_path(analysis_path: &Path) -> PathBuf {
@@ -225,6 +442,7 @@ fn read_generation_state_for_mutation(
     read_generation_state_file(&state_path)
 }
 
+#[cfg(test)]
 fn read_generation_state_snapshot(
     analysis_path: &Path,
 ) -> AppResult<Option<AnalysisGenerationState>> {
@@ -242,7 +460,7 @@ fn read_generation_state_file(path: &Path) -> AppResult<Option<AnalysisGeneratio
         return Ok(None);
     }
     let state: AnalysisGenerationState = serde_json::from_str(&fs::read_to_string(path)?)?;
-    if state.version != 1 {
+    if state.version != 1 && state.version != ANALYSIS_GENERATION_STATE_VERSION {
         return Err(AppError::InvalidInput(format!(
             "unsupported analysis generation state version {}",
             state.version
@@ -396,12 +614,67 @@ fn replace_analysis_file(temporary: &Path, destination: &Path) -> std::io::Resul
     fs::rename(temporary, destination)
 }
 
-#[tauri::command]
-pub fn load_analysis(video_id: String) -> AppResult<Option<Value>> {
-    let path = paths::video_dir(&video_id)?.join("analysis.json");
-    load_analysis_path(&path)
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadAnalysisOutcome {
+    analysis: Option<Value>,
+    generation: Option<String>,
 }
 
+#[tauri::command]
+pub async fn load_analysis(video_id: String) -> AppResult<Option<Value>> {
+    Ok(load_analysis_state(video_id).await?.analysis)
+}
+
+#[tauri::command]
+pub async fn load_analysis_state(video_id: String) -> AppResult<LoadAnalysisOutcome> {
+    let path = paths::video_dir(&video_id)?.join("analysis.json");
+    load_analysis_state_path(&path).await
+}
+
+async fn load_analysis_state_path(path: &Path) -> AppResult<LoadAnalysisOutcome> {
+    let _guard = ANALYSIS_SAVE_GATE.lock().await;
+    recover_interrupted_replacement(
+        path,
+        &path.with_extension("json.tmp"),
+        &path.with_extension("json.bak"),
+    )?;
+    let analysis = if path.exists() {
+        Some(serde_json::from_str::<Value>(&fs::read_to_string(path)?)?)
+    } else {
+        None
+    };
+    let state = ensure_generation_state(
+        path,
+        read_generation_state_for_mutation(path)?,
+        analysis.as_ref(),
+    )?;
+    let generation = state
+        .as_ref()
+        .map(|state| generation_token(state.generation));
+    if state.as_ref().is_some_and(|state| state.deleted) {
+        return Ok(LoadAnalysisOutcome {
+            analysis: None,
+            generation,
+        });
+    }
+    let analysis = match (state.as_ref(), analysis) {
+        (Some(state), Some(analysis))
+            if state.content_hash.as_deref()
+                == Some(analysis_content_hash(&analysis)?.as_str()) =>
+        {
+            Some(analysis)
+        }
+        (None, analysis) => analysis,
+        _ => None,
+    };
+    Ok(LoadAnalysisOutcome {
+        analysis,
+        generation,
+    })
+}
+
+#[cfg(test)]
 fn load_analysis_path(path: &Path) -> AppResult<Option<Value>> {
     let state = read_generation_state_snapshot(path)?;
     if state.as_ref().is_some_and(|state| state.deleted) {
@@ -412,9 +685,7 @@ fn load_analysis_path(path: &Path) -> AppResult<Option<Value>> {
     }
     let analysis: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
     if let Some(state) = state {
-        if analysis_version(&analysis).map(|version| version.fingerprint)
-            != Some(state.transcript_fingerprint.as_str())
-        {
+        if state.content_hash.as_deref() != Some(analysis_content_hash(&analysis)?.as_str()) {
             return Ok(None);
         }
     }
@@ -426,14 +697,13 @@ fn load_analysis_path(path: &Path) -> AppResult<Option<Value>> {
 /// short-circuiting to the (now stale) cached analysis. Best-effort:
 /// a missing file is success.
 #[tauri::command]
-pub async fn delete_analysis(video_id: String) -> AppResult<()> {
+pub async fn delete_analysis(video_id: String) -> AppResult<SaveAnalysisOutcome> {
     let path = paths::video_dir(&video_id)?.join("analysis.json");
     delete_analysis_path(&path).await
 }
 
-async fn delete_analysis_path(path: &Path) -> AppResult<()> {
+async fn delete_analysis_path(path: &Path) -> AppResult<SaveAnalysisOutcome> {
     let _guard = ANALYSIS_SAVE_GATE.lock().await;
-    let state = read_generation_state_for_mutation(path)?;
     recover_interrupted_replacement(
         path,
         &path.with_extension("json.tmp"),
@@ -444,22 +714,23 @@ async fn delete_analysis_path(path: &Path) -> AppResult<()> {
     } else {
         None
     };
-    let current_version = current_analysis.as_ref().and_then(analysis_version);
-    let fingerprint = state
+    let state = ensure_generation_state(
+        path,
+        read_generation_state_for_mutation(path)?,
+        current_analysis.as_ref(),
+    )?;
+    let revision = current_analysis
         .as_ref()
-        .map(|state| state.transcript_fingerprint.as_str())
-        .or_else(|| current_version.map(|version| version.fingerprint));
-    let revision = current_version
-        .filter(|version| Some(version.fingerprint) == fingerprint)
+        .and_then(analysis_version)
         .map(|version| version.revision)
         .or_else(|| state.as_ref().and_then(|state| state.revision));
 
-    if let Some(fingerprint) = fingerprint {
+    if let Some(state) = state.as_ref() {
         // Persist the retirement before removing the user-visible file. Loads
         // treat this record as authoritative, including after process restart.
         write_generation_state(
             path,
-            &AnalysisGenerationState::tombstone(fingerprint, revision),
+            &AnalysisGenerationState::tombstone(state.generation, revision),
         )?;
     }
 
@@ -474,7 +745,11 @@ async fn delete_analysis_path(path: &Path) -> AppResult<()> {
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(())
+    Ok(save_outcome(
+        SaveAnalysisStatus::Applied,
+        state.as_ref().map(|state| state.generation),
+        revision,
+    ))
 }
 
 #[tauri::command]
@@ -877,6 +1152,24 @@ mod tests {
     }
 
     #[test]
+    fn save_outcome_serializes_the_generation_ipc_contract() {
+        let outcome = save_outcome(
+            SaveAnalysisStatus::AlreadyCurrent,
+            Some(7),
+            Some(4),
+        );
+
+        assert_eq!(
+            serde_json::to_value(outcome).unwrap(),
+            json!({
+                "status": "alreadyCurrent",
+                "generation": "generation-7",
+                "revision": 4
+            })
+        );
+    }
+
+    #[test]
     fn newer_revision_wins_and_stale_revision_leaves_no_temp_file() {
         let dir = TestDir::new("stale");
         let path = dir.analysis_path();
@@ -884,9 +1177,9 @@ mod tests {
         let newer = save_analysis_value(&path, checkpointed(2, "newer")).unwrap();
         let stale = save_analysis_value(&path, checkpointed(1, "stale")).unwrap();
 
-        assert!(newer.applied);
+        assert_eq!(newer.status, SaveAnalysisStatus::Applied);
         assert_eq!(newer.revision, Some(2));
-        assert!(!stale.applied);
+        assert_eq!(stale.status, SaveAnalysisStatus::Rejected);
         assert_eq!(stale.revision, Some(2));
         assert_eq!(read_revision(&path), Some(2));
         assert_eq!(read_analysis(&path)["marker"], "newer");
@@ -901,7 +1194,7 @@ mod tests {
 
         let outcome = save_analysis_value(&path, checkpointed(4, "equal")).unwrap();
 
-        assert!(!outcome.applied);
+        assert_eq!(outcome.status, SaveAnalysisStatus::Rejected);
         assert_eq!(outcome.revision, Some(4));
         assert_eq!(read_analysis(&path)["marker"], "first");
     }
@@ -919,11 +1212,13 @@ mod tests {
         let outcome = save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:new", 0, "new-generation"),
-            Some("sha256:old"),
+            None,
+            Some("generation-1"),
         )
         .unwrap();
 
-        assert!(outcome.applied);
+        assert_eq!(outcome.status, SaveAnalysisStatus::Applied);
+        assert_eq!(outcome.generation.as_deref(), Some("generation-2"));
         assert_eq!(outcome.revision, Some(0));
         assert_eq!(read_analysis(&path)["marker"], "new-generation");
 
@@ -937,9 +1232,136 @@ mod tests {
             checkpointed_generation("sha256:new", 1, "new-generation-stale"),
         )
         .unwrap();
-        assert!(newer.applied);
-        assert!(!stale.applied);
+        assert_eq!(newer.status, SaveAnalysisStatus::Applied);
+        assert_eq!(stale.status, SaveAnalysisStatus::Rejected);
         assert_eq!(read_analysis(&path)["marker"], "new-generation-revision-2");
+    }
+
+    #[test]
+    fn same_transcript_can_start_a_fresh_generation() {
+        let dir = TestDir::new("same-transcript-new-generation");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:same", 8, "first-generation"),
+        )
+        .unwrap();
+
+        let reset = save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:same", 0, "second-generation"),
+            None,
+            Some("generation-1"),
+        )
+        .unwrap();
+
+        assert_eq!(reset.status, SaveAnalysisStatus::Applied);
+        assert_eq!(reset.generation.as_deref(), Some("generation-2"));
+        assert_eq!(read_analysis(&path)["marker"], "second-generation");
+    }
+
+    #[test]
+    fn byte_identical_cas_still_reports_a_new_generation_applied() {
+        let dir = TestDir::new("identical-content-new-generation");
+        let path = dir.analysis_path();
+        let analysis = checkpointed_generation("sha256:same", 0, "same-content");
+        save_analysis_value(&path, analysis.clone()).unwrap();
+
+        let reset = save_analysis_value_for_generation(&path, analysis, None, Some("generation-1"))
+            .unwrap();
+
+        assert_eq!(reset.status, SaveAnalysisStatus::Applied);
+        assert_eq!(reset.generation.as_deref(), Some("generation-2"));
+    }
+
+    #[test]
+    fn a_to_b_to_a_rejects_delayed_work_from_the_original_a() {
+        let dir = TestDir::new("generation-aba");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed_generation("sha256:a", 8, "original-a")).unwrap();
+        save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:b", 0, "generation-b"),
+            None,
+            Some("generation-1"),
+        )
+        .unwrap();
+        save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:a", 0, "new-a"),
+            None,
+            Some("generation-2"),
+        )
+        .unwrap();
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:a", 9, "delayed-original-a"),
+            Some("generation-1"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(read_analysis(&path)["marker"], "new-a");
+    }
+
+    #[test]
+    fn generation_tokens_are_compared_in_canonical_form() {
+        let dir = TestDir::new("generation-token-canonical");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(1, "current")).unwrap();
+
+        let aliased = save_analysis_value_for_generation(
+            &path,
+            checkpointed(2, "aliased-token"),
+            Some("generation-01"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(aliased.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(read_analysis(&path)["marker"], "current");
+    }
+
+    #[test]
+    fn identical_equal_revision_is_an_idempotent_success() {
+        let dir = TestDir::new("equal-idempotent");
+        let path = dir.analysis_path();
+        let analysis = checkpointed(4, "same-content");
+        save_analysis_value(&path, analysis.clone()).unwrap();
+
+        let retry = save_analysis_value(&path, analysis).unwrap();
+
+        assert_eq!(retry.status, SaveAnalysisStatus::AlreadyCurrent);
+        assert_eq!(read_analysis(&path)["marker"], "same-content");
+    }
+
+    #[test]
+    fn cloud_retry_after_a_later_materialization_failure_is_already_current() {
+        let dir = TestDir::new("cloud-materialization-retry");
+        let path = dir.analysis_path();
+        let analysis = checkpointed(4, "cloud-content");
+
+        let first =
+            save_analysis_value_for_generation(&path, analysis.clone(), None, None).unwrap();
+        assert_eq!(first.status, SaveAnalysisStatus::Applied);
+        let later_step: Result<(), &str> = Err("injected transcript write failure");
+        assert!(later_step.is_err());
+
+        let retry = save_analysis_value_for_generation(&path, analysis, None, None).unwrap();
+        assert_eq!(retry.status, SaveAnalysisStatus::AlreadyCurrent);
+        assert_eq!(retry.generation.as_deref(), Some("generation-1"));
+
+        let different = save_analysis_value_for_generation(
+            &path,
+            checkpointed(4, "different-cloud-content"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(different.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(read_analysis(&path)["marker"], "cloud-content");
     }
 
     #[test]
@@ -952,15 +1374,21 @@ mod tests {
         )
         .unwrap();
 
-        write_generation_state(&path, &AnalysisGenerationState::active("sha256:new", 0)).unwrap();
-
-        assert!(load_analysis_path(&path).unwrap().is_none());
-        let retry = save_analysis_value(
+        let retry_analysis = checkpointed_generation("sha256:new", 0, "new-generation-retry");
+        write_generation_state(
             &path,
-            checkpointed_generation("sha256:new", 0, "new-generation-retry"),
+            &AnalysisGenerationState::active(
+                2,
+                Some(1),
+                Some(0),
+                analysis_content_hash(&retry_analysis).unwrap(),
+            ),
         )
         .unwrap();
-        assert!(retry.applied);
+
+        assert!(load_analysis_path(&path).unwrap().is_none());
+        let retry = save_analysis_value(&path, retry_analysis).unwrap();
+        assert_eq!(retry.status, SaveAnalysisStatus::Applied);
         assert_eq!(read_analysis(&path)["marker"], "new-generation-retry");
     }
 
@@ -976,17 +1404,20 @@ mod tests {
         save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:new", 0, "new-generation"),
-            Some("sha256:old"),
+            None,
+            Some("generation-1"),
         )
         .unwrap();
 
-        let stale = save_analysis_value(
+        let stale = save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:old", 9, "late-old-generation"),
+            Some("generation-1"),
+            None,
         )
         .unwrap();
 
-        assert!(!stale.applied);
+        assert_eq!(stale.status, SaveAnalysisStatus::Rejected);
         assert_eq!(stale.revision, Some(0));
         assert_eq!(read_analysis(&path)["marker"], "new-generation");
     }
@@ -1003,24 +1434,27 @@ mod tests {
         save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:b", 0, "generation-b"),
-            Some("sha256:a"),
+            None,
+            Some("generation-1"),
         )
         .unwrap();
         save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:c", 0, "generation-c"),
-            Some("sha256:b"),
+            None,
+            Some("generation-2"),
         )
         .unwrap();
 
         let delayed = save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:b", 0, "delayed-generation-b"),
-            Some("sha256:a"),
+            None,
+            Some("generation-1"),
         )
         .unwrap();
 
-        assert!(!delayed.applied);
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
         assert_eq!(read_analysis(&path)["marker"], "generation-c");
     }
 
@@ -1040,7 +1474,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!rejected.applied);
+        assert_eq!(rejected.status, SaveAnalysisStatus::Rejected);
         assert_eq!(rejected.revision, Some(8));
         assert_eq!(read_analysis(&path)["marker"], "old-generation");
     }
@@ -1053,7 +1487,7 @@ mod tests {
 
         let outcome = save_analysis_value(&path, checkpointed(0, "checkpointed")).unwrap();
 
-        assert!(outcome.applied);
+        assert_eq!(outcome.status, SaveAnalysisStatus::Applied);
         assert_eq!(outcome.revision, Some(0));
         assert_eq!(read_analysis(&path)["marker"], "checkpointed");
     }
@@ -1063,16 +1497,18 @@ mod tests {
         let dir = TestDir::new("legacy");
         let path = dir.analysis_path();
 
-        assert!(save_analysis_value(&path, legacy("first")).unwrap().applied);
-        assert!(
-            save_analysis_value(&path, legacy("second"))
-                .unwrap()
-                .applied
+        assert_eq!(
+            save_analysis_value(&path, legacy("first")).unwrap().status,
+            SaveAnalysisStatus::Applied
+        );
+        assert_eq!(
+            save_analysis_value(&path, legacy("second")).unwrap().status,
+            SaveAnalysisStatus::Applied
         );
         save_analysis_value(&path, checkpointed(3, "checkpointed")).unwrap();
         let rejected = save_analysis_value(&path, legacy("late-legacy")).unwrap();
 
-        assert!(!rejected.applied);
+        assert_eq!(rejected.status, SaveAnalysisStatus::Rejected);
         assert_eq!(rejected.revision, Some(3));
         assert_eq!(read_analysis(&path)["marker"], "checkpointed");
     }
@@ -1082,6 +1518,7 @@ mod tests {
         let dir = TestDir::new("concurrent");
         let path = dir.analysis_path();
         let mut tasks = Vec::new();
+        save_analysis_value(&path, checkpointed(0, "initial")).unwrap();
 
         for revision in [7, 2, 9, 1, 6, 10, 4, 8, 3, 5] {
             let path = path.clone();
@@ -1130,7 +1567,7 @@ mod tests {
 
         delete_analysis_path(&path).await.unwrap();
         let tombstone = read_analysis(&generation_state_path(&path));
-        assert_eq!(tombstone["transcriptFingerprint"], "sha256:retired");
+        assert_eq!(tombstone["generation"], 1);
         assert_eq!(tombstone["deleted"], true);
         assert!(load_analysis_path(&path).unwrap().is_none());
 
@@ -1140,17 +1577,93 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!late.applied);
+        assert_eq!(late.status, SaveAnalysisStatus::Rejected);
         assert!(!path.exists());
 
         let reset = save_analysis_value_for_generation(
             &path,
             checkpointed_generation("sha256:future", 0, "after-delete-reset"),
-            Some("sha256:retired"),
+            None,
+            Some("generation-1"),
         )
         .unwrap();
-        assert!(reset.applied);
+        assert_eq!(reset.status, SaveAnalysisStatus::Applied);
         assert_eq!(read_analysis(&path)["marker"], "after-delete-reset");
+    }
+
+    #[tokio::test]
+    async fn deleting_legacy_analysis_persists_a_restart_safe_tombstone() {
+        let dir = TestDir::new("delete-legacy-generation-tombstone");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, legacy("before-delete")).unwrap();
+
+        let deleted = delete_analysis_path(&path).await.unwrap();
+        assert_eq!(deleted.status, SaveAnalysisStatus::Applied);
+        assert_eq!(deleted.generation.as_deref(), Some("generation-1"));
+        assert!(generation_state_path(&path).exists());
+
+        // The next helper call re-reads disk state, as a restarted process
+        // would; no in-memory generation registry participates in the check.
+        let late = save_analysis_value(&path, legacy("late-after-delete")).unwrap();
+
+        assert_eq!(late.status, SaveAnalysisStatus::Rejected);
+        assert!(!path.exists());
+        assert!(load_analysis_path(&path).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn loading_a_round_two_state_migrates_it_to_epoch_schema() {
+        let dir = TestDir::new("generation-state-v1-migration");
+        let path = dir.analysis_path();
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&checkpointed_generation(
+                "sha256:legacy-state",
+                3,
+                "existing-analysis",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            generation_state_path(&path),
+            br#"{
+                "version": 1,
+                "transcriptFingerprint": "sha256:legacy-state",
+                "deleted": false,
+                "revision": 3
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = load_analysis_state_path(&path).await.unwrap();
+
+        assert_eq!(loaded.generation.as_deref(), Some("generation-1"));
+        assert_eq!(loaded.analysis.unwrap()["marker"], "existing-analysis");
+        let migrated = read_analysis(&generation_state_path(&path));
+        assert_eq!(migrated["version"], 2);
+        assert_eq!(migrated["generation"], 1);
+        assert!(migrated.get("transcriptFingerprint").is_none());
+    }
+
+    #[tokio::test]
+    async fn loading_legacy_analysis_assigns_a_durable_generation() {
+        let dir = TestDir::new("legacy-load-generation");
+        let path = dir.analysis_path();
+        fs::write(&path, serde_json::to_vec_pretty(&legacy("legacy")).unwrap()).unwrap();
+
+        let loaded = load_analysis_state_path(&path).await.unwrap();
+
+        assert_eq!(loaded.generation.as_deref(), Some("generation-1"));
+        assert_eq!(loaded.analysis.unwrap()["marker"], "legacy");
+        let state = read_analysis(&generation_state_path(&path));
+        assert_eq!(state["version"], 2);
+        assert_eq!(state["generation"], 1);
+        assert_eq!(state["deleted"], false);
+        assert!(state["contentHash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
     }
 
     #[test]
@@ -1169,6 +1682,31 @@ mod tests {
         assert_eq!(read_revision(&path), Some(1));
         assert_eq!(read_analysis(&path)["marker"], "original");
         assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn cas_retry_finishes_after_state_advanced_but_analysis_replace_failed() {
+        let dir = TestDir::new("generation-cas-retry-after-replace-failure");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(4, "generation-one")).unwrap();
+        let generation_two = checkpointed(0, "generation-two");
+
+        let first = save_analysis_value_for_generation_with_replacer(
+            &path,
+            generation_two.clone(),
+            None,
+            Some("generation-1"),
+            |_temporary, _destination| Err(io::Error::other("injected analysis failure")),
+        );
+        assert!(first.is_err());
+        assert_eq!(read_analysis(&path)["marker"], "generation-one");
+
+        let retry =
+            save_analysis_value_for_generation(&path, generation_two, None, Some("generation-1"))
+                .unwrap();
+        assert_eq!(retry.status, SaveAnalysisStatus::Applied);
+        assert_eq!(retry.generation.as_deref(), Some("generation-2"));
+        assert_eq!(read_analysis(&path)["marker"], "generation-two");
     }
 
     #[test]
@@ -1225,7 +1763,7 @@ mod tests {
 
         let outcome = save_analysis_value(&path, checkpointed(3, "complete")).unwrap();
 
-        assert!(outcome.applied);
+        assert_eq!(outcome.status, SaveAnalysisStatus::Applied);
         assert_eq!(read_revision(&path), Some(3));
         assert_eq!(read_analysis(&path)["marker"], "complete");
         assert!(!temporary.exists());

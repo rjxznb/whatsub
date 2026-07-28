@@ -37,6 +37,7 @@ pub fn run() {
             commands::library::reveal_in_explorer,
             commands::analysis::save_analysis,
             commands::analysis::load_analysis,
+            commands::analysis::load_analysis_state,
             commands::analysis::delete_analysis,
             commands::agent::agent_history_load,
             commands::agent::agent_history_save,

@@ -32,4 +32,13 @@ describe('auth error mapping', () => {
       '\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002',
     );
   });
+
+  it.each(['toString', 'constructor', '__proto__'])(
+    'returns the verify fallback for inherited key %s',
+    (error) => {
+      expect(authCommandErrorToChinese(error, 'verify')).toBe(
+        '\u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002',
+      );
+    },
+  );
 });

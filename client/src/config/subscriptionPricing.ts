@@ -4,5 +4,5 @@ export const SUBSCRIPTION_PRICING = {
   yearly: 348,
 } as const;
 
-export const MONTHLY_PRICE_TEXT = `楼${SUBSCRIPTION_PRICING.monthly}`;
-export const YEARLY_PRICE_TEXT = `楼${SUBSCRIPTION_PRICING.yearly}`;
+export const MONTHLY_PRICE_TEXT = `¥${SUBSCRIPTION_PRICING.monthly}`;
+export const YEARLY_PRICE_TEXT = `¥${SUBSCRIPTION_PRICING.yearly}`;

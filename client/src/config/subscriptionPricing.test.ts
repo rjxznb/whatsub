@@ -12,7 +12,9 @@ describe("subscription pricing", () => {
       monthly: 38,
       yearly: 348,
     });
-    expect(MONTHLY_PRICE_TEXT).toBe("楼38");
-    expect(YEARLY_PRICE_TEXT).toBe("楼348");
+    expect(MONTHLY_PRICE_TEXT).toBe("¥38");
+    expect(YEARLY_PRICE_TEXT).toBe("¥348");
+    expect(MONTHLY_PRICE_TEXT.codePointAt(0)).toBe(0x00a5);
+    expect(YEARLY_PRICE_TEXT.codePointAt(0)).toBe(0x00a5);
   });
 });

@@ -85,28 +85,52 @@ export async function runAnalysis(
     phase: opts.cues.length === 0 ? "complete" : "cues",
     revision: 0,
   };
-  await runTransactionalAnalysis({
-    provider: opts.provider,
-    cues: opts.cues,
-    previouslyAnalyzed: opts.previouslyAnalyzed ?? [],
-    checkpoint: legacyCheckpoint,
-    batchSize: opts.batchSize,
-    style: opts.style,
-    signal: opts.signal,
-    onCommit: async (commit) => {
-      if (commit.kind === "cues") {
-        for (const cue of commit.subtitles) opts.onCue(cue);
-      } else {
-        opts.onSummary({ keyPhrases: commit.keyPhrases });
-      }
-    },
-  });
+  let legacyPhase = legacyCheckpoint.phase;
+  try {
+    await runTransactionalAnalysis({
+      provider: opts.provider,
+      cues: opts.cues,
+      previouslyAnalyzed: opts.previouslyAnalyzed ?? [],
+      checkpoint: legacyCheckpoint,
+      batchSize: opts.batchSize,
+      style: opts.style,
+      signal: opts.signal,
+      onCommit: async (commit) => {
+        legacyPhase = commit.checkpoint.phase;
+        if (commit.kind === "cues") {
+          for (const cue of commit.subtitles) {
+            invokeLegacyCallback(() => opts.onCue(cue), opts.signal);
+          }
+        } else {
+          invokeLegacyCallback(
+            () => opts.onSummary({ keyPhrases: commit.keyPhrases }),
+            opts.signal,
+          );
+        }
+      },
+    });
+  } catch (error) {
+    if (legacyPhase === "summary" && !isAbortError(error)) return;
+    throw error;
+  }
+}
+
+function invokeLegacyCallback(callback: () => void, signal?: AbortSignal): void {
+  try {
+    callback();
+  } catch (error) {
+    if (isAbortError(error) && !signal?.aborted) throw error;
+    // Legacy streaming callbacks were contained by JsonLineParser.
+  }
 }
 
 async function runTransactionalAnalysis(
   opts: RunAnalysisOptions,
 ): Promise<AnalysisCheckpoint> {
   const batchSize = opts.batchSize ?? 50;
+  if (!Number.isInteger(batchSize) || batchSize <= 0) {
+    throw new RangeError("batchSize must be a positive integer");
+  }
   const systemPrompt = buildSystemPrompt(opts.style ?? "colloquial");
   const analyzedCues: Subtitle[] = [...opts.previouslyAnalyzed];
   let currentCheckpoint = opts.checkpoint;
@@ -197,12 +221,10 @@ async function runTransactionalAnalysis(
     throwIfAborted(opts.signal);
     const keyPhrases = await withProviderRetry(opts, async () => {
       const parser = new JsonLineParser();
-      let attemptKeyPhrases: KeyPhrase[] = [];
+      let attemptKeyPhrases: KeyPhrase[] | null = null;
       const handle = (obj: unknown) => {
         const summary = parseSummary(obj);
-        if (summary && Array.isArray(summary.keyPhrases)) {
-          attemptKeyPhrases = summary.keyPhrases;
-        }
+        if (summary) attemptKeyPhrases = summary;
       };
       const invalid = (line: string) => {
         throw new ProviderProtocolError(`Malformed JSON line from provider: ${line}`);
@@ -219,6 +241,9 @@ async function runTransactionalAnalysis(
       throwIfAborted(opts.signal);
       parser.flush(handle, invalid);
       throwIfAborted(opts.signal);
+      if (attemptKeyPhrases === null) {
+        throw new ProviderProtocolError("Provider response did not include a valid summary");
+      }
       return attemptKeyPhrases;
     });
 
@@ -236,7 +261,7 @@ async function runTransactionalAnalysis(
     currentCheckpoint = completeCheckpoint;
     return currentCheckpoint;
   } catch (error) {
-    if (opts.signal?.aborted || isAbortError(error)) return currentCheckpoint;
+    if (opts.signal?.aborted && isAbortError(error)) return currentCheckpoint;
     throw error;
   }
 }
@@ -306,10 +331,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseSummary(obj: unknown): Omit<AnalysisResult, "subtitles"> | null {
+function parseSummary(obj: unknown): KeyPhrase[] | null {
   if (!obj || typeof obj !== "object") return null;
   const output = obj as Record<string, unknown>;
-  if (output.type !== "summary") return null;
-  const { type: _drop, ...summary } = output;
-  return summary as unknown as Omit<AnalysisResult, "subtitles">;
+  if (
+    output.type !== "summary"
+    || !Array.isArray(output.keyPhrases)
+    || !output.keyPhrases.every(isKeyPhrase)
+  ) {
+    return null;
+  }
+  return output.keyPhrases;
+}
+
+function isKeyPhrase(value: unknown): value is KeyPhrase {
+  return isPlainObject(value)
+    && typeof value.expression === "string"
+    && typeof value.meaningZh === "string"
+    && typeof value.usage === "string";
 }

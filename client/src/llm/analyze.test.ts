@@ -358,4 +358,145 @@ describe("runAnalysis", () => {
     expect(provider.requests).toHaveLength(1);
     expect(commits).toEqual([]);
   });
+
+  it.each([
+    ["an empty stream", []],
+    ["valid JSON without a summary", [cueLine(0)]],
+    ["a summary without keyPhrases", ['{"type":"summary"}\n']],
+    [
+      "a summary with malformed keyPhrases",
+      ['{"type":"summary","keyPhrases":[{"expression":"hello"}]}\n'],
+    ],
+  ])("rejects %s without committing phase complete", async (_name, chunks) => {
+    const provider = scriptedProvider([{ chunks }]);
+    const commits: AnalysisCommit[] = [];
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint("summary", 1),
+      onCommit: async (commit) => { commits.push(commit); },
+    })).rejects.toBeInstanceOf(ProviderProtocolError);
+
+    expect(provider.requests).toHaveLength(1);
+    expect(commits).toEqual([]);
+  });
+
+  it("preserves legacy cue callbacks when summary retries are exhausted", async () => {
+    vi.useFakeTimers();
+    const summaryFailure = new ProviderTransportError("summary unavailable", "read");
+    const provider = scriptedProvider([
+      { chunks: [cueLine(0)] },
+      ...Array.from({ length: 4 }, () => ({ error: summaryFailure })),
+    ]);
+    const cueOutput: string[] = [];
+    const summaries: unknown[] = [];
+
+    await expect(runWithTimers(runAnalysis({
+      provider,
+      cues: cues(1),
+      onCue: (cue) => { cueOutput.push(cue.text); },
+      onSummary: (summary) => { summaries.push(summary); },
+    }))).resolves.toBeUndefined();
+
+    expect(cueOutput).toEqual(["source-0"]);
+    expect(summaries).toEqual([]);
+    expect(provider.requests).toHaveLength(5);
+  });
+
+  it("invokes every legacy cue callback once when one callback throws", async () => {
+    const provider = scriptedProvider([
+      { chunks: [cueLine(0), cueLine(1), cueLine(2)] },
+      { chunks: [summaryLine] },
+    ]);
+    const callbackIndexes: number[] = [];
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(3),
+      onCue: (cue) => {
+        const index = Number(cue.text.slice("source-".length));
+        callbackIndexes.push(index);
+        if (index === 1) throw new Error("consumer callback failed");
+      },
+      onSummary: () => {},
+    })).resolves.toBeUndefined();
+
+    expect(callbackIndexes).toEqual([0, 1, 2]);
+    expect(provider.requests).toHaveLength(2);
+  });
+
+  it("propagates an AbortError when the supplied signal was not aborted", async () => {
+    const abortError = new DOMException("provider aborted independently", "AbortError");
+    const provider = scriptedProvider([{ error: abortError }]);
+    const controller = new AbortController();
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      signal: controller.signal,
+      onCommit: async () => {},
+    })).rejects.toBe(abortError);
+
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("propagates a legacy summary AbortError when the signal was not aborted", async () => {
+    const abortError = new DOMException("summary aborted independently", "AbortError");
+    const provider = scriptedProvider([
+      { chunks: [cueLine(0)] },
+      { error: abortError },
+    ]);
+    const controller = new AbortController();
+    const cueOutput: string[] = [];
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(1),
+      signal: controller.signal,
+      onCue: (cue) => { cueOutput.push(cue.text); },
+      onSummary: () => {},
+    })).rejects.toBe(abortError);
+
+    expect(controller.signal.aborted).toBe(false);
+    expect(cueOutput).toEqual(["source-0"]);
+  });
+
+  it("propagates a legacy callback AbortError when the signal was not aborted", async () => {
+    const abortError = new DOMException("consumer aborted independently", "AbortError");
+    const provider = scriptedProvider([{ chunks: [cueLine(0)] }]);
+    const controller = new AbortController();
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(1),
+      signal: controller.signal,
+      onCue: () => { throw abortError; },
+      onSummary: () => {},
+    })).rejects.toBe(abortError);
+
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it.each([0, -1, 1.5])(
+    "rejects invalid batchSize %s before requesting the provider",
+    async (batchSize) => {
+      const providerCalled = new Error("provider must not be called");
+      const provider = scriptedProvider([{ error: providerCalled }]);
+
+      await expect(runAnalysis({
+        provider,
+        cues: cues(1),
+        previouslyAnalyzed: [],
+        checkpoint: checkpoint(),
+        batchSize,
+        onCommit: async () => {},
+      })).rejects.toBeInstanceOf(RangeError);
+
+      expect(provider.requests).toEqual([]);
+    },
+  );
 });

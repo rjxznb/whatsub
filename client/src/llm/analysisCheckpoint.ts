@@ -1,6 +1,7 @@
 import type {
   AnalysisCheckpoint,
   AnalysisCheckpointPhase,
+  AnalysisResult,
   CheckpointedAnalysis,
   KeyPhrase,
   SrtCue,
@@ -29,13 +30,14 @@ export async function prepareAnalysis(
   cached?: unknown,
 ): Promise<PreparedAnalysis> {
   const transcriptFingerprint = await fingerprintTranscript(cues);
+  const persisted = parsePersistedAnalysis(cached);
 
-  if (!isPersistedAnalysis(cached)) {
+  if (!persisted) {
     return freshAnalysis(transcriptFingerprint);
   }
 
-  if (!hasOwn(cached, "checkpoint")) {
-    const nextCueOffset = Math.min(cached.subtitles.length, cues.length);
+  if (!hasOwn(persisted, "checkpoint")) {
+    const nextCueOffset = Math.min(persisted.subtitles.length, cues.length);
     const checkpoint = createCheckpoint(
       transcriptFingerprint,
       nextCueOffset,
@@ -44,8 +46,8 @@ export async function prepareAnalysis(
 
     return {
       analysis: {
-        subtitles: cached.subtitles,
-        keyPhrases: cached.keyPhrases,
+        subtitles: persisted.subtitles,
+        keyPhrases: persisted.keyPhrases,
         checkpoint,
       },
       needsSave: true,
@@ -53,11 +55,11 @@ export async function prepareAnalysis(
     };
   }
 
-  if (!isValidCheckpoint(cached.checkpoint, cues.length)) {
+  if (!isValidCheckpoint(persisted.checkpoint, cues.length)) {
     return freshAnalysis(transcriptFingerprint);
   }
 
-  if (cached.checkpoint.transcriptFingerprint !== transcriptFingerprint) {
+  if (persisted.checkpoint.transcriptFingerprint !== transcriptFingerprint) {
     return {
       ...freshAnalysis(transcriptFingerprint),
       reason: "fingerprint-mismatch",
@@ -66,9 +68,9 @@ export async function prepareAnalysis(
 
   return {
     analysis: {
-      subtitles: cached.subtitles,
-      keyPhrases: cached.keyPhrases,
-      checkpoint: cached.checkpoint,
+      subtitles: persisted.subtitles,
+      keyPhrases: persisted.keyPhrases,
+      checkpoint: persisted.checkpoint,
     },
     needsSave: false,
     reason: "resume",
@@ -105,24 +107,24 @@ function isValidCheckpoint(
   checkpoint: unknown,
   cueCount: number,
 ): checkpoint is AnalysisCheckpoint {
-  if (!isRecord(checkpoint)) return false;
+  if (!isCheckpointShape(checkpoint)) return false;
 
   const nextCueOffset = checkpoint.nextCueOffset;
-  const revision = checkpoint.revision;
-
-  if (
-    checkpoint.version !== 1 ||
-    typeof checkpoint.transcriptFingerprint !== "string" ||
-    checkpoint.transcriptFingerprint.length === 0 ||
-    !isNonNegativeInteger(nextCueOffset) ||
-    nextCueOffset > cueCount ||
-    !isPhase(checkpoint.phase) ||
-    !isNonNegativeInteger(revision)
-  ) {
-    return false;
-  }
+  if (nextCueOffset > cueCount) return false;
 
   return checkpoint.phase === "cues" || nextCueOffset === cueCount;
+}
+
+function isCheckpointShape(checkpoint: unknown): checkpoint is AnalysisCheckpoint {
+  return (
+    isRecord(checkpoint) &&
+    checkpoint.version === 1 &&
+    typeof checkpoint.transcriptFingerprint === "string" &&
+    checkpoint.transcriptFingerprint.length > 0 &&
+    isNonNegativeInteger(checkpoint.nextCueOffset) &&
+    isPhase(checkpoint.phase) &&
+    isNonNegativeInteger(checkpoint.revision)
+  );
 }
 
 function isPhase(value: unknown): value is AnalysisCheckpointPhase {
@@ -133,6 +135,13 @@ interface PersistedAnalysis {
   subtitles: Subtitle[];
   keyPhrases: KeyPhrase[];
   checkpoint?: unknown;
+}
+
+/** Parse the stable on-disk domain shape before any resume decision is made. */
+export function parsePersistedAnalysis(value: unknown): AnalysisResult | null {
+  if (!isPersistedAnalysis(value)) return null;
+  if (hasOwn(value, "checkpoint") && !isCheckpointShape(value.checkpoint)) return null;
+  return value as AnalysisResult;
 }
 
 function isPersistedAnalysis(value: unknown): value is PersistedAnalysis {

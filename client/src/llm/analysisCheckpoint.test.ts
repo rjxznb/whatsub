@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fingerprintTranscript,
+  parsePersistedAnalysis,
   prepareAnalysis,
 } from "./analysisCheckpoint";
 import type {
@@ -31,6 +32,56 @@ const subtitle = (text: string): Subtitle => ({
 });
 
 describe("analysis checkpoints", () => {
+  it("rejects malformed domain objects before checkpoint recovery", () => {
+    expect(
+      parsePersistedAnalysis({
+        subtitles: [{ ...subtitle("Bad"), time: "bad" }],
+        keyPhrases: [],
+      }),
+    ).toBeNull();
+    expect(
+      parsePersistedAnalysis({
+        subtitles: [subtitle("Good")],
+        keyPhrases: [{ expression: 42, meaningZh: "含义", usage: "示例" }],
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts valid legacy analysis and forward-compatible checkpoint extras", () => {
+    const legacy = { subtitles: [subtitle("Legacy")], keyPhrases: [] };
+    expect(parsePersistedAnalysis(legacy)).toEqual(legacy);
+
+    const checkpointed = {
+      ...legacy,
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint,
+        nextCueOffset: 1,
+        phase: "cues",
+        revision: 2,
+        futureField: "preserved",
+      },
+      futureTopLevelField: true,
+    };
+    expect(parsePersistedAnalysis(checkpointed)).toEqual(checkpointed);
+  });
+
+  it("rejects malformed checkpoint shape before transcript-dependent validation", () => {
+    expect(
+      parsePersistedAnalysis({
+        subtitles: [],
+        keyPhrases: [],
+        checkpoint: {
+          version: 1,
+          transcriptFingerprint,
+          nextCueOffset: 0,
+          phase: "cues",
+          revision: -1,
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("creates a stable SHA-256 fingerprint from cue identity and content", async () => {
     await expect(fingerprintTranscript(cues)).resolves.toBe(transcriptFingerprint);
     await expect(fingerprintTranscript([...cues])).resolves.toBe(transcriptFingerprint);

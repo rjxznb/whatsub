@@ -25,6 +25,7 @@ import { ProgressBanner } from "../components/ProgressBanner";
 import { TinyModelHint } from "../components/TinyModelHint";
 import { parseSrt } from "../llm/parseSrt";
 import { runAnalysis } from "../llm/analyze";
+import { deleteAnalysisForReset, saveAnalysis } from "../llm/analysisPersistence";
 import { getProvider } from "../llm/providers";
 import { RelayError } from "../llm/providers/relayErrors";
 import { dedupSubtitles } from "../store/analysis";
@@ -242,7 +243,7 @@ export function Player() {
       subtitles: dedupSubtitles(state.subtitles),
       keyPhrases: state.summary?.keyPhrases ?? [],
     };
-    invoke("save_analysis", { videoId, analysis: partial }).catch((e) =>
+    saveAnalysis(videoId, partial).catch((e) =>
       console.error("partial save failed", e)
     );
   };
@@ -303,7 +304,7 @@ export function Player() {
           clearTimeout(saveTimerRef.current);
           saveTimerRef.current = null;
         }
-        await invoke("save_analysis", { videoId, analysis: finalAnalysis });
+        await saveAnalysis(videoId, finalAnalysis);
         await invoke("library_set_status", {
           id: videoId,
           status: "ready",
@@ -418,7 +419,7 @@ export function Player() {
       // cached analysis (with a summary) and short-circuits to it — leaving the
       // OLD translation pinned to the new SRT's timestamps. This is what makes
       // re-analyze actually overwrite analysis.json.
-      await invoke("delete_analysis", { videoId });
+      await deleteAnalysisForReset(videoId);
       // SRT is now on disk + cache cleared. Re-run the loader to parse it +
       // kick off a fresh LLM analysis.
       setReloadKey((k) => k + 1);
@@ -577,10 +578,7 @@ export function Player() {
         analysis.setSummary(summary);
         analysis.setPhase("complete");
         if (cleanedCachedCues.length !== cached.subtitles.length) {
-          await invoke("save_analysis", {
-            videoId,
-            analysis: { ...cached, subtitles: cleanedCachedCues },
-          });
+          await saveAnalysis(videoId, { ...cached, subtitles: cleanedCachedCues });
         }
         // Self-heal: a COMPLETE analysis is on disk but the library entry is
         // still "analyzing"/"failed" — happens when a foreground re-analyze

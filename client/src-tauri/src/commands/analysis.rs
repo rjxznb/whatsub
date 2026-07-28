@@ -27,6 +27,7 @@ pub enum SaveAnalysisStatus {
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveAnalysisOutcome {
+    pub(crate) applied: bool,
     pub(crate) status: SaveAnalysisStatus,
     pub(crate) generation: Option<String>,
     pub(crate) revision: Option<u64>,
@@ -44,6 +45,16 @@ struct AnalysisGenerationState {
     revision: Option<u64>,
     #[serde(default)]
     content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending_write: Option<PendingAnalysisWrite>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingAnalysisWrite {
+    generation: u64,
+    revision: Option<u64>,
+    content_hash: String,
 }
 
 impl AnalysisGenerationState {
@@ -60,6 +71,7 @@ impl AnalysisGenerationState {
             deleted: false,
             revision,
             content_hash: Some(content_hash),
+            pending_write: None,
         }
     }
 
@@ -71,6 +83,7 @@ impl AnalysisGenerationState {
             deleted: true,
             revision,
             content_hash: None,
+            pending_write: None,
         }
     }
 }
@@ -316,6 +329,7 @@ where
         if current_analysis.as_ref() == Some(&analysis) {
             state.revision = incoming_revision;
             state.content_hash = Some(incoming_hash);
+            state.pending_write = None;
             write_generation_state(path, &state)?;
             return Ok(save_outcome(
                 SaveAnalysisStatus::AlreadyCurrent,
@@ -344,9 +358,20 @@ where
         }
     }
 
+    // Record the exact target before replacing analysis.json. If the process
+    // dies after the file replacement but before the committed sidecar update,
+    // recovery can prove that the on-disk analysis is this transaction's
+    // target instead of trusting either mismatched file blindly.
+    state.pending_write = Some(PendingAnalysisWrite {
+        generation: state.generation,
+        revision: incoming_revision,
+        content_hash: incoming_hash.clone(),
+    });
+    write_generation_state(path, &state)?;
     write_json_atomically_with_replacer(path, &analysis, replacer)?;
     state.revision = incoming_revision;
     state.content_hash = Some(incoming_hash);
+    state.pending_write = None;
     write_generation_state(path, &state)?;
     Ok(save_outcome(
         SaveAnalysisStatus::Applied,
@@ -361,6 +386,7 @@ fn save_outcome(
     revision: Option<u64>,
 ) -> SaveAnalysisOutcome {
     SaveAnalysisOutcome {
+        applied: matches!(status, SaveAnalysisStatus::Applied | SaveAnalysisStatus::AlreadyCurrent),
         status,
         generation: generation.map(generation_token),
         revision,
@@ -407,6 +433,7 @@ fn ensure_generation_state(
         return Ok(None);
     };
 
+    let mut state_changed = false;
     if state.version < ANALYSIS_GENERATION_STATE_VERSION || state.generation == 0 {
         state.version = ANALYSIS_GENERATION_STATE_VERSION;
         if state.generation == 0 {
@@ -418,9 +445,33 @@ fn ensure_generation_state(
         } else if state.content_hash.is_none() {
             state.content_hash = current_analysis.map(analysis_content_hash).transpose()?;
         }
-        write_generation_state(path, &state)?;
+        state_changed = true;
     } else if !state.deleted && state.content_hash.is_none() {
         state.content_hash = current_analysis.map(analysis_content_hash).transpose()?;
+        state_changed = true;
+    }
+
+    if let Some(pending) = state.pending_write.as_ref() {
+        if pending.generation != state.generation {
+            return Err(AppError::InvalidInput(
+                "analysis pending write belongs to a different generation".to_string(),
+            ));
+        }
+        let current_hash = current_analysis.map(analysis_content_hash).transpose()?;
+        if current_hash.as_deref() == Some(pending.content_hash.as_str()) {
+            state.revision = pending.revision;
+            state.content_hash = Some(pending.content_hash.clone());
+            state.pending_write = None;
+            state_changed = true;
+        } else if current_hash.as_deref() == state.content_hash.as_deref() {
+            // The intent reached disk but analysis replacement did not. The
+            // committed file remains authoritative, so discard the intent.
+            state.pending_write = None;
+            state_changed = true;
+        }
+    }
+
+    if state_changed {
         write_generation_state(path, &state)?;
     }
     Ok(Some(state))
@@ -725,14 +776,14 @@ async fn delete_analysis_path(path: &Path) -> AppResult<SaveAnalysisOutcome> {
         .map(|version| version.revision)
         .or_else(|| state.as_ref().and_then(|state| state.revision));
 
-    if let Some(state) = state.as_ref() {
-        // Persist the retirement before removing the user-visible file. Loads
-        // treat this record as authoritative, including after process restart.
-        write_generation_state(
-            path,
-            &AnalysisGenerationState::tombstone(state.generation, revision),
-        )?;
-    }
+    // Even deleting a never-saved analysis allocates an epoch. Otherwise a
+    // late first save has no durable retirement record and can resurrect work
+    // that the user already deleted.
+    let tombstone_generation = state.as_ref().map_or(1, |state| state.generation);
+    write_generation_state(
+        path,
+        &AnalysisGenerationState::tombstone(tombstone_generation, revision),
+    )?;
 
     for candidate in [
         path.to_path_buf(),
@@ -747,7 +798,7 @@ async fn delete_analysis_path(path: &Path) -> AppResult<SaveAnalysisOutcome> {
     }
     Ok(save_outcome(
         SaveAnalysisStatus::Applied,
-        state.as_ref().map(|state| state.generation),
+        Some(tombstone_generation),
         revision,
     ))
 }
@@ -1152,21 +1203,26 @@ mod tests {
     }
 
     #[test]
-    fn save_outcome_serializes_the_generation_ipc_contract() {
-        let outcome = save_outcome(
-            SaveAnalysisStatus::AlreadyCurrent,
-            Some(7),
-            Some(4),
-        );
-
-        assert_eq!(
-            serde_json::to_value(outcome).unwrap(),
-            json!({
-                "status": "alreadyCurrent",
-                "generation": "generation-7",
-                "revision": 4
-            })
-        );
+    fn save_outcome_serializes_status_and_applied_compatibility() {
+        for (status, status_json, applied) in [
+            (SaveAnalysisStatus::Applied, "applied", true),
+            (
+                SaveAnalysisStatus::AlreadyCurrent,
+                "alreadyCurrent",
+                true,
+            ),
+            (SaveAnalysisStatus::Rejected, "rejected", false),
+        ] {
+            assert_eq!(
+                serde_json::to_value(save_outcome(status, Some(7), Some(4))).unwrap(),
+                json!({
+                    "applied": applied,
+                    "status": status_json,
+                    "generation": "generation-7",
+                    "revision": 4
+                })
+            );
+        }
     }
 
     #[test]
@@ -1612,6 +1668,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deleting_absent_analysis_allocates_a_tombstone_epoch() {
+        let dir = TestDir::new("delete-absent-generation-tombstone");
+        let path = dir.analysis_path();
+
+        let deleted = delete_analysis_path(&path).await.unwrap();
+
+        assert_eq!(deleted.status, SaveAnalysisStatus::Applied);
+        assert_eq!(deleted.generation.as_deref(), Some("generation-1"));
+        let tombstone = read_analysis(&generation_state_path(&path));
+        assert_eq!(tombstone["generation"], 1);
+        assert_eq!(tombstone["deleted"], true);
+
+        let late_first_save = save_analysis_value_for_generation(
+            &path,
+            checkpointed(0, "late-first-save"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(late_first_save.status, SaveAnalysisStatus::Rejected);
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
     async fn loading_a_round_two_state_migrates_it_to_epoch_schema() {
         let dir = TestDir::new("generation-state-v1-migration");
         let path = dir.analysis_path();
@@ -1707,6 +1788,73 @@ mod tests {
         assert_eq!(retry.status, SaveAnalysisStatus::Applied);
         assert_eq!(retry.generation.as_deref(), Some("generation-2"));
         assert_eq!(read_analysis(&path)["marker"], "generation-two");
+    }
+
+    #[test]
+    fn pending_write_reconciles_a_newer_analysis_before_a_delayed_lower_save() {
+        let dir = TestDir::new("normal-save-sidecar-crash");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(3, "revision-three")).unwrap();
+        let revision_five = checkpointed(5, "revision-five");
+
+        // Model a crash after the transaction intent and analysis file reached
+        // disk, but before the sidecar's committed revision advanced from 3.
+        let mut sidecar = read_analysis(&generation_state_path(&path));
+        sidecar["pendingWrite"] = json!({
+            "generation": 1,
+            "revision": 5,
+            "contentHash": analysis_content_hash(&revision_five).unwrap()
+        });
+        fs::write(
+            generation_state_path(&path),
+            serde_json::to_vec_pretty(&sidecar).unwrap(),
+        )
+        .unwrap();
+        fs::write(&path, serde_json::to_vec_pretty(&revision_five).unwrap()).unwrap();
+
+        let delayed = save_analysis_value_for_generation(
+            &path,
+            checkpointed(4, "delayed-revision-four"),
+            Some("generation-1"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(delayed.status, SaveAnalysisStatus::Rejected);
+        assert_eq!(read_revision(&path), Some(5));
+        assert_eq!(read_analysis(&path)["marker"], "revision-five");
+        let recovered_sidecar = read_analysis(&generation_state_path(&path));
+        assert_eq!(recovered_sidecar["revision"], 5);
+        assert!(recovered_sidecar.get("pendingWrite").is_none());
+    }
+
+    #[test]
+    fn normal_save_persists_pending_write_before_replacing_analysis() {
+        let dir = TestDir::new("normal-save-write-ahead");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(3, "revision-three")).unwrap();
+
+        let outcome = save_analysis_value_with_replacer(
+            &path,
+            checkpointed(5, "revision-five"),
+            |temporary, destination| {
+                let sidecar = read_analysis(&generation_state_path(destination));
+                assert_eq!(sidecar["revision"], 3);
+                assert_eq!(sidecar["pendingWrite"]["generation"], 1);
+                assert_eq!(sidecar["pendingWrite"]["revision"], 5);
+                assert!(sidecar["pendingWrite"]["contentHash"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("sha256:"));
+                fs::rename(temporary, destination)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(outcome.status, SaveAnalysisStatus::Applied);
+        let committed = read_analysis(&generation_state_path(&path));
+        assert_eq!(committed["revision"], 5);
+        assert!(committed.get("pendingWrite").is_none());
     }
 
     #[test]

@@ -957,16 +957,19 @@ mod tests {
     #[test]
     fn cloud_materialization_accepts_applied_and_already_current_saves() {
         let applied = crate::commands::analysis::SaveAnalysisOutcome {
+            applied: true,
             status: crate::commands::analysis::SaveAnalysisStatus::Applied,
             generation: Some("generation-1".to_string()),
             revision: Some(4),
         };
         let already_current = crate::commands::analysis::SaveAnalysisOutcome {
+            applied: true,
             status: crate::commands::analysis::SaveAnalysisStatus::AlreadyCurrent,
             generation: Some("generation-1".to_string()),
             revision: Some(4),
         };
         let rejected = crate::commands::analysis::SaveAnalysisOutcome {
+            applied: false,
             status: crate::commands::analysis::SaveAnalysisStatus::Rejected,
             generation: Some("generation-2".to_string()),
             revision: Some(5),

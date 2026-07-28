@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { runAnalysis } from "../llm/analyze";
+import { deleteAnalysisForReset, saveAnalysis } from "../llm/analysisPersistence";
 import { getProvider } from "../llm/providers";
 import { parseSrt } from "../llm/parseSrt";
 import { dedupSubtitles } from "./analysis";
@@ -187,7 +188,7 @@ async function driveRetranscribeThenAnalyze(
     if (ac.signal.aborted) return;
 
     // 2. Drop the stale analysis so the LLM phase starts fresh.
-    await invoke("delete_analysis", { videoId });
+    await deleteAnalysisForReset(videoId);
     if (ac.signal.aborted) return;
 
     // 3. Load the freshly written transcript.
@@ -293,23 +294,19 @@ async function driveBgAnalysis(ac: AbortController, opts: RunInBackgroundOptions
         subtitles: dedupSubtitles(finalJob.subtitles),
         keyPhrases: finalJob.summary?.keyPhrases ?? [],
       };
-      try {
-        await invoke("save_analysis", { videoId, analysis: finalAnalysis });
-        if (finalAnalysis.keyPhrases.length > 0) {
-          await invoke("library_set_status", {
-            id: videoId,
-            status: "ready",
-            error: null,
-          });
-          // Refresh the in-memory library so any Library card visible
-          // RIGHT NOW flips from "Analyzing"/spinner to "ready" without
-          // requiring the user to navigate away and back. Without this
-          // the disk state was correct but the on-screen card looked
-          // stuck on "未完成" until refresh.
-          await useLibrary.getState().reload();
-        }
-      } catch (e) {
-        console.warn("BG final save failed", e);
+      await saveAnalysis(videoId, finalAnalysis);
+      if (finalAnalysis.keyPhrases.length > 0) {
+        await invoke("library_set_status", {
+          id: videoId,
+          status: "ready",
+          error: null,
+        });
+        // Refresh the in-memory library so any Library card visible
+        // RIGHT NOW flips from "Analyzing"/spinner to "ready" without
+        // requiring the user to navigate away and back. Without this
+        // the disk state was correct but the on-screen card looked
+        // stuck on "未完成" until refresh.
+        await useLibrary.getState().reload();
       }
     }
 
@@ -346,7 +343,7 @@ async function driveBgAnalysis(ac: AbortController, opts: RunInBackgroundOptions
           subtitles: dedupSubtitles(job.subtitles),
           keyPhrases: job.summary?.keyPhrases ?? [],
         };
-        invoke("save_analysis", { videoId, analysis: partial }).catch((err) =>
+        saveAnalysis(videoId, partial).catch((err) =>
           console.warn("BG abort partial save failed", err)
         );
       }
@@ -422,7 +419,7 @@ function schedulePartialSave(videoId: string): void {
       subtitles: dedupSubtitles(job.subtitles),
       keyPhrases: job.summary?.keyPhrases ?? [],
     };
-    invoke("save_analysis", { videoId, analysis: partial }).catch((e) =>
+    saveAnalysis(videoId, partial).catch((e) =>
       console.warn("BG partial save failed", e)
     );
   }, 800);

@@ -34,7 +34,7 @@ export type ActivateResponse =
  *   - ACTIVE      永久授权 license 已激活(license.json 在盘)
  *   - SUB_ACTIVE  纯订阅用户(无 license,但 /api/auth/me 报
  *                 hasActiveSubscription=true 来自 iOS 订阅 / 支付宝
- *                 时段会员 / 网站 ¥22 月订阅)。功能上等同 ACTIVE,
+ *                 时段会员 / 网站 Pro 月订阅)。功能上等同 ACTIVE,
  *                 但 LicenseGate 在角落显示「订阅中」徽标。
  *                 2026-06-04 added —— spec §1.2 隐含的假设是「桌面入口
  *                 = 买断 OR 试用」,但 LLM 中转上线后 Pro 订阅必须

@@ -1,9 +1,10 @@
 import type {
   AnalysisCheckpoint,
   AnalysisCheckpointPhase,
-  AnalysisResult,
   CheckpointedAnalysis,
+  KeyPhrase,
   SrtCue,
+  Subtitle,
 } from "./types";
 
 export interface PreparedAnalysis {
@@ -25,15 +26,15 @@ export async function fingerprintTranscript(cues: readonly SrtCue[]): Promise<st
 
 export async function prepareAnalysis(
   cues: readonly SrtCue[],
-  cached?: AnalysisResult,
+  cached?: unknown,
 ): Promise<PreparedAnalysis> {
   const transcriptFingerprint = await fingerprintTranscript(cues);
 
-  if (!cached) {
+  if (!isPersistedAnalysis(cached)) {
     return freshAnalysis(transcriptFingerprint);
   }
 
-  if (!cached.checkpoint) {
+  if (!hasOwn(cached, "checkpoint")) {
     const nextCueOffset = Math.min(cached.subtitles.length, cues.length);
     const checkpoint = createCheckpoint(
       transcriptFingerprint,
@@ -42,7 +43,11 @@ export async function prepareAnalysis(
     );
 
     return {
-      analysis: { ...cached, checkpoint },
+      analysis: {
+        subtitles: cached.subtitles,
+        keyPhrases: cached.keyPhrases,
+        checkpoint,
+      },
       needsSave: true,
       reason: "legacy-migration",
     };
@@ -60,7 +65,11 @@ export async function prepareAnalysis(
   }
 
   return {
-    analysis: cached as CheckpointedAnalysis,
+    analysis: {
+      subtitles: cached.subtitles,
+      keyPhrases: cached.keyPhrases,
+      checkpoint: cached.checkpoint,
+    },
     needsSave: false,
     reason: "resume",
   };
@@ -93,26 +102,89 @@ function createCheckpoint(
 }
 
 function isValidCheckpoint(
-  checkpoint: AnalysisCheckpoint,
+  checkpoint: unknown,
   cueCount: number,
-): boolean {
+): checkpoint is AnalysisCheckpoint {
+  if (!isRecord(checkpoint)) return false;
+
+  const nextCueOffset = checkpoint.nextCueOffset;
+  const revision = checkpoint.revision;
+
   if (
     checkpoint.version !== 1 ||
     typeof checkpoint.transcriptFingerprint !== "string" ||
     checkpoint.transcriptFingerprint.length === 0 ||
-    !Number.isInteger(checkpoint.nextCueOffset) ||
-    checkpoint.nextCueOffset < 0 ||
-    checkpoint.nextCueOffset > cueCount ||
+    !isNonNegativeInteger(nextCueOffset) ||
+    nextCueOffset > cueCount ||
     !isPhase(checkpoint.phase) ||
-    !Number.isInteger(checkpoint.revision) ||
-    checkpoint.revision < 0
+    !isNonNegativeInteger(revision)
   ) {
     return false;
   }
 
-  return checkpoint.phase === "cues" || checkpoint.nextCueOffset === cueCount;
+  return checkpoint.phase === "cues" || nextCueOffset === cueCount;
 }
 
-function isPhase(value: AnalysisCheckpointPhase): boolean {
+function isPhase(value: unknown): value is AnalysisCheckpointPhase {
   return value === "cues" || value === "summary" || value === "complete";
+}
+
+interface PersistedAnalysis {
+  subtitles: Subtitle[];
+  keyPhrases: KeyPhrase[];
+  checkpoint?: unknown;
+}
+
+function isPersistedAnalysis(value: unknown): value is PersistedAnalysis {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.subtitles) &&
+    value.subtitles.every(isSubtitle) &&
+    Array.isArray(value.keyPhrases) &&
+    value.keyPhrases.every(isKeyPhrase)
+  );
+}
+
+function isSubtitle(value: unknown): value is Subtitle {
+  return (
+    isRecord(value) &&
+    isFiniteNumber(value.time) &&
+    isFiniteNumber(value.endTime) &&
+    typeof value.text === "string" &&
+    typeof value.translation === "string" &&
+    typeof value.isKeyPoint === "boolean" &&
+    Array.isArray(value.highlightWords) &&
+    value.highlightWords.every((word) => typeof word === "string") &&
+    isStringRecord(value.keyNotes) &&
+    isStringRecord(value.highlightTranslations)
+  );
+}
+
+function isKeyPhrase(value: unknown): value is KeyPhrase {
+  return (
+    isRecord(value) &&
+    typeof value.expression === "string" &&
+    typeof value.meaningZh === "string" &&
+    typeof value.usage === "string"
+  );
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwn(value: object, property: PropertyKey): boolean {
+  return Object.prototype.hasOwnProperty.call(value, property);
 }

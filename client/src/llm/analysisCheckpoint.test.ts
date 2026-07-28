@@ -16,6 +16,9 @@ const cues: SrtCue[] = [
   { index: 3, time: 2, endTime: 3, text: "Third" },
 ];
 
+const transcriptFingerprint =
+  "sha256:52644329ac80b3fd47f022b08fd0ff31bb3215a843146de773927da0f0a406a2";
+
 const subtitle = (text: string): Subtitle => ({
   time: 0,
   endTime: 1,
@@ -29,16 +32,12 @@ const subtitle = (text: string): Subtitle => ({
 
 describe("analysis checkpoints", () => {
   it("creates a stable SHA-256 fingerprint from cue identity and content", async () => {
-    await expect(fingerprintTranscript(cues)).resolves.toBe(
-      "sha256:52644329ac80b3fd47f022b08fd0ff31bb3215a843146de773927da0f0a406a2",
-    );
-    await expect(fingerprintTranscript([...cues])).resolves.toBe(
-      "sha256:52644329ac80b3fd47f022b08fd0ff31bb3215a843146de773927da0f0a406a2",
-    );
+    await expect(fingerprintTranscript(cues)).resolves.toBe(transcriptFingerprint);
+    await expect(fingerprintTranscript([...cues])).resolves.toBe(transcriptFingerprint);
     await expect(
       fingerprintTranscript([{ ...cues[0], text: "Changed" }, ...cues.slice(1)]),
     ).resolves.not.toBe(
-      "sha256:52644329ac80b3fd47f022b08fd0ff31bb3215a843146de773927da0f0a406a2",
+      transcriptFingerprint,
     );
   });
 
@@ -147,6 +146,86 @@ describe("analysis checkpoints", () => {
         checkpoint: {
           version: 1,
           transcriptFingerprint: fingerprint,
+          nextCueOffset: 0,
+          phase: "cues",
+          revision: 0,
+        },
+      },
+    });
+  });
+
+  it.each([undefined, null, false, 0, ""])(
+    "resets when checkpoint is the present malformed value %j",
+    async (checkpoint) => {
+      const cached: unknown = {
+        subtitles: [subtitle("Stale")],
+        keyPhrases: [{ expression: "stale", meaningZh: "过期", usage: "示例" }],
+        checkpoint,
+      };
+
+      const prepared = await prepareAnalysis(cues, cached);
+
+      expect(prepared).toMatchObject({
+        needsSave: true,
+        reason: "fresh",
+        analysis: {
+          subtitles: [],
+          keyPhrases: [],
+          checkpoint: {
+            version: 1,
+            transcriptFingerprint,
+            nextCueOffset: 0,
+            phase: "cues",
+            revision: 0,
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    ["null subtitles in a legacy payload", { subtitles: null, keyPhrases: [] }],
+    ["missing subtitles in a legacy payload", { keyPhrases: [] }],
+    [
+      "a malformed subtitle with matching checkpoint metadata",
+      {
+        subtitles: [{ ...subtitle("Stale"), highlightWords: [42] }],
+        keyPhrases: [],
+        checkpoint: {
+          version: 1,
+          transcriptFingerprint,
+          nextCueOffset: 1,
+          phase: "cues",
+          revision: 3,
+        },
+      },
+    ],
+    [
+      "a malformed phrase with matching checkpoint metadata",
+      {
+        subtitles: [],
+        keyPhrases: [{ expression: "stale", meaningZh: 42, usage: "示例" }],
+        checkpoint: {
+          version: 1,
+          transcriptFingerprint,
+          nextCueOffset: 1,
+          phase: "cues",
+          revision: 3,
+        },
+      },
+    ],
+  ])("resets malformed persisted analysis with %s", async (_name, cached) => {
+    const prepared = await prepareAnalysis(cues, cached as unknown);
+
+    expect(prepared).toMatchObject({
+      needsSave: true,
+      reason: "fresh",
+      analysis: {
+        subtitles: [],
+        keyPhrases: [],
+        checkpoint: {
+          version: 1,
+          transcriptFingerprint,
           nextCueOffset: 0,
           phase: "cues",
           revision: 0,

@@ -26,7 +26,8 @@ const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
 });
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (p: string) => p,
-  invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args),
+  invoke: (cmd: string, args?: unknown) =>
+    args === undefined ? invokeMock(cmd) : invokeMock(cmd, args),
 }));
 vi.mock("../store/appDialog", () => ({ notify: vi.fn() }));
 vi.mock("../lib/cookieStatus", () => ({
@@ -226,7 +227,7 @@ describe("ImportModal — diagnosed download failures", () => {
     expect(r.getByText("等待 YouTube 登录完成")).toBeInTheDocument();
   });
 
-  it("automatically retries once after fresh cookies are saved", async () => {
+  it("retries the original import only once after login succeeds", async () => {
     const r = await startImport();
     await act(async () => {
       pipelineHandler?.({
@@ -238,15 +239,40 @@ describe("ImportModal — diagnosed download failures", () => {
       });
     });
     fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("site_login_start", expect.anything()));
+    await waitFor(() =>
+      expect(r.getByText("等待 YouTube 登录完成")).toBeInTheDocument(),
+    );
 
     await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
       eventHandlers.get("site-login-success")?.({ payload: {} });
     });
 
     await waitFor(() => {
-      expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(2);
+      const calls = invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.[1]).toEqual(calls[0]?.[1]);
     });
+  });
+
+  it("returns to the diagnosis without retrying when login is cancelled", async () => {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "ERROR: Sign in to confirm you're not a bot. Use --cookies.",
+        },
+      });
+    });
+    fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
+    fireEvent.click(await r.findByRole("button", { name: "取消" }));
+
+    await waitFor(() => expect(r.getByText("YouTube 要求登录验证")).toBeInTheDocument());
+    expect(invokeMock).toHaveBeenCalledWith("site_login_cancel");
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+    expect(urlInput().value).toBe(SAMPLE_URL);
   });
 
   it("shows a focused network diagnosis without opening login", async () => {

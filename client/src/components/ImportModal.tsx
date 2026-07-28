@@ -221,6 +221,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   } | null>(null);
   const [savingLogin, setSavingLogin] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const retryAfterLoginRef = useRef(false);
 
   async function beginSiteLogin(action: SiteLoginAction) {
     setLoginError(null);
@@ -233,6 +234,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           harvestDomains: action.harvestDomains,
         },
       });
+      retryAfterLoginRef.current = true;
       setShowErrorDialog(false);
       setPendingLogin({ key: action.siteKey, label: action.siteLabel });
     } catch (e) {
@@ -261,10 +263,21 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // from the first render.
   const submitRef = useRef<() => Promise<void>>(async () => {});
 
+  function restoreDiagnosisAfterLoginCancel() {
+    retryAfterLoginRef.current = false;
+    setPendingLogin(null);
+    setSavingLogin(false);
+    setLoginError(null);
+    setSubmitting(false);
+    setShowErrorDialog(true);
+  }
+
   useEffect(() => {
     const unlistens: Array<() => void> = [];
     void Promise.all([
       listen("site-login-success", () => {
+        if (!retryAfterLoginRef.current) return;
+        retryAfterLoginRef.current = false;
         setPendingLogin(null);
         setSavingLogin(false);
         setLoginError(null);
@@ -274,8 +287,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         void submitRef.current();
       }).then((un) => unlistens.push(un)),
       listen("site-login-cancelled", () => {
-        setPendingLogin(null);
-        setSavingLogin(false);
+        restoreDiagnosisAfterLoginCancel();
       }).then((un) => unlistens.push(un)),
     ]);
     return () => {
@@ -301,9 +313,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     } catch {
       // ignore — even if cancel fails, we still want to clear UI state
     }
-    setPendingLogin(null);
-    setSavingLogin(false);
-    setLoginError(null);
+    restoreDiagnosisAfterLoginCancel();
   }
 
   // Esc dismisses overlays in priority order: error dialog → close modal.

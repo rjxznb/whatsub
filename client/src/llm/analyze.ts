@@ -1,179 +1,315 @@
-import type { Provider } from "./providers/types";
-import type { Subtitle, SrtCue, AnalysisResult } from "./types";
 import type { TranslationStyle } from "../types/settings";
-import { batchSubtitles } from "./batchSubtitles";
-import { JsonLineParser } from "./streamingJson";
+import type { Provider } from "./providers/types";
 import {
-  buildSystemPrompt,
-  buildUserPrompt,
+  isAbortError,
+  isRetryableProviderFailure,
+  ProviderProtocolError,
+} from "./providers/errors";
+import type {
+  AnalysisCheckpoint,
+  AnalysisResult,
+  KeyPhrase,
+  SrtCue,
+  Subtitle,
+} from "./types";
+import { JsonLineParser } from "./streamingJson";
+import { retryOperation, type RetryEvent, type RetryPolicy } from "./retry";
+import {
   buildContinuationPrompt,
   buildSummaryPrompt,
+  buildSystemPrompt,
+  buildUserPrompt,
 } from "./prompts";
 
+export type AnalysisCommit =
+  | {
+      kind: "cues";
+      startCueOffset: number;
+      endCueOffset: number;
+      subtitles: Subtitle[];
+      checkpoint: AnalysisCheckpoint;
+    }
+  | {
+      kind: "summary";
+      keyPhrases: KeyPhrase[];
+      checkpoint: AnalysisCheckpoint;
+    };
+
+export type AnalysisRetryEvent = RetryEvent;
+
 export interface RunAnalysisOptions {
+  provider: Provider;
+  cues: readonly SrtCue[];
+  previouslyAnalyzed: readonly Subtitle[];
+  checkpoint: AnalysisCheckpoint;
+  onCommit: (commit: AnalysisCommit) => Promise<void>;
+  onRetry?: (event: AnalysisRetryEvent) => void;
+  batchSize?: number;
+  style?: TranslationStyle;
+  signal?: AbortSignal;
+}
+
+interface LegacyRunAnalysisOptions {
   provider: Provider;
   cues: SrtCue[];
   onCue: (cue: Subtitle) => void;
   onSummary: (summary: Omit<AnalysisResult, "subtitles">) => void;
-  /**
-   * Cues already analyzed in a previous session (resume case). They are NOT
-   * re-sent for cue analysis, but ARE included in the global summary call so
-   * keyPhrases reflect the FULL transcript, not just this run's slice.
-   */
   previouslyAnalyzed?: Subtitle[];
   batchSize?: number;
-  /**
-   * Translation register applied across both phases. Defaults to "colloquial"
-   * if not provided so existing call sites without a style stay consistent
-   * with the pre-multi-style behavior.
-   */
   style?: TranslationStyle;
-  /**
-   * AbortSignal for user-initiated stop. Threads through to the provider's
-   * fetch call so the in-flight HTTP body reader unblocks promptly.
-   * runAnalysis returns early (without throwing) when aborted.
-   */
   signal?: AbortSignal;
 }
 
-export async function runAnalysis(opts: RunAnalysisOptions): Promise<void> {
+const DEEPSEEK_ANALYSIS_RETRY_POLICY: RetryPolicy = {
+  maxAttempts: 4,
+  backoffMs: [500, 1500, 3500],
+};
+
+const NO_RETRY_POLICY: RetryPolicy = {
+  maxAttempts: 1,
+  backoffMs: [],
+};
+
+export function runAnalysis(opts: RunAnalysisOptions): Promise<AnalysisCheckpoint>;
+/** @deprecated Use the checkpoint/onCommit transaction contract. */
+export function runAnalysis(opts: LegacyRunAnalysisOptions): Promise<void>;
+export async function runAnalysis(
+  opts: RunAnalysisOptions | LegacyRunAnalysisOptions,
+): Promise<AnalysisCheckpoint | void> {
+  if ("onCommit" in opts) return runTransactionalAnalysis(opts);
+
+  const legacyCheckpoint: AnalysisCheckpoint = {
+    version: 1,
+    transcriptFingerprint: "legacy-runtime",
+    nextCueOffset: 0,
+    phase: opts.cues.length === 0 ? "complete" : "cues",
+    revision: 0,
+  };
+  await runTransactionalAnalysis({
+    provider: opts.provider,
+    cues: opts.cues,
+    previouslyAnalyzed: opts.previouslyAnalyzed ?? [],
+    checkpoint: legacyCheckpoint,
+    batchSize: opts.batchSize,
+    style: opts.style,
+    signal: opts.signal,
+    onCommit: async (commit) => {
+      if (commit.kind === "cues") {
+        for (const cue of commit.subtitles) opts.onCue(cue);
+      } else {
+        opts.onSummary({ keyPhrases: commit.keyPhrases });
+      }
+    },
+  });
+}
+
+async function runTransactionalAnalysis(
+  opts: RunAnalysisOptions,
+): Promise<AnalysisCheckpoint> {
   const batchSize = opts.batchSize ?? 50;
-  const batches = batchSubtitles(opts.cues, batchSize);
   const systemPrompt = buildSystemPrompt(opts.style ?? "colloquial");
-  // Collect every analyzed cue so the final summary call sees the WHOLE
-  // transcript (resumed sessions seed this from previouslyAnalyzed).
-  const analyzedCues: Subtitle[] = [...(opts.previouslyAnalyzed ?? [])];
+  const analyzedCues: Subtitle[] = [...opts.previouslyAnalyzed];
+  let currentCheckpoint = opts.checkpoint;
 
-  // ── Phase 1: per-cue analysis, batch by batch (no summary asked) ──
-  for (let i = 0; i < batches.length; i++) {
-    if (opts.signal?.aborted) return;
-
-    const batch = batches[i];
-    const userPrompt = i === 0 ? buildUserPrompt(batch) : buildContinuationPrompt(batch);
-
-    // Index → original cue lookup so parseCue can fill text/time/endTime
-    // from the input cue when the LLM omits or mangles those fields in
-    // its echo. We treat the cues we sent to the LLM as the authoritative
-    // source for those — there's no point trusting a re-typing of input.
-    const byIndex = new Map<number, SrtCue>(batch.map((c) => [c.index, c]));
-    // Fallback positional iterator for models that don't echo `index` either
-    // (rare, but seen). LLM is supposed to emit cues in batch order.
-    let positionalIter = 0;
-
-    const parser = new JsonLineParser();
-    const handle = (obj: unknown) => {
-      const original = resolveOriginal(obj, byIndex, batch, positionalIter);
-      if (original) positionalIter = batch.indexOf(original) + 1;
-      const cue = parseCue(obj, original);
-      if (!cue) return;
-      analyzedCues.push(cue);
-      opts.onCue(cue);
-    };
-    for await (const chunk of opts.provider.stream({
-      systemPrompt,
-      userPrompt,
-      signal: opts.signal,
-    })) {
-      if (opts.signal?.aborted) return;
-      parser.feed(chunk, handle);
-    }
-    parser.flush(handle);
-  }
-
-  if (opts.signal?.aborted) return;
-  if (analyzedCues.length === 0) return;
-
-  // ── Phase 2: single global summary call across the whole transcript ──
-  // Wrapped in try/catch — losing the summary should NOT mark the run as failed
-  // because all cue analyses are already saved.
   try {
-    const parser = new JsonLineParser();
-    const handle = (obj: unknown) => {
-      const summary = parseSummary(obj);
-      if (summary) opts.onSummary(summary);
-    };
-    for await (const chunk of opts.provider.stream({
-      systemPrompt,
-      userPrompt: buildSummaryPrompt(analyzedCues),
-      signal: opts.signal,
-    })) {
-      if (opts.signal?.aborted) return;
-      parser.feed(chunk, handle);
+    while (
+      currentCheckpoint.phase === "cues"
+      && currentCheckpoint.nextCueOffset < opts.cues.length
+    ) {
+      throwIfAborted(opts.signal);
+      const startCueOffset = currentCheckpoint.nextCueOffset;
+      const endCueOffset = Math.min(startCueOffset + batchSize, opts.cues.length);
+      const batch = opts.cues.slice(startCueOffset, endCueOffset);
+      const userPrompt = startCueOffset === 0
+        ? buildUserPrompt(batch)
+        : buildContinuationPrompt(batch);
+
+      const subtitles = await withProviderRetry(opts, async () => {
+        const parser = new JsonLineParser();
+        const attemptSubtitles: Subtitle[] = [];
+        const byIndex = new Map<number, SrtCue>(batch.map((cue) => [cue.index, cue]));
+        let positionalIter = 0;
+        const handle = (obj: unknown) => {
+          const original = resolveOriginal(obj, byIndex, batch, positionalIter);
+          if (original) positionalIter = batch.indexOf(original) + 1;
+          const cue = parseCue(obj, original);
+          if (cue) attemptSubtitles.push(cue);
+        };
+        const invalid = (line: string) => {
+          throw new ProviderProtocolError(`Malformed JSON line from provider: ${line}`);
+        };
+
+        for await (const chunk of opts.provider.stream({
+          systemPrompt,
+          userPrompt,
+          signal: opts.signal,
+        })) {
+          throwIfAborted(opts.signal);
+          parser.feed(chunk, handle, invalid);
+        }
+        throwIfAborted(opts.signal);
+        parser.flush(handle, invalid);
+        throwIfAborted(opts.signal);
+        return attemptSubtitles;
+      });
+
+      throwIfAborted(opts.signal);
+      const nextCheckpoint: AnalysisCheckpoint = {
+        ...currentCheckpoint,
+        nextCueOffset: endCueOffset,
+        phase: endCueOffset === opts.cues.length ? "summary" : "cues",
+        revision: currentCheckpoint.revision + 1,
+      };
+      await opts.onCommit({
+        kind: "cues",
+        startCueOffset,
+        endCueOffset,
+        subtitles,
+        checkpoint: nextCheckpoint,
+      });
+      currentCheckpoint = nextCheckpoint;
+      analyzedCues.push(...subtitles);
     }
-    parser.flush(handle);
-  } catch (e) {
-    if (opts.signal?.aborted) return;
-    // Cues are intact; only the summary failed. Surface a console warning so
-    // the dev sees it, but don't propagate — the caller's catch path would
-    // otherwise mark the entire video status=failed.
-    console.warn("global summary call failed; keyPhrases will be empty", e);
+
+    if (
+      currentCheckpoint.phase === "cues"
+      && currentCheckpoint.nextCueOffset === opts.cues.length
+      && opts.cues.length > 0
+    ) {
+      throwIfAborted(opts.signal);
+      const nextCheckpoint: AnalysisCheckpoint = {
+        ...currentCheckpoint,
+        phase: "summary",
+        revision: currentCheckpoint.revision + 1,
+      };
+      await opts.onCommit({
+        kind: "cues",
+        startCueOffset: currentCheckpoint.nextCueOffset,
+        endCueOffset: currentCheckpoint.nextCueOffset,
+        subtitles: [],
+        checkpoint: nextCheckpoint,
+      });
+      currentCheckpoint = nextCheckpoint;
+    }
+
+    if (currentCheckpoint.phase !== "summary") return currentCheckpoint;
+
+    throwIfAborted(opts.signal);
+    const keyPhrases = await withProviderRetry(opts, async () => {
+      const parser = new JsonLineParser();
+      let attemptKeyPhrases: KeyPhrase[] = [];
+      const handle = (obj: unknown) => {
+        const summary = parseSummary(obj);
+        if (summary && Array.isArray(summary.keyPhrases)) {
+          attemptKeyPhrases = summary.keyPhrases;
+        }
+      };
+      const invalid = (line: string) => {
+        throw new ProviderProtocolError(`Malformed JSON line from provider: ${line}`);
+      };
+
+      for await (const chunk of opts.provider.stream({
+        systemPrompt,
+        userPrompt: buildSummaryPrompt(analyzedCues),
+        signal: opts.signal,
+      })) {
+        throwIfAborted(opts.signal);
+        parser.feed(chunk, handle, invalid);
+      }
+      throwIfAborted(opts.signal);
+      parser.flush(handle, invalid);
+      throwIfAborted(opts.signal);
+      return attemptKeyPhrases;
+    });
+
+    throwIfAborted(opts.signal);
+    const completeCheckpoint: AnalysisCheckpoint = {
+      ...currentCheckpoint,
+      phase: "complete",
+      revision: currentCheckpoint.revision + 1,
+    };
+    await opts.onCommit({
+      kind: "summary",
+      keyPhrases,
+      checkpoint: completeCheckpoint,
+    });
+    currentCheckpoint = completeCheckpoint;
+    return currentCheckpoint;
+  } catch (error) {
+    if (opts.signal?.aborted || isAbortError(error)) return currentCheckpoint;
+    throw error;
+  }
+}
+
+function withProviderRetry<T>(
+  opts: RunAnalysisOptions,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return retryOperation(operation, {
+    policy: opts.provider.retryProfile === "deepseek-analysis"
+      ? DEEPSEEK_ANALYSIS_RETRY_POLICY
+      : NO_RETRY_POLICY,
+    isRetryable: isRetryableProviderFailure,
+    signal: opts.signal,
+    onRetry: opts.onRetry,
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError");
   }
 }
 
 /**
- * Match the LLM's emitted cue object back to the original SrtCue we sent
- * in this batch. Tries `index` echo first, falls back to positional
- * (LLM is asked for one line per cue in order). Used so parseCue can pull
- * authoritative text/time/endTime from the input rather than trusting
- * the LLM to echo them — some models silently drop those fields, which
- * earlier caused `text` to render as the literal string "undefined".
+ * Match a model cue back to its authoritative source cue. Index is preferred;
+ * positional matching preserves compatibility with models that omit indexes.
  */
 function resolveOriginal(
   obj: unknown,
   byIndex: Map<number, SrtCue>,
-  batch: SrtCue[],
+  batch: readonly SrtCue[],
   positional: number,
 ): SrtCue | undefined {
   if (!obj || typeof obj !== "object") return undefined;
-  const o = obj as Record<string, unknown>;
-  const idx = Number(o.index);
-  if (Number.isFinite(idx) && byIndex.has(idx)) return byIndex.get(idx);
-  // No usable index → use positional fallback (cues stream in order).
+  const output = obj as Record<string, unknown>;
+  const index = Number(output.index);
+  if (Number.isFinite(index) && byIndex.has(index)) return byIndex.get(index);
   if (positional < batch.length) return batch[positional];
   return undefined;
 }
 
 function parseCue(obj: unknown, original: SrtCue | undefined): Subtitle | null {
   if (!obj || typeof obj !== "object") return null;
-  const o = obj as Record<string, unknown>;
-  if (o.type !== "cue") return null;
-
-  // text/time/endTime come from the input (we already know them); the LLM's
-  // echo is only used as a last-resort fallback if for some reason we
-  // can't resolve the original cue. Without this fallback, models that
-  // skip the echo to save tokens caused every cue to render text =
-  // "undefined" (String(undefined)).
-  const text = original?.text ?? String(o.text ?? "");
-  const time = original?.time ?? Number(o.time);
-  const endTime = original?.endTime ?? Number(o.endTime);
+  const output = obj as Record<string, unknown>;
+  if (output.type !== "cue") return null;
 
   return {
-    time,
-    endTime,
-    text,
-    translation: String(o.translation ?? ""),
-    isKeyPoint: Boolean(o.isKeyPoint),
-    highlightWords: Array.isArray(o.highlightWords) ? (o.highlightWords as string[]) : [],
-    // Reject anything that isn't a plain {phrase: note} object — some models
-    // occasionally collapse the per-phrase dict into one big summary string,
-    // which then makes `keyNotes[word]` undefined and the tooltip silently
-    // disappear. Falling back to {} keeps highlights interactive even when
-    // the model fumbles the schema (the tooltip just won't render).
-    keyNotes: isPlainObject(o.keyNotes) ? (o.keyNotes as Record<string, string>) : {},
-    highlightTranslations: isPlainObject(o.highlightTranslations)
-      ? (o.highlightTranslations as Record<string, string>)
+    time: original?.time ?? Number(output.time),
+    endTime: original?.endTime ?? Number(output.endTime),
+    text: original?.text ?? String(output.text ?? ""),
+    translation: String(output.translation ?? ""),
+    isKeyPoint: Boolean(output.isKeyPoint),
+    highlightWords: Array.isArray(output.highlightWords)
+      ? (output.highlightWords as string[])
+      : [],
+    keyNotes: isPlainObject(output.keyNotes)
+      ? (output.keyNotes as Record<string, string>)
+      : {},
+    highlightTranslations: isPlainObject(output.highlightTranslations)
+      ? (output.highlightTranslations as Record<string, string>)
       : {},
   };
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseSummary(obj: unknown): Omit<AnalysisResult, "subtitles"> | null {
   if (!obj || typeof obj !== "object") return null;
-  const o = obj as Record<string, unknown>;
-  if (o.type !== "summary") return null;
-  const { type: _drop, ...rest } = o;
-  return rest as unknown as Omit<AnalysisResult, "subtitles">;
+  const output = obj as Record<string, unknown>;
+  if (output.type !== "summary") return null;
+  const { type: _drop, ...summary } = output;
+  return summary as unknown as Omit<AnalysisResult, "subtitles">;
 }

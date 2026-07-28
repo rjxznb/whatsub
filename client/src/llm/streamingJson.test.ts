@@ -33,4 +33,29 @@ describe("JsonLineParser", () => {
     parser.feed('not json\n{"ok":true}\n', (obj) => out.push(obj));
     expect(out).toEqual([{ ok: true }]);
   });
+
+  it("reports each non-empty invalid line when a handler is provided", () => {
+    const parser = new JsonLineParser();
+    const out: unknown[] = [];
+    const invalid: string[] = [];
+
+    parser.feed(
+      ' not json \n\n{"ok":true}\n',
+      (obj) => out.push(obj),
+      (line) => invalid.push(line),
+    );
+
+    expect(out).toEqual([{ ok: true }]);
+    expect(invalid).toEqual(["not json"]);
+  });
+
+  it("reports an invalid trailing line during flush", () => {
+    const parser = new JsonLineParser();
+    const invalid: string[] = [];
+
+    parser.feed("trailing prose", () => {});
+    parser.flush(() => {}, (line) => invalid.push(line));
+
+    expect(invalid).toEqual(["trailing prose"]);
+  });
 });

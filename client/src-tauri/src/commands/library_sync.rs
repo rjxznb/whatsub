@@ -855,7 +855,9 @@ pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Resul
 
     // 3. Write transcript.srt + analysis.json from cloud data (NO re-whisper/re-LLM).
     std::fs::write(out_dir.join("transcript.srt"), &transcript).map_err(|e| e.to_string())?;
-    crate::commands::analysis::save_analysis(id.clone(), analysis).map_err(|e| e.to_string())?;
+    crate::commands::analysis::save_analysis(id.clone(), analysis)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 4. Build a full local library entry (status Ready, synced since it came from cloud).
     let now = std::time::SystemTime::now()

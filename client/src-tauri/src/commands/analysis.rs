@@ -3,21 +3,146 @@ use crate::core::progress::{emit, PipelineEvent};
 use crate::error::{AppError, AppResult};
 use serde_json::Value;
 use std::collections::VecDeque;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+static ANALYSIS_SAVE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveAnalysisOutcome {
+    applied: bool,
+    revision: Option<u64>,
+}
+
 #[tauri::command]
-pub fn save_analysis(video_id: String, analysis: Value) -> AppResult<()> {
-    let dir = paths::video_dir(&video_id)?;
-    fs::create_dir_all(&dir)?;
-    let path = dir.join("analysis.json");
-    let pretty = serde_json::to_string_pretty(&analysis)?;
-    fs::write(&path, pretty)?;
-    Ok(())
+pub async fn save_analysis(video_id: String, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
+    let path = paths::video_dir(&video_id)?.join("analysis.json");
+    save_analysis_path(&path, analysis).await
+}
+
+async fn save_analysis_path(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
+    let _guard = ANALYSIS_SAVE_GATE.lock().await;
+    save_analysis_value(path, analysis)
+}
+
+fn analysis_revision(analysis: &Value) -> Option<u64> {
+    analysis
+        .get("checkpoint")
+        .and_then(|checkpoint| checkpoint.get("revision"))
+        .and_then(Value::as_u64)
+}
+
+fn save_analysis_value(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
+    save_analysis_value_with_replacer(path, analysis, replace_analysis_file)
+}
+
+fn save_analysis_value_with_replacer<F>(
+    path: &Path,
+    analysis: Value,
+    replacer: F,
+) -> AppResult<SaveAnalysisOutcome>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    let incoming_revision = analysis_revision(&analysis);
+    let current_revision = if path.exists() {
+        let current: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+        Some(analysis_revision(&current))
+    } else {
+        None
+    };
+
+    if let Some(Some(revision)) = current_revision {
+        if incoming_revision.is_none_or(|incoming| incoming <= revision) {
+            return Ok(SaveAnalysisOutcome {
+                applied: false,
+                revision: Some(revision),
+            });
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let temporary = path.with_extension("json.tmp");
+    let write_result = (|| -> AppResult<()> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)?;
+        serde_json::to_writer_pretty(&mut file, &analysis)?;
+        file.write_all(b"\n")?;
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+
+    if let Err(error) = replacer(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+
+    Ok(SaveAnalysisOutcome {
+        applied: true,
+        revision: incoming_revision,
+    })
+}
+
+#[cfg(windows)]
+fn replace_analysis_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+
+    if !destination.exists() {
+        return fs::rename(temporary, destination);
+    }
+
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let temporary_wide: Vec<u16> = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let replaced = unsafe {
+        ReplaceFileW(
+            destination_wide.as_ptr(),
+            temporary_wide.as_ptr(),
+            ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            ptr::null(),
+            ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_analysis_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, destination)
 }
 
 #[tauri::command]
@@ -364,6 +489,62 @@ pub(crate) fn extract_time_field(line: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let sequence = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "whatsub-analysis-{name}-{}-{sequence}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn analysis_path(&self) -> PathBuf {
+            self.0.join("analysis.json")
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn checkpointed(revision: u64, marker: &str) -> Value {
+        json!({
+            "marker": marker,
+            "checkpoint": {
+                "version": 1,
+                "revision": revision
+            }
+        })
+    }
+
+    fn legacy(marker: &str) -> Value {
+        json!({ "marker": marker })
+    }
+
+    fn read_analysis(path: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn read_revision(path: &Path) -> Option<u64> {
+        read_analysis(path)
+            .get("checkpoint")
+            .and_then(|checkpoint| checkpoint.get("revision"))
+            .and_then(Value::as_u64)
+    }
 
     #[test]
     fn parses_ffmpeg_progress_line() {
@@ -379,6 +560,107 @@ mod tests {
     #[test]
     fn rejects_lines_without_time() {
         assert_eq!(extract_time_field("ffmpeg version 6.0 Copyright (c) ..."), None);
+    }
+
+    #[test]
+    fn newer_revision_wins_and_stale_revision_leaves_no_temp_file() {
+        let dir = TestDir::new("stale");
+        let path = dir.analysis_path();
+
+        let newer = save_analysis_value(&path, checkpointed(2, "newer")).unwrap();
+        let stale = save_analysis_value(&path, checkpointed(1, "stale")).unwrap();
+
+        assert!(newer.applied);
+        assert_eq!(newer.revision, Some(2));
+        assert!(!stale.applied);
+        assert_eq!(stale.revision, Some(2));
+        assert_eq!(read_revision(&path), Some(2));
+        assert_eq!(read_analysis(&path)["marker"], "newer");
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn equal_revision_is_rejected_without_replacing_content() {
+        let dir = TestDir::new("equal");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(4, "first")).unwrap();
+
+        let outcome = save_analysis_value(&path, checkpointed(4, "equal")).unwrap();
+
+        assert!(!outcome.applied);
+        assert_eq!(outcome.revision, Some(4));
+        assert_eq!(read_analysis(&path)["marker"], "first");
+    }
+
+    #[test]
+    fn checkpoint_migrates_legacy_analysis() {
+        let dir = TestDir::new("migration");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, legacy("legacy")).unwrap();
+
+        let outcome = save_analysis_value(&path, checkpointed(0, "checkpointed")).unwrap();
+
+        assert!(outcome.applied);
+        assert_eq!(outcome.revision, Some(0));
+        assert_eq!(read_analysis(&path)["marker"], "checkpointed");
+    }
+
+    #[test]
+    fn legacy_writes_work_until_a_checkpoint_exists() {
+        let dir = TestDir::new("legacy");
+        let path = dir.analysis_path();
+
+        assert!(save_analysis_value(&path, legacy("first")).unwrap().applied);
+        assert!(
+            save_analysis_value(&path, legacy("second"))
+                .unwrap()
+                .applied
+        );
+        save_analysis_value(&path, checkpointed(3, "checkpointed")).unwrap();
+        let rejected = save_analysis_value(&path, legacy("late-legacy")).unwrap();
+
+        assert!(!rejected.applied);
+        assert_eq!(rejected.revision, Some(3));
+        assert_eq!(read_analysis(&path)["marker"], "checkpointed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_revisions_finish_at_the_maximum() {
+        let dir = TestDir::new("concurrent");
+        let path = dir.analysis_path();
+        let mut tasks = Vec::new();
+
+        for revision in [7, 2, 9, 1, 6, 10, 4, 8, 3, 5] {
+            let path = path.clone();
+            tasks.push(tokio::spawn(async move {
+                save_analysis_path(&path, checkpointed(revision, "concurrent")).await
+            }));
+        }
+
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+
+        assert_eq!(read_revision(&path), Some(10));
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn replacement_failure_preserves_original_and_removes_temp_file() {
+        let dir = TestDir::new("replace-failure");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(1, "original")).unwrap();
+
+        let result = save_analysis_value_with_replacer(
+            &path,
+            checkpointed(2, "replacement"),
+            |_temporary, _destination| Err(io::Error::other("injected replacement failure")),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(read_revision(&path), Some(1));
+        assert_eq!(read_analysis(&path)["marker"], "original");
+        assert!(!path.with_extension("json.tmp").exists());
     }
 }
 

@@ -504,6 +504,7 @@ dependencies = [
  "tokio-util",
  "url",
  "whoami",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

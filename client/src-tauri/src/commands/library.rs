@@ -178,6 +178,9 @@ pub fn library_upsert(entry: LibraryEntry) -> AppResult<()> {
 
 #[tauri::command]
 pub fn library_delete(id: String) -> AppResult<()> {
+    // Retire every producer before touching either the index or filesystem.
+    // Even if a later write/remove fails, stale work cannot resurrect data.
+    crate::commands::analysis_store::revoke_analysis_sessions(&id)?;
     let mut lib = read_index()?;
     lib.videos.retain(|v| v.id != id);
     // Also clean up references so a later reorder doesn't see this id dangling

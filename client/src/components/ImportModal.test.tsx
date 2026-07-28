@@ -33,8 +33,19 @@ vi.mock("@tauri-apps/api/event", () => ({
 // progress view — the state the ✕-cancel tests exercise.
 let deferSiteLoginCancel = false;
 let resolveDeferredSiteLoginCancel: (() => void) | null = null;
+let deferImportCancel = false;
+let rejectImportCancel: Error | null = null;
+let resolveDeferredImportCancel: (() => void) | null = null;
 const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
   if (cmd === "import_video") return new Promise(() => {});
+  if (cmd === "cancel_import") {
+    if (rejectImportCancel) return Promise.reject(rejectImportCancel);
+    if (deferImportCancel) {
+      return new Promise<void>((resolve) => {
+        resolveDeferredImportCancel = resolve;
+      });
+    }
+  }
   if (cmd === "site_login_cancel" && deferSiteLoginCancel) {
     return new Promise<void>((resolve) => {
       resolveDeferredSiteLoginCancel = resolve;
@@ -80,6 +91,9 @@ beforeEach(() => {
   lateSiteLoginUnlistenMock.mockClear();
   deferSiteLoginCancel = false;
   resolveDeferredSiteLoginCancel = null;
+  deferImportCancel = false;
+  rejectImportCancel = null;
+  resolveDeferredImportCancel = null;
 });
 
 describe("ImportModal — onboarding sample-URL affordance", () => {
@@ -138,8 +152,8 @@ describe("ImportModal — onboarding sample-URL affordance", () => {
 describe("ImportModal — ✕ cancels the in-flight import", () => {
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
-  async function startImport() {
-    const r = render(<ImportModal onClose={() => {}} />);
+  async function startImport(onClose: () => void = () => {}) {
+    const r = render(<ImportModal onClose={onClose} />);
     fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
     fireEvent.click(r.getByRole("button", { name: "开始解析" }));
     await flush(); // let the listener register + progress view mount
@@ -189,6 +203,55 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLog" });
   });
+
+  it("does not close until the backend confirms process cleanup", async () => {
+    deferImportCancel = true;
+    const onClose = vi.fn();
+    const r = await startImport(onClose);
+    pipelineHandler?.({ payload: { stage: "Started", video_id: "vidWait" } });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await flush();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(r.getByText("正在停止并清理…")).toBeTruthy();
+
+    await act(async () => resolveDeferredImportCancel?.());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the progress window open when cancellation fails", async () => {
+    rejectImportCancel = new Error("cancel timeout");
+    const onClose = vi.fn();
+    const r = await startImport(onClose);
+    pipelineHandler?.({ payload: { stage: "Started", video_id: "vidFail" } });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+
+    await waitFor(() => expect(r.getByText(/停止失败.*cancel timeout/)).toBeTruthy());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("waits for the first task id instead of closing an unknown running import", async () => {
+    const onClose = vi.fn();
+    const r = await startImport(onClose);
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await waitFor(() => expect(r.getByText("正在停止并清理…")).toBeTruthy());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("cancel_import", expect.anything());
+
+    await act(async () => {
+      pipelineHandler?.({ payload: { stage: "Log", video_id: "vidLate", line: "starting" } });
+    });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLate" }),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
 });
 
 describe("ImportModal — diagnosed download failures", () => {
@@ -198,8 +261,8 @@ describe("ImportModal — diagnosed download failures", () => {
   const pendingLoginText = "\u7b49\u5f85 YouTube \u767b\u5f55\u5b8c\u6210";
   const diagnosisText = "YouTube \u8981\u6c42\u767b\u5f55\u9a8c\u8bc1";
 
-  async function startImport() {
-    const r = render(<ImportModal onClose={() => {}} />);
+  async function startImport(onClose: () => void = () => {}) {
+    const r = render(<ImportModal onClose={onClose} />);
     fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
     fireEvent.click(r.getByRole("button", { name: "开始解析" }));
     await flush();

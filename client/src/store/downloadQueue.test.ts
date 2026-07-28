@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { saveAnalysis } from "../llm/analysisPersistence";
 import { useDownloadQueue, applyPipelineEvent } from "./downloadQueue";
 
 const mockInvoke = vi.mocked(invoke);
@@ -32,63 +31,47 @@ describe("download queue cancellation persistence", () => {
     useDownloadQueue.setState({ entries: {} });
   });
 
-  it("invalidates cached analysis identity when cancel removes the whole import", async () => {
-    const videoId = "cancelled-whole-import";
-    let backendGeneration: string | null = "generation-2";
-    let backendAnalysis: unknown | null = { marker: "old" };
-    mockInvoke.mockImplementation(async (command, args) => {
-      if (command === "load_analysis_state") {
-        return { analysis: backendAnalysis, generation: backendGeneration };
-      }
-      if (command === "cancel_import") {
-        backendGeneration = null;
-        backendAnalysis = null;
-        return undefined;
-      }
-      if (command === "save_analysis") {
-        const request = args as Record<string, unknown>;
-        if (backendGeneration === null) {
-          if (request.generation) {
-            return {
-              applied: false,
-              status: "rejected",
-              generation: null,
-              revision: null,
-            };
-          }
-          backendGeneration = "generation-1";
-        } else if (request.generation !== backendGeneration) {
-          return {
-            applied: false,
-            status: "rejected",
-            generation: backendGeneration,
-            revision: null,
-          };
-        }
-        backendAnalysis = request.analysis;
-        return {
-          applied: true,
-          status: "applied",
-          generation: backendGeneration,
-          revision: null,
-        };
-      }
-      throw new Error(`unexpected command: ${command}`);
+  it("keeps the row until backend cancellation and cleanup are confirmed", async () => {
+    let finishCancel!: () => void;
+    mockInvoke.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        finishCancel = resolve;
+      }),
+    );
+    useDownloadQueue.getState().upsert("v1", {
+      videoId: "v1",
+      sourceKind: "url",
+      sourceValue: "https://youtube.com/watch?v=x",
+      label: "Video",
+      phase: "downloading",
+      percent: 20,
+      startedAt: 1,
     });
 
-    await saveAnalysis(videoId, { marker: "warm-cache" });
-    await useDownloadQueue.getState().cancel(videoId);
-    await saveAnalysis(videoId, { marker: "fresh-reimport" });
+    const cancelling = useDownloadQueue.getState().cancel("v1");
+    expect(useDownloadQueue.getState().entries.v1).toBeDefined();
+    finishCancel();
+    await cancelling;
 
-    expect(mockInvoke.mock.calls).toEqual([
-      ["load_analysis_state", { videoId }],
-      [
-        "save_analysis",
-        { videoId, analysis: { marker: "warm-cache" }, generation: "generation-2" },
-      ],
-      ["cancel_import", { videoId }],
-      ["load_analysis_state", { videoId }],
-      ["save_analysis", { videoId, analysis: { marker: "fresh-reimport" } }],
-    ]);
+    expect(mockInvoke).toHaveBeenCalledWith("cancel_import", { videoId: "v1" });
+    expect(useDownloadQueue.getState().entries.v1).toBeUndefined();
+  });
+
+  it("keeps a failed cancellation visible instead of pretending it stopped", async () => {
+    mockInvoke.mockRejectedValue(new Error("cleanup timeout"));
+    useDownloadQueue.getState().upsert("v1", {
+      videoId: "v1",
+      sourceKind: "url",
+      sourceValue: "u",
+      label: "Video",
+      phase: "downloading",
+      percent: 20,
+      startedAt: 1,
+    });
+
+    await useDownloadQueue.getState().cancel("v1");
+
+    expect(useDownloadQueue.getState().entries.v1.phase).toBe("error");
+    expect(useDownloadQueue.getState().entries.v1.error).toContain("cleanup timeout");
   });
 });

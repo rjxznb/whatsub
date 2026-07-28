@@ -209,6 +209,40 @@ impl AnalysisStore {
     pub(crate) fn revoke(&mut self, video_id: &str) {
         self.active.remove(video_id);
     }
+
+    fn replace_snapshot_at(
+        &mut self,
+        video_id: &str,
+        path: &Path,
+        analysis: Value,
+    ) -> AppResult<()> {
+        validate_analysis(&analysis)?;
+        self.revoke(video_id);
+        write_json_atomically_with_replacer(path, &analysis, replace_analysis_file)?;
+        remove_obsolete_artifacts(path)
+    }
+
+    fn delete_snapshot_at_with<F>(
+        &mut self,
+        video_id: &str,
+        path: &Path,
+        mut remove: F,
+    ) -> AppResult<()>
+    where
+        F: FnMut(&Path) -> std::io::Result<()>,
+    {
+        // Revocation is the destructive boundary. Even if the filesystem
+        // operation fails, the retired producer must never write again.
+        self.revoke(video_id);
+        for candidate in snapshot_artifacts(path) {
+            match remove(&candidate) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn begin_session(video_id: &str, reset: bool) -> AppResult<AnalysisSessionStart> {
@@ -245,6 +279,30 @@ pub(crate) fn revoke_analysis_sessions(video_id: &str) -> AppResult<()> {
         .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
         .revoke(video_id);
     Ok(())
+}
+
+pub(crate) fn load_snapshot(video_id: &str) -> AppResult<Option<Value>> {
+    let path = paths::video_dir(video_id)?.join("analysis.json");
+    let _guard = ANALYSIS_STORE
+        .lock()
+        .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?;
+    migrate_and_load_snapshot(&path)
+}
+
+pub(crate) fn replace_analysis_snapshot(video_id: &str, analysis: Value) -> AppResult<()> {
+    let path = paths::video_dir(video_id)?.join("analysis.json");
+    ANALYSIS_STORE
+        .lock()
+        .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
+        .replace_snapshot_at(video_id, &path, analysis)
+}
+
+pub(crate) fn delete_analysis_snapshot(video_id: &str) -> AppResult<()> {
+    let path = paths::video_dir(video_id)?.join("analysis.json");
+    ANALYSIS_STORE
+        .lock()
+        .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
+        .delete_snapshot_at_with(video_id, &path, |candidate| fs::remove_file(candidate))
 }
 
 fn validate_analysis(analysis: &Value) -> AppResult<Option<CheckpointMeta>> {
@@ -776,5 +834,74 @@ mod tests {
 
         assert!(error.to_string().contains("checkpoint"));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn explicit_snapshot_replacement_revokes_the_old_lease() {
+        let dir = TestDir::new("snapshot-replace-revokes");
+        let path = dir.analysis_path();
+        let mut store = AnalysisStore::default();
+        let old = store.begin_at("v1", &path, false).unwrap();
+        store
+            .save_at(
+                "v1",
+                &path,
+                &old.lease,
+                checkpointed("sha256:old", 0, "old"),
+            )
+            .unwrap();
+
+        store
+            .replace_snapshot_at("v1", &path, checkpointed("sha256:cloud", 4, "cloud"))
+            .unwrap();
+
+        assert_eq!(read(&path)["marker"], "cloud");
+        assert_eq!(
+            store
+                .save_at(
+                    "v1",
+                    &path,
+                    &old.lease,
+                    checkpointed("sha256:old", 1, "late"),
+                )
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
+    }
+
+    #[test]
+    fn deletion_revokes_before_a_later_filesystem_failure() {
+        let dir = TestDir::new("delete-revokes-first");
+        let path = dir.analysis_path();
+        let mut store = AnalysisStore::default();
+        let old = store.begin_at("v1", &path, false).unwrap();
+        store
+            .save_at(
+                "v1",
+                &path,
+                &old.lease,
+                checkpointed("sha256:old", 0, "old"),
+            )
+            .unwrap();
+
+        let result = store.delete_snapshot_at_with("v1", &path, |_candidate| {
+            Err(std::io::Error::other("remove failed"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(read(&path)["marker"], "old");
+        assert_eq!(
+            store
+                .save_at(
+                    "v1",
+                    &path,
+                    &old.lease,
+                    checkpointed("sha256:old", 1, "late"),
+                )
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
     }
 }

@@ -853,13 +853,10 @@ pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Resul
         resolved_thumb = dl.thumb_path;
     }
 
-    // 3. Materialize cloud analysis without bypassing local generation ordering.
-    // A tombstone or newer local generation is a conflict: do not replace its
-    // transcript or mark the entry Ready with analysis that was not applied.
-    let outcome = crate::commands::analysis::save_analysis(id.clone(), analysis, None, None)
-        .await
+    // 3. Cloud materialization is an explicit destructive replacement. Revoke
+    // any producer lease, then atomically install the downloaded snapshot.
+    crate::commands::analysis_store::replace_analysis_snapshot(&id, analysis)
         .map_err(|e| e.to_string())?;
-    accept_cloud_analysis_save(outcome)?;
     std::fs::write(out_dir.join("transcript.srt"), &transcript).map_err(|e| e.to_string())?;
 
     // 4. Build a full local library entry (status Ready, synced since it came from cloud).
@@ -883,19 +880,6 @@ pub async fn library_materialize_from_cloud(app: AppHandle, id: String) -> Resul
     };
     crate::commands::library::library_upsert(entry).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-fn accept_cloud_analysis_save(
-    outcome: crate::commands::analysis::SaveAnalysisOutcome,
-) -> Result<(), String> {
-    match outcome.status {
-        crate::commands::analysis::SaveAnalysisStatus::Applied
-        | crate::commands::analysis::SaveAnalysisStatus::AlreadyCurrent => Ok(()),
-        crate::commands::analysis::SaveAnalysisStatus::Rejected => Err(format!(
-            "analysis generation conflict (generation: {:?}, current revision: {:?})",
-            outcome.generation, outcome.revision
-        )),
-    }
 }
 
 fn extract_youtube_id_rust(url: &str) -> Option<String> {
@@ -953,34 +937,6 @@ fn categorise(e: &reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cloud_materialization_accepts_applied_and_already_current_saves() {
-        let applied = crate::commands::analysis::SaveAnalysisOutcome {
-            applied: true,
-            status: crate::commands::analysis::SaveAnalysisStatus::Applied,
-            generation: Some("generation-1".to_string()),
-            revision: Some(4),
-        };
-        let already_current = crate::commands::analysis::SaveAnalysisOutcome {
-            applied: true,
-            status: crate::commands::analysis::SaveAnalysisStatus::AlreadyCurrent,
-            generation: Some("generation-1".to_string()),
-            revision: Some(4),
-        };
-        let rejected = crate::commands::analysis::SaveAnalysisOutcome {
-            applied: false,
-            status: crate::commands::analysis::SaveAnalysisStatus::Rejected,
-            generation: Some("generation-2".to_string()),
-            revision: Some(5),
-        };
-
-        assert!(accept_cloud_analysis_save(applied).is_ok());
-        // Simulate transcript/metadata failure after the first analysis save.
-        // A retry's idempotent outcome must still pass this boundary.
-        assert!(accept_cloud_analysis_save(already_current).is_ok());
-        assert!(accept_cloud_analysis_save(rejected).is_err());
-    }
 
     #[test]
     fn unsync_tolerates_missing_local_entry() {

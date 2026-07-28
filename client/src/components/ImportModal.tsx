@@ -339,8 +339,9 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       if (showErrorDialog) {
         setShowErrorDialog(false);
       } else {
-        void cancelInFlight();
-        onClose();
+        void (async () => {
+          if (await cancelInFlight()) onClose();
+        })();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -361,15 +362,52 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // we can call cancel_import on Esc / ✕ / 取消 — Rust computes the id
   // (sha256/youtube id/url hash) and we don't replicate that logic JS-side.
   const currentVideoIdRef = useRef<string | null>(null);
-  async function cancelInFlight(): Promise<void> {
-    const id = currentVideoIdRef.current;
-    if (!id) return;
-    try {
-      await cancelImportAndInvalidateAnalysis(id);
-    } catch (e) {
-      console.warn("cancel_import failed", e);
-    }
-    currentVideoIdRef.current = null;
+  const videoIdWaiterRef = useRef<((id: string) => void) | null>(null);
+  const cancelPromiseRef = useRef<Promise<boolean> | null>(null);
+  const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  function waitForCurrentVideoId(): Promise<string | null> {
+    if (currentVideoIdRef.current) return Promise.resolve(currentVideoIdRef.current);
+    return new Promise((resolve) => {
+      const finish = (id: string | null) => {
+        if (videoIdWaiterRef.current === onVideoId) {
+          videoIdWaiterRef.current = null;
+        }
+        clearTimeout(timeoutId);
+        resolve(id);
+      };
+      const onVideoId = (id: string) => finish(id);
+      const timeoutId = window.setTimeout(() => finish(null), 3_000);
+      videoIdWaiterRef.current = onVideoId;
+    });
+  }
+
+  function cancelInFlight(): Promise<boolean> {
+    if (cancelPromiseRef.current) return cancelPromiseRef.current;
+
+    const promise = (async () => {
+      setCanceling(true);
+      setCancelError(null);
+      try {
+        const id = await waitForCurrentVideoId();
+        if (!id) {
+          throw new Error("尚未取得任务编号，请稍候再试");
+        }
+        await cancelImportAndInvalidateAnalysis(id);
+        currentVideoIdRef.current = null;
+        return true;
+      } catch (e) {
+        console.warn("cancel_import failed", e);
+        setCancelError(`停止失败：${String(e)}`);
+        return false;
+      } finally {
+        setCanceling(false);
+        cancelPromiseRef.current = null;
+      }
+    })();
+    cancelPromiseRef.current = promise;
+    return promise;
   }
   // Monotonic id source for log lines. Increments on every push so
   // simultaneous log events get distinct React keys.
@@ -398,6 +436,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       // cancellation robust no matter which event arrives first.
       if ("video_id" in ev && ev.video_id) {
         currentVideoIdRef.current = ev.video_id;
+        videoIdWaiterRef.current?.(ev.video_id);
       }
       switch (ev.stage) {
         case "Started":
@@ -915,17 +954,30 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
               phase === "transcribing") && (
               <button
                 type="button"
+                disabled={canceling}
                 onClick={() => {
-                  void cancelInFlight();
-                  onClose();
+                  void (async () => {
+                    if (await cancelInFlight()) onClose();
+                  })();
                 }}
-                className="text-zinc-500 hover:text-zinc-200 text-xl leading-none px-2 -mr-2"
-                title="取消下载 (Esc)"
+                className="text-zinc-500 hover:text-zinc-200 disabled:opacity-50 text-xl leading-none px-2 -mr-2"
+                title={canceling ? "正在取消…" : "取消下载 (Esc)"}
               >
                 ×
               </button>
             )}
           </div>
+
+          {canceling && (
+            <div role="status" className="mb-3 text-sm text-amber-300">
+              正在停止并清理…
+            </div>
+          )}
+          {cancelError && (
+            <div role="alert" className="mb-3 text-sm text-red-300">
+              {cancelError}
+            </div>
+          )}
 
           <div className="space-y-3">
             {visiblePhases.map((p) => {

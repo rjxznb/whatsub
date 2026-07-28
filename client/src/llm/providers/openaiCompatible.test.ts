@@ -15,6 +15,10 @@ import {
 import { DEFAULT_SETTINGS } from "../../types/settings";
 import type { AgentEvent } from "../../agent/types";
 import type { Message } from "../../types/agent";
+import {
+  ProviderProtocolError,
+  ProviderTransportError,
+} from "./errors";
 
 beforeEach(() => {
   mockFetch.mockReset();
@@ -53,8 +57,11 @@ describe("openaiCompatible provider", () => {
     expect(chunks.join("")).toBe("hello");
   });
 
-  it("throws on non-2xx", async () => {
-    mockFetch.mockResolvedValue(new Response("bad", { status: 401 }));
+  it("throws a typed HTTP error with Retry-After on non-2xx", async () => {
+    mockFetch.mockResolvedValue(new Response("bad", {
+      status: 429,
+      headers: { "retry-after": "2" },
+    }));
     const provider = createOpenAICompatibleProvider({
       ...DEFAULT_SETTINGS,
       openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
@@ -63,7 +70,131 @@ describe("openaiCompatible provider", () => {
       for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
         // consume
       }
-    }).rejects.toThrow();
+    }).rejects.toMatchObject({
+      status: 429,
+      body: "bad",
+      retryAfterMs: 2_000,
+    });
+  });
+
+  it("wraps non-abort fetch failures as send transport errors", async () => {
+    mockFetch.mockRejectedValue(new Error("network down"));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
+    });
+
+    await expect(async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    }).rejects.toBeInstanceOf(ProviderTransportError);
+  });
+
+  it("preserves AbortError from fetch unchanged", async () => {
+    const abort = new DOMException("aborted", "AbortError");
+    mockFetch.mockRejectedValue(abort);
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
+    });
+
+    await expect(async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    }).rejects.toBe(abort);
+  });
+
+  it("wraps stream reader failures as read transport errors", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error("socket closed")); },
+    });
+    mockFetch.mockResolvedValue(new Response(body, { status: 200 }));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
+    });
+
+    await expect(async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    }).rejects.toMatchObject({ stage: "read" });
+  });
+
+  it("throws a typed protocol error when a successful response has no body", async () => {
+    mockFetch.mockResolvedValue(new Response(null, { status: 200 }));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
+    });
+
+    await expect(async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    }).rejects.toBeInstanceOf(ProviderProtocolError);
+  });
+
+  it("wraps tool-stream fetch failures as send transport errors", async () => {
+    mockFetch.mockRejectedValue(new Error("network down"));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
+    });
+
+    await expect(async () => {
+      for await (const _ of provider.streamWithTools({
+        systemPrompt: "s",
+        history: [],
+        tools: [],
+        signal: new AbortController().signal,
+      })) {
+        // consume
+      }
+    }).rejects.toBeInstanceOf(ProviderTransportError);
+  });
+
+  it("wraps tool-stream reader failures as read transport errors", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error("socket closed")); },
+    });
+    mockFetch.mockResolvedValue(new Response(body, { status: 200 }));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://x", apiKey: "k", model: "m" },
+    });
+
+    await expect(async () => {
+      for await (const _ of provider.streamWithTools({
+        systemPrompt: "s",
+        history: [],
+        tools: [],
+        signal: new AbortController().signal,
+      })) {
+        // consume
+      }
+    }).rejects.toMatchObject({ stage: "read" });
+  });
+
+  it("sets the DeepSeek retry profile only for DeepSeek and managed relay vendors", () => {
+    const deepseek = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "k", model: "m" },
+    });
+    const managed = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://whatsub.eversay.cc/api/llm/v1", apiKey: "k", model: "m" },
+    });
+    const other = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://api.openai.com/v1", apiKey: "k", model: "m" },
+    });
+
+    expect(deepseek.retryProfile).toBe("deepseek-analysis");
+    expect(managed.retryProfile).toBe("deepseek-analysis");
+    expect(other.retryProfile).toBeUndefined();
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseRelayError, RelayError } from "./relayErrors";
+import { ProviderHttpError } from "./errors";
 
 describe("parseRelayError", () => {
   it("uses the relay's own friendly message when present", () => {
@@ -43,6 +44,7 @@ describe("RelayError", () => {
       429,
     );
     expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(ProviderHttpError);
     expect(err.message).toBe("免费体验额度已用完。");
     expect(err.code).toBe("free_used_up");
     expect(err.status).toBe(429);

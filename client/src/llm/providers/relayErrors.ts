@@ -1,3 +1,5 @@
+import { ProviderHttpError } from "./errors";
+
 /**
  * whatSub managed-LLM relay error mapping.
  *
@@ -73,12 +75,17 @@ export function parseRelayError(
 /** Thrown by the openai-compatible provider's `stream()` when the whatSub
  *  relay rejects a request. `message` is already user-friendly, so callers
  *  that read `e.message` surface the right copy with no extra mapping. */
-export class RelayError extends Error {
+export class RelayError extends ProviderHttpError {
   readonly code: string;
   readonly status: number;
   readonly upsell: boolean;
-  constructor(info: RelayErrorInfo, status: number) {
-    super(info.message);
+  constructor(
+    info: RelayErrorInfo,
+    status: number,
+    body = "",
+    retryAfterMs: number | null = null,
+  ) {
+    super(info.message, status, body, retryAfterMs);
     this.name = "RelayError";
     this.code = info.code;
     this.status = status;

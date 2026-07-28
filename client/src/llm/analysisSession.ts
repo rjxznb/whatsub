@@ -21,6 +21,13 @@ interface SessionSaveOutcome {
   revision: number | null;
 }
 
+interface LocalSessionSlot {
+  released: Promise<void>;
+  release: () => void;
+}
+
+const localSessionSlots = new Map<string, LocalSessionSlot>();
+
 export interface PersistedAnalysisSession {
   readonly videoId: string;
   readonly lease: string;
@@ -43,34 +50,47 @@ export async function openAnalysisSession(
   videoId: string,
   cues: readonly SrtCue[],
 ): Promise<PersistedAnalysisSession> {
-  const started = await begin(videoId, false);
-  let prepared: Awaited<ReturnType<typeof prepareAnalysis>>;
+  const release = await acquireLocalSessionSlot(videoId);
   try {
-    prepared = await prepareAnalysis(cues, started.analysis);
+    const started = await begin(videoId, false);
+    let prepared: Awaited<ReturnType<typeof prepareAnalysis>>;
+    try {
+      prepared = await prepareAnalysis(cues, started.analysis);
+    } catch (error) {
+      await endIgnoringFailure(videoId, started.lease);
+      throw error;
+    }
+
+    if (prepared.reason === "fingerprint-mismatch") {
+      await end(videoId, started.lease);
+      return beginPreparedSession(videoId, cues, await begin(videoId, true), release);
+    }
+
+    return createPreparedSession(videoId, cues, started, prepared, release);
   } catch (error) {
-    await endIgnoringFailure(videoId, started.lease);
+    release();
     throw error;
   }
-
-  if (prepared.reason === "fingerprint-mismatch") {
-    await end(videoId, started.lease);
-    return beginPreparedSession(videoId, cues, await begin(videoId, true));
-  }
-
-  return createPreparedSession(videoId, cues, started, prepared);
 }
 
 export async function resetAnalysisSession(
   videoId: string,
   cues: readonly SrtCue[],
 ): Promise<PersistedAnalysisSession> {
-  return beginPreparedSession(videoId, cues, await begin(videoId, true));
+  const release = await acquireLocalSessionSlot(videoId);
+  try {
+    return await beginPreparedSession(videoId, cues, await begin(videoId, true), release);
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 
 async function beginPreparedSession(
   videoId: string,
   cues: readonly SrtCue[],
   started: AnalysisSessionStart,
+  release: () => void,
 ): Promise<PersistedAnalysisSession> {
   let prepared: Awaited<ReturnType<typeof prepareAnalysis>>;
   try {
@@ -83,7 +103,7 @@ async function beginPreparedSession(
     await end(videoId, started.lease);
     throw new Error(`reset analysis session retained a mismatched snapshot for ${videoId}`);
   }
-  return createPreparedSession(videoId, cues, started, prepared);
+  return createPreparedSession(videoId, cues, started, prepared, release);
 }
 
 async function createPreparedSession(
@@ -91,8 +111,9 @@ async function createPreparedSession(
   cues: readonly SrtCue[],
   started: AnalysisSessionStart,
   prepared: Awaited<ReturnType<typeof prepareAnalysis>>,
+  release: () => void,
 ): Promise<PersistedAnalysisSession> {
-  const session = createSession(videoId, started.lease, cues, prepared.analysis);
+  const session = createSession(videoId, started.lease, cues, prepared.analysis, release);
   try {
     if (prepared.needsSave) await session.save(prepared.analysis);
     return session;
@@ -111,6 +132,7 @@ function createSession(
   lease: string,
   cues: readonly SrtCue[],
   initial: CheckpointedAnalysis,
+  release: () => void,
 ): PersistedAnalysisSession {
   let current = initial;
   let stale = false;
@@ -148,7 +170,9 @@ function createSession(
     },
     close() {
       closed = true;
-      closePromise ??= saveTail.then(() => end(videoId, lease));
+      closePromise ??= saveTail
+        .then(() => end(videoId, lease))
+        .finally(release);
       return closePromise;
     },
   };
@@ -184,6 +208,26 @@ async function endIgnoringFailure(videoId: string, lease: string): Promise<void>
   } catch {
     // The original preparation error is more actionable to the caller.
   }
+}
+
+async function acquireLocalSessionSlot(videoId: string): Promise<() => void> {
+  const previous = localSessionSlots.get(videoId)?.released ?? Promise.resolve();
+  let resolveRelease!: () => void;
+  let didRelease = false;
+  const slot: LocalSessionSlot = {
+    released: new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    }),
+    release: () => {
+      if (didRelease) return;
+      didRelease = true;
+      resolveRelease();
+      if (localSessionSlots.get(videoId) === slot) localSessionSlots.delete(videoId);
+    },
+  };
+  localSessionSlots.set(videoId, slot);
+  await previous;
+  return slot.release;
 }
 
 export async function executeAnalysisSession(options: {

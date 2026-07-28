@@ -179,6 +179,90 @@ describe("immutable analysis sessions", () => {
     expect(session.analysis).toBe(before);
   });
 
+  it("resumes from the committed input offset rather than the output subtitle count", async () => {
+    const longCues: SrtCue[] = Array.from({ length: 51 }, (_, index) => ({
+      index: index + 1,
+      time: index,
+      endTime: index + 1,
+      text: `Cue input ${index + 1}`,
+    }));
+    const fingerprint = await fingerprintTranscript(longCues);
+    const initial: CheckpointedAnalysis = {
+      subtitles: Array.from({ length: 47 }, (_, index) => subtitle(`Output ${index + 1}`)),
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: fingerprint,
+        nextCueOffset: 50,
+        phase: "cues",
+        revision: 8,
+      },
+    };
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-resume", analysis: initial };
+      }
+      if (command === "save_analysis_session") {
+        return { status: "applied", revision: null };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const prompts: string[] = [];
+    const provider: Provider = {
+      async *stream(request) {
+        prompts.push(request.userPrompt);
+        if (prompts.length === 1) {
+          yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+        } else {
+          yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
+        }
+      },
+    };
+
+    const session = await openAnalysisSession("exact-resume", longCues);
+    await executeAnalysisSession({
+      session,
+      provider,
+      cues: longCues,
+      style: "colloquial",
+    });
+
+    expect(prompts[0]).toContain("Cue input 51");
+    expect(prompts[0]).not.toContain("Cue input 48");
+    expect(
+      mockInvoke.mock.calls.some(
+        ([command]) => command === "retranscribe_video" || command === "delete_analysis",
+      ),
+    ).toBe(false);
+  });
+
+  it("continues a summary checkpoint without submitting transcript batches again", async () => {
+    const initial = await checkpointed(3, cues.length, "summary");
+    initial.subtitles = [subtitle("First"), subtitle("Second")];
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-summary", analysis: initial };
+      }
+      if (command === "save_analysis_session") {
+        return { status: "applied", revision: 4 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const prompts: string[] = [];
+    const provider: Provider = {
+      async *stream(request) {
+        prompts.push(request.userPrompt);
+        yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
+      },
+    };
+
+    const session = await openAnalysisSession("summary-only", cues);
+    await executeAnalysisSession({ session, provider, cues, style: "colloquial" });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Now produce ONE single JSON line");
+  });
+
   it("closes a lease idempotently", async () => {
     const initial = await checkpointed();
     mockInvoke.mockImplementation(async (command) => {
@@ -215,5 +299,40 @@ describe("immutable analysis sessions", () => {
       videoId: "failed-open",
       lease: "lease-failed-open",
     });
+  });
+
+  it("serializes same-video opens until the current local producer closes", async () => {
+    const initial = await checkpointed();
+    let active = false;
+    let beginCount = 0;
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        beginCount += 1;
+        if (active) throw new Error("backend session already active");
+        active = true;
+        return { lease: `lease-${beginCount}`, analysis: initial };
+      }
+      if (command === "end_analysis_session") {
+        active = false;
+        return undefined;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const first = await openAnalysisSession("strict-mode", cues);
+    let secondResolved = false;
+    const secondPromise = openAnalysisSession("strict-mode", cues).then((session) => {
+      secondResolved = true;
+      return session;
+    });
+    await Promise.resolve();
+
+    expect(beginCount).toBe(1);
+    expect(secondResolved).toBe(false);
+
+    await first.close();
+    const second = await secondPromise;
+    expect(beginCount).toBe(2);
+    await second.close();
   });
 });

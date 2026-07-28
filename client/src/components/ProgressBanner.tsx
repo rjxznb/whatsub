@@ -33,8 +33,15 @@ export function ProgressBanner({
   onRetranscribe,
   onMoveToBackground,
 }: Props) {
-  const { phase, progressPercent, errorMessage, errorUpsell, subtitles } =
-    useAnalysis();
+  const {
+    phase,
+    progressPercent,
+    errorMessage,
+    errorUpsell,
+    errorStage,
+    retryMessage,
+    subtitles,
+  } = useAnalysis();
   if (phase === "idle" || phase === "complete") return null;
 
   const isError = phase === "error";
@@ -55,6 +62,7 @@ export function ProgressBanner({
       <div className="flex-1 font-medium">
         {PHASE_LABELS[phase] ?? phase}
         {(isAnalyzing || isPaused) && ` · 已生成 ${subtitles.length} 行字幕`}
+        {retryMessage && ` · ${retryMessage}`}
         {errorMessage && ` — ${errorMessage}`}
       </div>
 
@@ -83,6 +91,14 @@ export function ProgressBanner({
           继续解析
         </button>
       )}
+      {isError && errorStage === "analysis" && onContinue && (
+        <button
+          onClick={onContinue}
+          className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white text-xs transition-colors"
+        >
+          继续解析
+        </button>
+      )}
       {isError && errorUpsell && (
         <button
           onClick={() => void openUrl(SUBSCRIBE_URL).catch(() => {})}
@@ -91,12 +107,12 @@ export function ProgressBanner({
           升级 Pro
         </button>
       )}
-      {isError && onRetranscribe && (
+      {isError && errorStage === "transcription" && onRetranscribe && (
         <button
           onClick={onRetranscribe}
           className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white text-xs transition-colors"
         >
-          重新解析
+          重新转录
         </button>
       )}
 

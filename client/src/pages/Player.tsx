@@ -24,11 +24,13 @@ import { KeyPhraseList } from "../components/KeyPhraseList";
 import { ProgressBanner } from "../components/ProgressBanner";
 import { TinyModelHint } from "../components/TinyModelHint";
 import { parseSrt } from "../llm/parseSrt";
-import { runAnalysis } from "../llm/analyze";
-import { deleteAnalysisForReset, saveAnalysis } from "../llm/analysisPersistence";
+import {
+  executeAnalysisSession,
+  openAnalysisSession,
+  type PersistedAnalysisSession,
+} from "../llm/analysisSession";
 import { getProvider } from "../llm/providers";
 import { RelayError } from "../llm/providers/relayErrors";
-import { dedupSubtitles } from "../store/analysis";
 import {
   runInBackground,
   takeOverBackground,
@@ -36,7 +38,7 @@ import {
 } from "../store/backgroundAnalyses";
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
-import type { AnalysisResult, Subtitle, SrtCue } from "../llm/types";
+import type { AnalysisResult, SrtCue } from "../llm/types";
 import { useTutorRuntime } from "../store/tutorRuntime";
 import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
@@ -219,135 +221,119 @@ export function Player() {
     }
   }, [videoSrc, seekTarget]);
 
-  // Throttled partial-save: every appended cue calls schedulePartialSave;
-  // if another cue arrives within 800 ms the timer resets. Net effect:
-  // ~1 disk write per second of streaming. flushPartialSave is also invoked
-  // by onStop and on unmount to force an immediate final save.
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // AbortController for the in-flight LLM run. onStop calls .abort() — the
-  // fetch unblocks and runAnalysis returns; the catch path checks
-  // signal.aborted to distinguish user-stop from genuine errors.
+  // The active producer owns one immutable backend lease. Each DeepSeek batch
+  // is persisted before it is published to Zustand/the UI.
+  const sessionRef = useRef<PersistedAnalysisSession | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // Parsed SRT cues, cached so 继续 doesn't re-load the transcript.
   const cuesRef = useRef<SrtCue[] | null>(null);
+  const manualSaveTailRef = useRef<Promise<void>>(Promise.resolve());
 
-  const flushPartialSave = () => {
-    if (!videoId) return;
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    const state = useAnalysis.getState();
-    if (state.videoId !== videoId || state.subtitles.length === 0) return;
-    const partial: AnalysisResult = {
-      subtitles: dedupSubtitles(state.subtitles),
-      keyPhrases: state.summary?.keyPhrases ?? [],
-    };
-    saveAnalysis(videoId, partial).catch((e) =>
-      console.error("partial save failed", e)
-    );
+  const persistManualEdits = () => {
+    manualSaveTailRef.current = manualSaveTailRef.current.then(async () => {
+      const session = sessionRef.current;
+      const cues = cuesRef.current;
+      if (!session || !cues) return;
+      const state = useAnalysis.getState();
+      const saved = await session.save({
+        subtitles: state.subtitles,
+        keyPhrases: state.summary?.keyPhrases ?? [],
+        checkpoint: {
+          ...session.analysis.checkpoint,
+          revision: session.analysis.checkpoint.revision + 1,
+        },
+      });
+      analysis.setCommittedAnalysis(saved, cues.length);
+    }).catch((error) => {
+      analysis.setError(
+        error instanceof Error ? error.message : String(error),
+        false,
+        "analysis",
+      );
+    });
   };
 
-  const schedulePartialSave = () => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(flushPartialSave, 800);
-  };
-
-  const startAnalysisFrom = async (startIdx: number) => {
+  const startAnalysis = async () => {
     if (!videoId) return;
     const cues = cuesRef.current;
-    if (!cues) return;
-    const remaining = cues.slice(startIdx);
-    if (remaining.length === 0) {
+    const session = sessionRef.current;
+    if (!cues || !session) return;
+    if (session.analysis.checkpoint.phase === "complete") {
       analysis.setPhase("complete");
       return;
     }
-    abortRef.current = new AbortController();
-    const localController = abortRef.current;
-    analysis.setPhase("analyzing");
+
+    const localController = new AbortController();
+    abortRef.current = localController;
+    analysis.setRetryMessage(null);
+    analysis.setPhase(
+      "analyzing",
+      cues.length > 0
+        ? (session.analysis.checkpoint.nextCueOffset / cues.length) * 100
+        : 100,
+    );
     const provider = getProvider(settings);
-    // Snapshot whatever's already in the store (cached cues from a prior
-    // session, after the partial-cache branch in the mount effect seeded
-    // them). The summary phase needs to see all analyzed cues, not just this
-    // run's slice, so keyPhrases reflect the FULL transcript.
-    const previouslyAnalyzed = useAnalysis.getState().subtitles.slice();
-    // Style: per-entry choice (set in ImportModal at import); legacy entries
-    // without a stored choice fall back to "colloquial".
     const entry = library.videos.find((v) => v.id === videoId);
     const style = entry?.analysisStyle ?? "colloquial";
     try {
-      await runAnalysis({
+      const completed = await executeAnalysisSession({
+        session,
         provider,
-        cues: remaining,
-        previouslyAnalyzed,
+        cues,
         style,
         signal: localController.signal,
-        onCue: (c: Subtitle) => {
-          if (localController.signal.aborted) return;
-          analysis.appendSubtitle(c);
-          schedulePartialSave();
+        onCommitted: (persisted) => {
+          analysis.setCommittedAnalysis(persisted, cues.length);
         },
-        onSummary: (s) => {
-          if (localController.signal.aborted) return;
-          analysis.setSummary(s);
-          schedulePartialSave();
+        onRetry: ({ nextAttempt, maxAttempts }) => {
+          analysis.setRetryMessage(
+            `网络波动，正在进行第 ${nextAttempt}/${maxAttempts} 次尝试…`,
+          );
         },
       });
-      if (localController.signal.aborted) return;
-      const summary = useAnalysis.getState().summary;
-      if (summary) {
-        const finalAnalysis: AnalysisResult = {
-          ...summary,
-          subtitles: dedupSubtitles(useAnalysis.getState().subtitles),
-        };
-        if (saveTimerRef.current) {
-          clearTimeout(saveTimerRef.current);
-          saveTimerRef.current = null;
-        }
-        await saveAnalysis(videoId, finalAnalysis);
+      analysis.setRetryMessage(null);
+      if (localController.signal.aborted || completed.checkpoint.phase !== "complete") {
+        analysis.setPhase("paused");
+        return;
+      }
+      if (completed.checkpoint.phase === "complete") {
         await invoke("library_set_status", {
           id: videoId,
           status: "ready",
           error: null,
         });
+        analysis.setPhase("complete", 100);
+        await reload();
       }
-      analysis.setPhase("complete");
-      await reload();
     } catch (e: unknown) {
-      // User-initiated stop: phase is already "paused" (set by onStop),
-      // abort propagated as AbortError or fetch threw. Persist what we have.
       const isAbort =
         localController.signal.aborted ||
         (e instanceof DOMException && e.name === "AbortError") ||
         (typeof e === "object" && e !== null && (e as { name?: string }).name === "AbortError");
       if (isAbort) {
-        flushPartialSave();
+        analysis.setPhase("paused");
         return;
       }
-      // Prefer e.message: a relay quota wall throws a RelayError whose message
-      // is already user-friendly ("额度已用完→升级 Pro"); String(e) would
-      // prefix it with "RelayError:". `upsell` drives the 升级 Pro CTA.
       const msg = e instanceof Error ? e.message : String(e);
       const upsell = e instanceof RelayError && e.upsell;
-      analysis.setError(msg, upsell);
+      analysis.setError(msg, upsell, "analysis");
       await invoke("library_set_status", {
         id: videoId,
         status: "failed",
         error: msg,
       });
       await reload();
+    } finally {
+      if (abortRef.current === localController) abortRef.current = null;
     }
   };
 
   const onStop = () => {
     abortRef.current?.abort();
     analysis.setPhase("paused");
-    flushPartialSave();
   };
 
   const onContinue = () => {
-    const startIdx = useAnalysis.getState().subtitles.length;
-    void startAnalysisFrom(startIdx);
+    void startAnalysis();
   };
 
   /**
@@ -381,10 +367,6 @@ export function Player() {
     // Stop the foreground run (its writes would race with BG's). The
     // BG store now owns the analysis state.
     abortRef.current?.abort();
-    // Flush any pending partial save so the snapshot we just handed to
-    // BG matches what's on disk — BG resumes from previouslyAnalyzed,
-    // so the on-disk state is mostly cosmetic until BG's next save.
-    flushPartialSave();
     // Clear useAnalysis so:
     //  (1) the unmount cleanup below doesn't transition phase to
     //      "paused" (would otherwise make Library card show "继续解析"
@@ -410,21 +392,18 @@ export function Player() {
     analysis.startFor(videoId);
     analysis.setPhase("extracting", 0);
     try {
+      const oldSession = sessionRef.current;
+      sessionRef.current = null;
+      await oldSession?.close();
       await invoke("retranscribe_video", {
         videoId,
         whisperModel: settings.whisperModel,
       });
-      // Clear the stale analysis so the reload re-runs the LLM from scratch
-      // against the NEW transcript. Otherwise the load effect finds a complete
-      // cached analysis (with a summary) and short-circuits to it — leaving the
-      // OLD translation pinned to the new SRT's timestamps. This is what makes
-      // re-analyze actually overwrite analysis.json.
-      await deleteAnalysisForReset(videoId);
-      // SRT is now on disk + cache cleared. Re-run the loader to parse it +
-      // kick off a fresh LLM analysis.
+      // The next loader compares transcript fingerprints and asks the backend
+      // for an explicit reset lease when the new transcript differs.
       setReloadKey((k) => k + 1);
     } catch (e) {
-      analysis.setError(String(e));
+      analysis.setError(String(e), false, "transcription");
     }
   };
 
@@ -481,149 +460,89 @@ export function Player() {
       cuesRef.current = null;
     }
 
-    // If this video has a background analysis in flight (user clicked
-    // 「在后台解析」 then navigated back), reclaim it: BG returns the
-    // accumulated subtitles/summary, BG controller is cancelled, BG
-    // store entry removed. The mount flow below then continues in
-    // foreground from where BG left off.
-    const reclaimed = takeOverBackground(videoId);
+    // Stop any detached producer before opening the foreground session. Task 6
+    // transfers the same lease; until then the committed disk checkpoint is
+    // the only authoritative takeover boundary.
+    takeOverBackground(videoId);
 
     (async () => {
-      // If we reclaimed a BG run, its accumulated state is fresher than
-      // anything on disk (BG persists every 800ms but the most recent
-      // cues might not have made it before we navigated back). Use that
-      // directly; the cache path below is for the cold-start case.
-      if (reclaimed && reclaimed.subtitles.length > 0) {
-        const srt = await invoke<string | null>("load_transcript", { videoId });
-        if (cancelled) return;
-        if (!srt) {
-          analysis.setError("找不到 transcript.srt — 请重新解析");
-          return;
-        }
-        const cues = parseSrt(srt);
-        cuesRef.current = cues;
-        analysis.startFor(videoId);
-        analysis.setSubtitles(reclaimed.subtitles);
-        if (reclaimed.summary) analysis.setSummary(reclaimed.summary);
-
-        const uniqueCueCount = new Set(
-          cues.map((c) => `${c.time}|${c.endTime}|${c.text}`)
-        ).size;
-        const hasSummary =
-          !!reclaimed.summary?.keyPhrases && reclaimed.summary.keyPhrases.length > 0;
-        if (reclaimed.subtitles.length >= uniqueCueCount || hasSummary) {
-          analysis.setPhase("complete");
-        } else {
-          // Resume the foreground run from where BG left off.
-          void startAnalysisFrom(reclaimed.subtitles.length);
-        }
-        return;
-      }
-
-      const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
-      if (cancelled) return;
-
       const srt = await invoke<string | null>("load_transcript", { videoId });
       if (cancelled) return;
       if (!srt) {
+        const cached = await invoke<AnalysisResult | null>("load_analysis", { videoId });
+        if (cancelled) return;
         if (cached) {
           analysis.startFor(videoId);
-          analysis.setSubtitles(dedupSubtitles(cached.subtitles));
+          analysis.setSubtitles(cached.subtitles);
           const { subtitles: _drop, ...summary } = cached;
           analysis.setSummary(summary);
           analysis.setPhase("complete");
         } else {
-          analysis.setError("找不到 transcript.srt — 请重新解析");
+          analysis.setError(
+            "找不到 transcript.srt — 请重新转录",
+            false,
+            "transcription",
+          );
         }
         return;
       }
+
       const cues = parseSrt(srt);
       cuesRef.current = cues;
-      const cleanedCachedCues = cached ? dedupSubtitles(cached.subtitles) : [];
-
-      // Compare deduped-cached against DEDUPED cues. Whisper-transcribed
-      // SRTs occasionally contain cues that share (time, endTime, text)
-      // — typically back-to-back silence pads or repeated tokens like
-      // "..." / "[Music]". appendSubtitle dedupes those during the
-      // streaming analysis, so a fully-completed run is saved as
-      // `cleanedCachedCues.length === uniqueCueCount`, which is
-      // STRICTLY LESS than `cues.length` raw. Dedupe both sides with
-      // the same key formula so the counts line up.
-      const cueKey = (c: { time: number; endTime: number; text: string }) =>
-        `${c.time}|${c.endTime}|${c.text}`;
-      const uniqueCueCount = new Set(cues.map(cueKey)).size;
-
-      // Second completeness signal: the global summary (`keyPhrases`)
-      // is only generated in phase 2 of the analysis, AFTER every cue
-      // has been processed in phase 1. If the cache has a non-empty
-      // keyPhrases array, phase 2 definitely fired → analysis was
-      // complete, even if some cues didn't produce a Subtitle (LLM
-      // routinely skips empty / `[Music]` / pure-punctuation cues,
-      // which leaves cleanedCachedCues.length strictly less than
-      // uniqueCueCount despite the run being done). Without this
-      // fallback those analyses get stuck showing "继续解析" forever
-      // even on repeated re-clicks (each retry produces the same set
-      // of skipped cues, so the count never reaches uniqueCueCount).
-      const hasSummary =
-        !!cached?.keyPhrases && cached.keyPhrases.length > 0;
-
-      // ── Complete: every cue has a subtitle OR the summary exists. ──
-      if (
-        cached &&
-        (cleanedCachedCues.length >= uniqueCueCount || hasSummary)
-      ) {
-        analysis.startFor(videoId);
-        analysis.setSubtitles(cleanedCachedCues);
-        const { subtitles: _drop, ...summary } = cached;
-        analysis.setSummary(summary);
-        analysis.setPhase("complete");
-        if (cleanedCachedCues.length !== cached.subtitles.length) {
-          await saveAnalysis(videoId, { ...cached, subtitles: cleanedCachedCues });
-        }
-        // Self-heal: a COMPLETE analysis is on disk but the library entry is
-        // still "analyzing"/"failed" — happens when a foreground re-analyze
-        // was interrupted by navigation right before it flipped the status.
-        // Repair it so the card stops showing "未完成".
-        {
-          const cur = useLibrary
-            .getState()
-            .library.videos.find((v) => v.id === videoId);
-          if (cur && cur.status !== "ready") {
-            await invoke("library_set_status", {
-              id: videoId,
-              status: "ready",
-              error: null,
-            });
-            await useLibrary.getState().reload();
-          }
+      let session: PersistedAnalysisSession;
+      try {
+        session = await openAnalysisSession(videoId, cues);
+      } catch (error) {
+        if (!cancelled) {
+          analysis.setError(
+            error instanceof Error ? error.message : String(error),
+            false,
+            "analysis",
+          );
         }
         return;
       }
-
-      // ── Partial: cached has some cues but not all. Show as paused;
-      //    user clicks 继续 to resume.
-      if (cleanedCachedCues.length > 0) {
-        analysis.startFor(videoId);
-        analysis.setSubtitles(cleanedCachedCues);
-        if (cached?.keyPhrases) {
-          analysis.setSummary({ keyPhrases: cached.keyPhrases });
-        }
-        analysis.setPhase("paused");
+      if (cancelled) {
+        await session.close().catch(() => {});
         return;
       }
 
-      // ── Fresh start: no cache, kick off from cue 0. ──
+      sessionRef.current = session;
       analysis.startFor(videoId);
-      if (cancelled) return;
-      void startAnalysisFrom(0);
+      analysis.setCommittedAnalysis(session.analysis, cues.length);
+
+      if (session.analysis.checkpoint.phase === "complete") {
+        analysis.setPhase("complete", 100);
+        const cur = useLibrary
+          .getState()
+          .library.videos.find((video) => video.id === videoId);
+        if (cur && cur.status !== "ready") {
+          await invoke("library_set_status", {
+            id: videoId,
+            status: "ready",
+            error: null,
+          });
+          await useLibrary.getState().reload();
+        }
+        return;
+      }
+
+      const checkpoint = session.analysis.checkpoint;
+      if (checkpoint.nextCueOffset > 0 || checkpoint.phase === "summary") {
+        analysis.setPhase("paused");
+      } else {
+        void startAnalysis();
+      }
     })();
 
     return () => {
       cancelled = true;
-      // Cancel any in-flight LLM stream (kills the HTTP fetch) and force-save
-      // whatever cues have accumulated so the next session can resume.
+      // Abort the current uncommitted batch, then release this producer lease.
       abortRef.current?.abort();
-      flushPartialSave();
+      abortRef.current = null;
+      const session = sessionRef.current;
+      sessionRef.current = null;
+      void session?.close().catch(() => {});
       // If we're leaving mid-run, transition the store to "paused" so the
       // Library card stops claiming the video is actively analyzing —
       // nothing's running anymore, the user just paused by navigating
@@ -1065,7 +984,7 @@ export function Player() {
                 onJump={jump}
                 autoScroll={autoScrollSubtitle}
                 editing={editingSubtitle}
-                onChanged={schedulePartialSave}
+                onChanged={persistManualEdits}
                 vocabMap={vocabMapForVideo}
                 videoId={videoId ?? ""}
                 videoTitle={entry?.title ?? videoId ?? ""}

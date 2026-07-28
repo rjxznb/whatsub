@@ -37,17 +37,18 @@ export function FailedActions({
 }) {
   const [loginOpen, setLoginOpen] = useState(false);
   const fe = friendlyError(error, "downloading", sourceValue);
+  const requiredLoginAction = fe.loginRequired ? fe.action : undefined;
   return (
     <span className="ml-auto flex items-center gap-2">
       <span className="text-amber-400 truncate max-w-[160px]" title={error}>
         {fe.title}
       </span>
-      {fe.action && (
+      {requiredLoginAction && (
         <button
           className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px]"
           onClick={() => setLoginOpen(true)}
         >
-          立即登录{fe.action.siteLabel}
+          立即登录{requiredLoginAction.siteLabel}
         </button>
       )}
       {!fe.loginRequired && (
@@ -58,10 +59,10 @@ export function FailedActions({
           重试
         </button>
       )}
-      {fe.action && (
+      {loginOpen && requiredLoginAction && (
         <SiteLoginModal
           open={loginOpen}
-          action={fe.action}
+          action={requiredLoginAction}
           onClose={() => setLoginOpen(false)}
           onSuccess={onRetry}
         />

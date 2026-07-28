@@ -45,4 +45,20 @@ describe("FailedActions", () => {
     expect(screen.queryByRole("button", { name: /立即登录/ })).toBeNull();
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
   });
+  it.each([
+    ["ERROR: Unable to download webpage: connection timed out", "无法访问视频网站"],
+    ["ERROR: This video is private", "视频不可用"],
+    ["ERROR: Requested format is not available", "无法解析视频格式"],
+  ])("does not offer login for %s", (error, title) => {
+    render(
+      <FailedActions
+        error={error}
+        sourceValue="https://www.youtube.com/watch?v=x"
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /登录/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+  });
 });

@@ -405,11 +405,12 @@ describe("runAnalysis", () => {
     expect(provider.requests).toHaveLength(5);
   });
 
-  it("invokes every legacy cue callback once when one callback throws", async () => {
+  it("rejects a final legacy onCue failure distinctly without retry or summary masking", async () => {
     const provider = scriptedProvider([
       { chunks: [cueLine(0), cueLine(1), cueLine(2)] },
       { chunks: [summaryLine] },
     ]);
+    const callbackFailure = new Error("consumer cue callback failed");
     const callbackIndexes: number[] = [];
 
     await expect(runAnalysis({
@@ -418,12 +419,39 @@ describe("runAnalysis", () => {
       onCue: (cue) => {
         const index = Number(cue.text.slice("source-".length));
         callbackIndexes.push(index);
-        if (index === 1) throw new Error("consumer callback failed");
+        if (index === 2) throw callbackFailure;
       },
       onSummary: () => {},
-    })).resolves.toBeUndefined();
+    })).rejects.toMatchObject({
+      name: "LegacyCallbackError",
+      callback: "onCue",
+      cause: callbackFailure,
+    });
 
     expect(callbackIndexes).toEqual([0, 1, 2]);
+    expect(provider.requests).toHaveLength(1);
+  });
+
+  it("rejects a legacy onSummary failure distinctly", async () => {
+    const provider = scriptedProvider([
+      { chunks: [cueLine(0)] },
+      { chunks: [summaryLine] },
+    ]);
+    const callbackFailure = new Error("consumer summary callback failed");
+    const cueOutput: string[] = [];
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(1),
+      onCue: (cue) => { cueOutput.push(cue.text); },
+      onSummary: () => { throw callbackFailure; },
+    })).rejects.toMatchObject({
+      name: "LegacyCallbackError",
+      callback: "onSummary",
+      cause: callbackFailure,
+    });
+
+    expect(cueOutput).toEqual(["source-0"]);
     expect(provider.requests).toHaveLength(2);
   });
 
@@ -476,7 +504,11 @@ describe("runAnalysis", () => {
       signal: controller.signal,
       onCue: () => { throw abortError; },
       onSummary: () => {},
-    })).rejects.toBe(abortError);
+    })).rejects.toMatchObject({
+      name: "LegacyCallbackError",
+      callback: "onCue",
+      cause: abortError,
+    });
 
     expect(controller.signal.aborted).toBe(false);
   });

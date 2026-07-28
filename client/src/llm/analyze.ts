@@ -60,6 +60,18 @@ interface LegacyRunAnalysisOptions {
   signal?: AbortSignal;
 }
 
+type LegacyCallbackName = "onCue" | "onSummary";
+
+class LegacyCallbackError extends Error {
+  readonly cause: unknown;
+
+  constructor(readonly callback: LegacyCallbackName, cause: unknown) {
+    super(`Legacy ${callback} callback failed`);
+    this.name = "LegacyCallbackError";
+    this.cause = cause;
+  }
+}
+
 const DEEPSEEK_ANALYSIS_RETRY_POLICY: RetryPolicy = {
   maxAttempts: 4,
   backoffMs: [500, 1500, 3500],
@@ -99,28 +111,28 @@ export async function runAnalysis(
         legacyPhase = commit.checkpoint.phase;
         if (commit.kind === "cues") {
           for (const cue of commit.subtitles) {
-            invokeLegacyCallback(() => opts.onCue(cue), opts.signal);
+            invokeLegacyCallback("onCue", () => opts.onCue(cue));
           }
         } else {
           invokeLegacyCallback(
+            "onSummary",
             () => opts.onSummary({ keyPhrases: commit.keyPhrases }),
-            opts.signal,
           );
         }
       },
     });
   } catch (error) {
+    if (error instanceof LegacyCallbackError) throw error;
     if (legacyPhase === "summary" && !isAbortError(error)) return;
     throw error;
   }
 }
 
-function invokeLegacyCallback(callback: () => void, signal?: AbortSignal): void {
+function invokeLegacyCallback(name: LegacyCallbackName, callback: () => void): void {
   try {
     callback();
-  } catch (error) {
-    if (isAbortError(error) && !signal?.aborted) throw error;
-    // Legacy streaming callbacks were contained by JsonLineParser.
+  } catch (cause) {
+    throw new LegacyCallbackError(name, cause);
   }
 }
 

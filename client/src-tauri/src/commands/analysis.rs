@@ -22,27 +22,62 @@ pub struct SaveAnalysisOutcome {
 }
 
 #[tauri::command]
-pub async fn save_analysis(video_id: String, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
+pub async fn save_analysis(
+    video_id: String,
+    analysis: Value,
+    reset_generation: Option<bool>,
+) -> AppResult<SaveAnalysisOutcome> {
     let path = paths::video_dir(&video_id)?.join("analysis.json");
-    save_analysis_path(&path, analysis).await
+    save_analysis_path_for_generation(&path, analysis, reset_generation.unwrap_or(false)).await
 }
 
+#[cfg(test)]
 async fn save_analysis_path(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
+    save_analysis_path_for_generation(path, analysis, false).await
+}
+
+async fn save_analysis_path_for_generation(
+    path: &Path,
+    analysis: Value,
+    reset_generation: bool,
+) -> AppResult<SaveAnalysisOutcome> {
     let _guard = ANALYSIS_SAVE_GATE.lock().await;
-    save_analysis_value(path, analysis)
+    save_analysis_value_for_generation(path, analysis, reset_generation)
 }
 
-fn analysis_revision(analysis: &Value) -> Option<u64> {
-    analysis
-        .get("checkpoint")
-        .and_then(|checkpoint| checkpoint.get("revision"))
-        .and_then(Value::as_u64)
+#[derive(Clone, Copy)]
+struct AnalysisVersion<'a> {
+    fingerprint: &'a str,
+    revision: u64,
 }
 
+fn analysis_version(analysis: &Value) -> Option<AnalysisVersion<'_>> {
+    let checkpoint = analysis.get("checkpoint")?;
+    Some(AnalysisVersion {
+        fingerprint: checkpoint.get("transcriptFingerprint")?.as_str()?,
+        revision: checkpoint.get("revision")?.as_u64()?,
+    })
+}
+
+#[cfg(test)]
 fn save_analysis_value(path: &Path, analysis: Value) -> AppResult<SaveAnalysisOutcome> {
-    save_analysis_value_with_replacer(path, analysis, replace_analysis_file)
+    save_analysis_value_for_generation(path, analysis, false)
 }
 
+fn save_analysis_value_for_generation(
+    path: &Path,
+    analysis: Value,
+    reset_generation: bool,
+) -> AppResult<SaveAnalysisOutcome> {
+    save_analysis_value_for_generation_with_replacer(
+        path,
+        analysis,
+        reset_generation,
+        replace_analysis_file,
+    )
+}
+
+#[cfg(test)]
 fn save_analysis_value_with_replacer<F>(
     path: &Path,
     analysis: Value,
@@ -51,19 +86,43 @@ fn save_analysis_value_with_replacer<F>(
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
 {
-    let incoming_revision = analysis_revision(&analysis);
-    let current_revision = if path.exists() {
+    save_analysis_value_for_generation_with_replacer(path, analysis, false, replacer)
+}
+
+fn save_analysis_value_for_generation_with_replacer<F>(
+    path: &Path,
+    analysis: Value,
+    reset_generation: bool,
+    replacer: F,
+) -> AppResult<SaveAnalysisOutcome>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    let temporary = path.with_extension("json.tmp");
+    let backup = path.with_extension("json.bak");
+    recover_interrupted_replacement(path, &temporary, &backup)?;
+
+    let incoming_version = analysis_version(&analysis);
+    let current_analysis = if path.exists() {
         let current: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
-        Some(analysis_revision(&current))
+        Some(current)
     } else {
         None
     };
+    let current_version = current_analysis.as_ref().and_then(analysis_version);
 
-    if let Some(Some(revision)) = current_revision {
-        if incoming_revision.is_none_or(|incoming| incoming <= revision) {
+    if let Some(current) = current_version {
+        let applies = match incoming_version {
+            Some(incoming) if incoming.fingerprint == current.fingerprint => {
+                incoming.revision > current.revision
+            }
+            Some(incoming) => reset_generation && incoming.revision == 0,
+            None => false,
+        };
+        if !applies {
             return Ok(SaveAnalysisOutcome {
                 applied: false,
-                revision: Some(revision),
+                revision: Some(current.revision),
             });
         }
     }
@@ -72,7 +131,6 @@ where
         fs::create_dir_all(parent)?;
     }
 
-    let temporary = path.with_extension("json.tmp");
     let write_result = (|| -> AppResult<()> {
         let mut file = OpenOptions::new()
             .create(true)
@@ -92,21 +150,71 @@ where
     }
 
     if let Err(error) = replacer(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
+        recover_failed_replacement(path, &temporary, &backup)?;
         return Err(error.into());
     }
+    let _ = fs::remove_file(&backup);
 
     Ok(SaveAnalysisOutcome {
         applied: true,
-        revision: incoming_revision,
+        revision: incoming_version.map(|version| version.revision),
     })
+}
+
+fn recover_interrupted_replacement(
+    destination: &Path,
+    temporary: &Path,
+    backup: &Path,
+) -> std::io::Result<()> {
+    if destination.exists() {
+        if backup.exists() {
+            fs::remove_file(backup)?;
+        }
+        if temporary.exists() {
+            fs::remove_file(temporary)?;
+        }
+    } else if backup.exists() {
+        fs::rename(backup, destination)?;
+        if temporary.exists() {
+            fs::remove_file(temporary)?;
+        }
+    } else if temporary.exists() {
+        let bytes = fs::read(temporary)?;
+        if serde_json::from_slice::<Value>(&bytes).is_ok() {
+            fs::rename(temporary, destination)?;
+        } else {
+            fs::remove_file(temporary)?;
+        }
+    }
+    Ok(())
+}
+
+fn recover_failed_replacement(
+    destination: &Path,
+    temporary: &Path,
+    backup: &Path,
+) -> std::io::Result<()> {
+    if destination.exists() {
+        if temporary.exists() {
+            fs::remove_file(temporary)?;
+        }
+        if backup.exists() {
+            fs::remove_file(backup)?;
+        }
+    } else if backup.exists() {
+        fs::rename(backup, destination)?;
+        if temporary.exists() {
+            fs::remove_file(temporary)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
 fn replace_analysis_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
-    use windows_sys::Win32::Storage::FileSystem::{ReplaceFileW, REPLACEFILE_WRITE_THROUGH};
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
 
     if !destination.exists() {
         return fs::rename(temporary, destination);
@@ -122,13 +230,19 @@ fn replace_analysis_file(temporary: &Path, destination: &Path) -> std::io::Resul
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
+    let backup = destination.with_extension("json.bak");
+    let backup_wide: Vec<u16> = backup
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let replaced = unsafe {
         ReplaceFileW(
             destination_wide.as_ptr(),
             temporary_wide.as_ptr(),
-            ptr::null(),
-            REPLACEFILE_WRITE_THROUGH,
+            backup_wide.as_ptr(),
+            0,
             ptr::null(),
             ptr::null(),
         )
@@ -160,10 +274,23 @@ pub fn load_analysis(video_id: String) -> AppResult<Option<Value>> {
 /// short-circuiting to the (now stale) cached analysis. Best-effort:
 /// a missing file is success.
 #[tauri::command]
-pub fn delete_analysis(video_id: String) -> AppResult<()> {
+pub async fn delete_analysis(video_id: String) -> AppResult<()> {
     let path = paths::video_dir(&video_id)?.join("analysis.json");
-    if path.exists() {
-        fs::remove_file(&path)?;
+    delete_analysis_path(&path).await
+}
+
+async fn delete_analysis_path(path: &Path) -> AppResult<()> {
+    let _guard = ANALYSIS_SAVE_GATE.lock().await;
+    for candidate in [
+        path.to_path_buf(),
+        path.with_extension("json.tmp"),
+        path.with_extension("json.bak"),
+    ] {
+        match fs::remove_file(candidate) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
 }
@@ -522,10 +649,15 @@ mod tests {
     }
 
     fn checkpointed(revision: u64, marker: &str) -> Value {
+        checkpointed_generation("sha256:current", revision, marker)
+    }
+
+    fn checkpointed_generation(fingerprint: &str, revision: u64, marker: &str) -> Value {
         json!({
             "marker": marker,
             "checkpoint": {
                 "version": 1,
+                "transcriptFingerprint": fingerprint,
                 "revision": revision
             }
         })
@@ -593,6 +725,76 @@ mod tests {
     }
 
     #[test]
+    fn explicit_generation_reset_accepts_revision_zero_for_a_new_fingerprint() {
+        let dir = TestDir::new("generation-reset");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:old", 8, "old-generation"),
+        )
+        .unwrap();
+
+        let outcome = save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:new", 0, "new-generation"),
+            true,
+        )
+        .unwrap();
+
+        assert!(outcome.applied);
+        assert_eq!(outcome.revision, Some(0));
+        assert_eq!(read_analysis(&path)["marker"], "new-generation");
+    }
+
+    #[test]
+    fn late_save_from_reset_generation_cannot_reclaim_analysis() {
+        let dir = TestDir::new("generation-late-save");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:old", 8, "old-generation"),
+        )
+        .unwrap();
+        save_analysis_value_for_generation(
+            &path,
+            checkpointed_generation("sha256:new", 0, "new-generation"),
+            true,
+        )
+        .unwrap();
+
+        let stale = save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:old", 9, "late-old-generation"),
+        )
+        .unwrap();
+
+        assert!(!stale.applied);
+        assert_eq!(stale.revision, Some(0));
+        assert_eq!(read_analysis(&path)["marker"], "new-generation");
+    }
+
+    #[test]
+    fn normal_save_cannot_change_transcript_fingerprint() {
+        let dir = TestDir::new("generation-implicit-reset");
+        let path = dir.analysis_path();
+        save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:old", 8, "old-generation"),
+        )
+        .unwrap();
+
+        let rejected = save_analysis_value(
+            &path,
+            checkpointed_generation("sha256:new", 0, "implicit-reset"),
+        )
+        .unwrap();
+
+        assert!(!rejected.applied);
+        assert_eq!(rejected.revision, Some(8));
+        assert_eq!(read_analysis(&path)["marker"], "old-generation");
+    }
+
+    #[test]
     fn checkpoint_migrates_legacy_analysis() {
         let dir = TestDir::new("migration");
         let path = dir.analysis_path();
@@ -645,6 +847,26 @@ mod tests {
         assert!(!path.with_extension("json.tmp").exists());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_waits_for_the_shared_analysis_mutation_gate() {
+        let dir = TestDir::new("delete-gate");
+        let path = dir.analysis_path();
+        save_analysis_value(&path, checkpointed(1, "original")).unwrap();
+        let guard = ANALYSIS_SAVE_GATE.lock().await;
+        let delete_path = path.clone();
+        let delete = tokio::spawn(async move { delete_analysis_path(&delete_path).await });
+
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!delete.is_finished());
+        assert!(path.exists());
+
+        drop(guard);
+        delete.await.unwrap().unwrap();
+        assert!(!path.exists());
+    }
+
     #[test]
     fn replacement_failure_preserves_original_and_removes_temp_file() {
         let dir = TestDir::new("replace-failure");
@@ -661,6 +883,66 @@ mod tests {
         assert_eq!(read_revision(&path), Some(1));
         assert_eq!(read_analysis(&path)["marker"], "original");
         assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn partial_replacement_failure_restores_backup_before_removing_temp() {
+        let dir = TestDir::new("replace-partial-backup");
+        let path = dir.analysis_path();
+        let backup = path.with_extension("json.bak");
+        save_analysis_value(&path, checkpointed(1, "original")).unwrap();
+
+        let result = save_analysis_value_with_replacer(
+            &path,
+            checkpointed(2, "replacement"),
+            |_temporary, destination| {
+                fs::rename(destination, &backup)?;
+                Err(io::Error::other("injected partial replacement failure"))
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(read_revision(&path), Some(1));
+        assert_eq!(read_analysis(&path)["marker"], "original");
+        assert!(!backup.exists());
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn partial_replacement_failure_keeps_temp_when_no_other_copy_survives() {
+        let dir = TestDir::new("replace-partial-temp");
+        let path = dir.analysis_path();
+        let temporary = path.with_extension("json.tmp");
+        save_analysis_value(&path, checkpointed(1, "original")).unwrap();
+
+        let result = save_analysis_value_with_replacer(
+            &path,
+            checkpointed(2, "replacement"),
+            |_temporary, destination| {
+                fs::remove_file(destination)?;
+                Err(io::Error::other("injected loss of destination"))
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(!path.exists());
+        assert_eq!(read_revision(&temporary), Some(2));
+        assert_eq!(read_analysis(&temporary)["marker"], "replacement");
+    }
+
+    #[test]
+    fn interrupted_partial_temp_is_discarded_instead_of_becoming_analysis() {
+        let dir = TestDir::new("replace-partial-write");
+        let path = dir.analysis_path();
+        let temporary = path.with_extension("json.tmp");
+        fs::write(&temporary, br#"{"checkpoint":{"revision":2"#).unwrap();
+
+        let outcome = save_analysis_value(&path, checkpointed(3, "complete")).unwrap();
+
+        assert!(outcome.applied);
+        assert_eq!(read_revision(&path), Some(3));
+        assert_eq!(read_analysis(&path)["marker"], "complete");
+        assert!(!temporary.exists());
     }
 }
 

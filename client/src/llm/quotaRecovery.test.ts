@@ -116,7 +116,7 @@ describe("quota recovery details", () => {
     );
   });
 
-  it("keeps recovery usable when an older relay omits reset metadata", () => {
+  it("keeps recovery actionable but does not retry blindly when reset metadata is missing", () => {
     const details = {
       used: null,
       limit: null,
@@ -125,7 +125,7 @@ describe("quota recovery details", () => {
       totalCues: 0,
     };
 
-    expect(canResumeQuota(details, 0)).toBe(true);
+    expect(canResumeQuota(details, 0)).toBe(false);
     expect(quotaRecoveryMessage(details)).toBe(
       "本月 AI 额度已用完。解析进度尚未开始；切换自己的 API 后可立即继续。",
     );

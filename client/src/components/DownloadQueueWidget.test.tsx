@@ -22,6 +22,10 @@ vi.mock("../hooks/useSiteLogin", () => ({
 import { DownloadQueueWidget, FailedActions } from "./DownloadQueueWidget";
 import { useBgAnalyses } from "../store/backgroundAnalyses";
 import { useDownloadQueue } from "../store/downloadQueue";
+import { SETTINGS_LLM_LINK } from "../llm/quotaRecovery";
+
+const navigate = vi.fn();
+vi.mock("react-router-dom", () => ({ useNavigate: () => navigate }));
 
 describe("FailedActions", () => {
   it("shows a login button for a bot-error on a known site", () => {
@@ -67,6 +71,7 @@ describe("FailedActions", () => {
 
 describe("background analysis rows", () => {
   beforeEach(() => {
+    navigate.mockClear();
     useDownloadQueue.setState({ entries: {} });
     useBgAnalyses.setState({ jobs: {} });
   });
@@ -82,6 +87,7 @@ describe("background analysis rows", () => {
           committedCueOffset: 50,
           totalCues: 100,
           errorMessage: "temporary provider failure",
+          quotaError: null,
           retryMessage: null,
           startedAt: 1,
           subtitles: [],
@@ -95,5 +101,40 @@ describe("background analysis rows", () => {
 
     expect(screen.getByRole("button", { name: "继续解析" })).toBeInTheDocument();
     expect(screen.getByText(/temporary provider failure/)).toBeInTheDocument();
+  });
+
+  it("shows background quota recovery without a premature retry", () => {
+    useBgAnalyses.setState({
+      jobs: {
+        "video-1": {
+          videoId: "video-1",
+          label: "Video",
+          phase: "error",
+          subtitleCount: 47,
+          committedCueOffset: 50,
+          totalCues: 100,
+          errorMessage: "quota exceeded",
+          quotaError: {
+            used: 5_000_000,
+            limit: 5_000_000,
+            periodResetAt: Date.now() + 60_000,
+            committedCueOffset: 50,
+            totalCues: 100,
+          },
+          retryMessage: null,
+          startedAt: 1,
+          subtitles: [],
+          summary: null,
+        },
+      },
+    });
+
+    render(<DownloadQueueWidget />);
+    fireEvent.click(screen.getByTitle("后台任务（1）"));
+
+    expect(screen.getByText(/本月 AI 额度已用完/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续解析" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "切换自己的 API" }));
+    expect(navigate).toHaveBeenCalledWith(SETTINGS_LLM_LINK);
   });
 });

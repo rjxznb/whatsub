@@ -13,6 +13,10 @@ import { useSettings } from "./settings";
 import { useLibrary } from "./library";
 import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import type { TranslationStyle } from "../types/settings";
+import {
+  quotaDetailsFromRelayError,
+  type QuotaExhaustedDetails,
+} from "../llm/quotaRecovery";
 
 export interface BgAnalysisJob {
   videoId: string;
@@ -24,6 +28,7 @@ export interface BgAnalysisJob {
   committedCueOffset: number;
   totalCues: number;
   errorMessage: string | null;
+  quotaError: QuotaExhaustedDetails | null;
   retryMessage: string | null;
   startedAt: number;
   subtitles: Subtitle[];
@@ -69,6 +74,7 @@ export interface BackgroundTakeover {
   cues: SrtCue[];
   analysis: CheckpointedAnalysis;
   errorMessage: string | null;
+  quotaError: QuotaExhaustedDetails | null;
 }
 
 /** Transfer an existing producer lease into the background without reopening it. */
@@ -135,6 +141,7 @@ export function retranscribeAndAnalyzeInBackground(opts: RetranscribeBgOptions):
         committedCueOffset: 0,
         totalCues: 0,
         errorMessage: null,
+        quotaError: null,
         retryMessage: null,
         startedAt: Date.now(),
         subtitles: [],
@@ -243,6 +250,7 @@ function publishAnalysis(
         committedCueOffset: analysis.checkpoint.nextCueOffset,
         totalCues: runtime.cues?.length ?? 0,
         errorMessage: null,
+        quotaError: null,
         retryMessage: null,
         startedAt: previous?.startedAt ?? Date.now(),
         subtitles: analysis.subtitles,
@@ -274,12 +282,23 @@ function failRuntime(runtime: BgRuntime, error: unknown): void {
   // across temporary load/open failures.  Clearing this bit while session is
   // null would incorrectly route the next retry through Whisper.
   runtime.needsSessionReload ||= error instanceof StaleAnalysisSessionError;
-  updateJob(runtime.videoId, (job) => ({
-    ...job,
-    phase: "error",
-    retryMessage: null,
-    errorMessage: error instanceof Error ? error.message : String(error),
-  }));
+  updateJob(runtime.videoId, (job) => {
+    const committedCueOffset =
+      runtime.session?.analysis.checkpoint.nextCueOffset ??
+      job.committedCueOffset;
+    const totalCues = runtime.cues?.length ?? job.totalCues;
+    return {
+      ...job,
+      phase: "error",
+      retryMessage: null,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      quotaError: quotaDetailsFromRelayError(
+        error,
+        committedCueOffset,
+        totalCues,
+      ),
+    };
+  });
 }
 
 async function reopenStaleSessionAndContinue(runtime: BgRuntime): Promise<void> {
@@ -319,6 +338,7 @@ export function resumeBackgroundAnalysis(videoId: string): void {
     ...current,
     phase: runtime.session ? "analyzing" : "transcribing",
     errorMessage: null,
+    quotaError: null,
     retryMessage: null,
   }));
   runtime.runner = runtime.needsSessionReload || (runtime.mode === "analysis" && !runtime.session)
@@ -350,7 +370,9 @@ export async function cancelBackground(videoId: string): Promise<void> {
 export async function takeOverBackground(videoId: string): Promise<BackgroundTakeover | null> {
   const runtime = runtimes.get(videoId);
   if (!runtime) return null;
-  const errorMessage = useBgAnalyses.getState().jobs[videoId]?.errorMessage ?? null;
+  const failedJob = useBgAnalyses.getState().jobs[videoId];
+  const errorMessage = failedJob?.errorMessage ?? null;
+  const quotaError = failedJob?.quotaError ?? null;
   runtime.disposition = "takeover";
   runtime.controller.abort();
   if (runtime.mode === "retranscribe" && !runtime.session) {
@@ -365,6 +387,7 @@ export async function takeOverBackground(videoId: string): Promise<BackgroundTak
     cues: runtime.cues,
     analysis: runtime.session.analysis,
     errorMessage,
+    quotaError,
   };
 }
 

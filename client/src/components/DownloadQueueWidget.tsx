@@ -12,6 +12,13 @@ import { syncToCloud } from "../lib/api/librarySync";
 import { friendlyError } from "../utils/friendlyError";
 import { SiteLoginModal } from "./SiteLoginModal";
 import { useSettings } from "../store/settings";
+import { useNavigate } from "react-router-dom";
+import {
+  canResumeQuota,
+  quotaRecoveryMessage,
+  SETTINGS_LLM_LINK,
+  type QuotaExhaustedDetails,
+} from "../llm/quotaRecovery";
 
 async function retryUpload(videoId: string): Promise<void> {
   useDownloadQueue.getState().update(videoId, { phase: "uploading", percent: 0, error: null });
@@ -110,10 +117,12 @@ type UnifiedItem =
       totalCues: number;
       retryMessage?: string | null;
       error?: string | null;
+      quotaError: QuotaExhaustedDetails | null;
       startedAt: number;
     };
 
 export function DownloadQueueWidget() {
+  const navigate = useNavigate();
   const downloads = useDownloadQueue((s) => s.entries);
   const cancelDownload = useDownloadQueue((s) => s.cancel);
   const removeDownload = useDownloadQueue((s) => s.remove);
@@ -148,6 +157,7 @@ export function DownloadQueueWidget() {
       totalCues: a.totalCues,
       retryMessage: a.retryMessage,
       error: a.errorMessage,
+      quotaError: a.quotaError,
       startedAt: a.startedAt,
     })),
   ].sort((a, b) => b.startedAt - a.startedAt);
@@ -199,6 +209,7 @@ export function DownloadQueueWidget() {
                   if (item.kind === "download") void retryUpload(item.videoId);
                   else resumeBackgroundAnalysis(item.videoId);
                 }}
+                onSwitchApi={() => navigate(SETTINGS_LLM_LINK)}
               />
             ))}
           </div>
@@ -232,11 +243,13 @@ function Row({
   onCancel,
   onDismiss,
   onRetry,
+  onSwitchApi,
 }: {
   item: UnifiedItem;
   onCancel: () => void;
   onDismiss: () => void;
   onRetry: () => void;
+  onSwitchApi: () => void;
 }) {
   const isTerminal = isTerminalPhase(item);
   const phaseTextValue = phaseText(item);
@@ -312,7 +325,37 @@ function Row({
             }
           />
         )}
-        {item.phase === "error" && item.error && item.kind !== "download" && (
+        {item.phase === "error" &&
+          item.error &&
+          item.kind === "analysis" &&
+          item.quotaError && (
+          <>
+            <span
+              className="text-amber-300 truncate"
+              title={quotaRecoveryMessage(item.quotaError)}
+            >
+              {quotaRecoveryMessage(item.quotaError)}
+            </span>
+            <button
+              onClick={onSwitchApi}
+              className="ml-auto whitespace-nowrap px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-zinc-900 text-[10px]"
+            >
+              切换自己的 API
+            </button>
+            {canResumeQuota(item.quotaError) && (
+              <button
+                onClick={onRetry}
+                className="whitespace-nowrap px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-[10px]"
+              >
+                继续解析
+              </button>
+            )}
+          </>
+        )}
+        {item.phase === "error" &&
+          item.error &&
+          item.kind === "analysis" &&
+          !item.quotaError && (
           <>
             <span className="text-amber-400 truncate" title={item.error}>
               {shortError(item.error)}

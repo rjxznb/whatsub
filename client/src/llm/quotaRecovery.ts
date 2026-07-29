@@ -58,7 +58,7 @@ export function canResumeQuota(
   details: QuotaExhaustedDetails,
   now = Date.now(),
 ): boolean {
-  return details.periodResetAt === null || now >= details.periodResetAt;
+  return details.periodResetAt !== null && now >= details.periodResetAt;
 }
 
 export function quotaRecoveryMessage(details: QuotaExhaustedDetails): string {

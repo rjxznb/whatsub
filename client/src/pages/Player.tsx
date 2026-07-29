@@ -557,7 +557,12 @@ export function Player() {
         if (reclaimed.analysis.checkpoint.phase === "complete") {
           analysis.setPhase("complete", 100);
         } else if (reclaimed.errorMessage) {
-          analysis.setError(reclaimed.errorMessage, false, "analysis");
+          analysis.setError(
+            reclaimed.errorMessage,
+            false,
+            "analysis",
+            reclaimed.quotaError,
+          );
         } else {
           startAnalysis();
         }

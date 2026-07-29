@@ -12,6 +12,7 @@ import type { PersistedAnalysisSession } from "../llm/analysisSession";
 import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import { ProviderTransportError } from "../llm/providers/errors";
 import { StaleAnalysisSessionError } from "../llm/analysisSession";
+import { RelayError } from "../llm/providers/relayErrors";
 
 const mocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
@@ -260,6 +261,44 @@ describe("background analysis lease handoff", () => {
     await waitFor(() => expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("done"));
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("GLOBAL keyPhrases summary");
+  });
+
+  it("preserves structured quota recovery details in a failed background job and takeover", async () => {
+    mocks.getProvider.mockReturnValue({
+      async *stream() {
+        throw new RelayError({
+          code: "quota_exceeded",
+          message: "本月额度已用完",
+          upsell: true,
+          used: 5_000_100,
+          limit: 5_000_000,
+          periodResetAt: Date.UTC(2026, 7, 1),
+        }, 429);
+      },
+    });
+    const { session } = fakeSession(initialAnalysis());
+
+    runInBackground({
+      videoId: "video-1",
+      label: "Video",
+      cues,
+      session,
+      style: "colloquial",
+    });
+
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("error"),
+    );
+    expect(useBgAnalyses.getState().jobs["video-1"]?.quotaError).toEqual({
+      used: 5_000_100,
+      limit: 5_000_000,
+      periodResetAt: Date.UTC(2026, 7, 1),
+      committedCueOffset: 50,
+      totalCues: 51,
+    });
+
+    const takeover = await takeOverBackground("video-1");
+    expect(takeover?.quotaError?.committedCueOffset).toBe(50);
   });
 
   it("reopens from the persisted transcript after a stale lease", async () => {

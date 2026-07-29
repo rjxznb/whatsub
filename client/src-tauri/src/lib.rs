@@ -3,6 +3,7 @@ mod commands;
 mod core;
 mod error;
 mod pipeline;
+mod single_instance;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

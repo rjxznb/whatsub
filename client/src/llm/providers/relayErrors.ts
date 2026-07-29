@@ -23,6 +23,11 @@ export interface RelayErrorInfo {
   message: string;
   /** True when the right user action is to upgrade / switch key (not retry). */
   upsell: boolean;
+  /** Structured usage fields returned by quota rejections. Older relay
+   *  responses and non-quota errors omit them. */
+  used?: number | null;
+  limit?: number | null;
+  periodResetAt?: number | null;
 }
 
 /** Fallback copy when the relay didn't send a `message` (older server, or a
@@ -57,10 +62,22 @@ export function parseRelayError(
 ): RelayErrorInfo | null {
   let code = "";
   let message = "";
+  let used: number | null = null;
+  let limit: number | null = null;
+  let periodResetAt: number | null = null;
   try {
-    const obj = JSON.parse(bodyText) as { error?: unknown; message?: unknown };
+    const obj = JSON.parse(bodyText) as {
+      error?: unknown;
+      message?: unknown;
+      used?: unknown;
+      limit?: unknown;
+      periodResetAt?: unknown;
+    };
     if (typeof obj.error === "string") code = obj.error;
     if (typeof obj.message === "string") message = obj.message;
+    used = finiteNumber(obj.used);
+    limit = finiteNumber(obj.limit);
+    periodResetAt = finiteNumber(obj.periodResetAt);
   } catch {
     // Non-JSON body (HTML 502 page, empty, etc.) — not a structured relay error.
   }
@@ -69,7 +86,14 @@ export function parseRelayError(
     code,
     message: message || FALLBACK[code] || `whatSub 托管出错（${code}）`,
     upsell: UPSELL_CODES.has(code),
+    used,
+    limit,
+    periodResetAt,
   };
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 /** Thrown by the openai-compatible provider's `stream()` when the whatSub
@@ -79,6 +103,9 @@ export class RelayError extends ProviderHttpError {
   readonly code: string;
   readonly status: number;
   readonly upsell: boolean;
+  readonly used: number | null;
+  readonly limit: number | null;
+  readonly periodResetAt: number | null;
   constructor(
     info: RelayErrorInfo,
     status: number,
@@ -91,5 +118,8 @@ export class RelayError extends ProviderHttpError {
     this.code = info.code;
     this.status = status;
     this.upsell = info.upsell;
+    this.used = info.used ?? null;
+    this.limit = info.limit ?? null;
+    this.periodResetAt = info.periodResetAt ?? null;
   }
 }

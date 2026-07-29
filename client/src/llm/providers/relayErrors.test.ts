@@ -6,9 +6,39 @@ describe("parseRelayError", () => {
   it("uses the relay's own friendly message when present", () => {
     const info = parseRelayError(
       429,
-      JSON.stringify({ error: "quota_exceeded", message: "本月额度已用完。", used: 5_000_000, limit: 5_000_000 }),
+      JSON.stringify({
+        error: "quota_exceeded",
+        message: "本月额度已用完。",
+        used: 5_000_100,
+        limit: 5_000_000,
+        periodResetAt: 1_785_520_800_000,
+      }),
     );
-    expect(info).toEqual({ code: "quota_exceeded", message: "本月额度已用完。", upsell: true });
+    expect(info).toEqual({
+      code: "quota_exceeded",
+      message: "本月额度已用完。",
+      upsell: true,
+      used: 5_000_100,
+      limit: 5_000_000,
+      periodResetAt: 1_785_520_800_000,
+    });
+  });
+
+  it("normalizes missing or non-numeric quota metadata to null", () => {
+    const info = parseRelayError(
+      429,
+      JSON.stringify({
+        error: "quota_exceeded",
+        used: "5000000",
+        limit: null,
+      }),
+    );
+
+    expect(info).toMatchObject({
+      used: null,
+      limit: null,
+      periodResetAt: null,
+    });
   });
 
   it("falls back to built-in copy when the body has a code but no message", () => {
@@ -49,5 +79,8 @@ describe("RelayError", () => {
     expect(err.code).toBe("free_used_up");
     expect(err.status).toBe(429);
     expect(err.upsell).toBe(true);
+    expect(err.used).toBeNull();
+    expect(err.limit).toBeNull();
+    expect(err.periodResetAt).toBeNull();
   });
 });

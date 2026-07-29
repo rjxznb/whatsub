@@ -169,4 +169,53 @@ describe("Player committed resume state", () => {
     expect(canEditSubtitles("paused")).toBe(true);
     expect(canEditSubtitles("complete")).toBe(true);
   });
+
+  it("keeps the durable checkpoint when managed quota is exhausted", () => {
+    const committed: CheckpointedAnalysis = {
+      subtitles: [subtitle(1)],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: "sha256:fixture",
+        nextCueOffset: 50,
+        phase: "cues",
+        revision: 7,
+      },
+    };
+    const quotaError = {
+      used: 5_000_000,
+      limit: 5_000_000,
+      periodResetAt: Date.UTC(2026, 7, 1),
+      committedCueOffset: 50,
+      totalCues: 100,
+    };
+
+    useAnalysis.getState().setCommittedAnalysis(committed, 100);
+    useAnalysis.getState().setError(
+      "quota exceeded",
+      true,
+      "analysis",
+      quotaError,
+    );
+
+    const state = useAnalysis.getState();
+    expect(state.checkpoint?.nextCueOffset).toBe(50);
+    expect(state.quotaError).toEqual(quotaError);
+  });
+
+  it("clears stale quota recovery metadata on later errors and reset", () => {
+    useAnalysis.getState().setError("quota exceeded", true, "analysis", {
+      used: 5_000_000,
+      limit: 5_000_000,
+      periodResetAt: Date.UTC(2026, 7, 1),
+      committedCueOffset: 50,
+      totalCues: 100,
+    });
+
+    useAnalysis.getState().setError("network failed", false, "analysis");
+    expect(useAnalysis.getState().quotaError).toBeNull();
+
+    useAnalysis.getState().reset();
+    expect(useAnalysis.getState().quotaError).toBeNull();
+  });
 });

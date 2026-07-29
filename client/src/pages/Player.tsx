@@ -31,6 +31,7 @@ import {
 import { analysisRetryMessage } from "../llm/analysisRetryMessage";
 import { getProvider } from "../llm/providers";
 import { RelayError } from "../llm/providers/relayErrors";
+import { quotaDetailsFromRelayError } from "../llm/quotaRecovery";
 import {
   runInBackground,
   takeOverBackground,
@@ -371,7 +372,12 @@ export function Player() {
       }
       const msg = e instanceof Error ? e.message : String(e);
       const upsell = e instanceof RelayError && e.upsell;
-      analysis.setError(msg, upsell, "analysis");
+      const quotaError = quotaDetailsFromRelayError(
+        e,
+        session.analysis.checkpoint.nextCueOffset,
+        cues.length,
+      );
+      analysis.setError(msg, upsell, "analysis", quotaError);
       await invoke("library_set_status", {
         id: videoId,
         status: "failed",

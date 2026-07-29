@@ -6,6 +6,7 @@ import type {
   Subtitle,
 } from "../llm/types";
 import type { AnalysisPreview } from "../llm/analyze";
+import type { QuotaExhaustedDetails } from "../llm/quotaRecovery";
 
 /** Drop entries that share (time, endTime, text) with a previous one. */
 export function dedupSubtitles(subs: Subtitle[]): Subtitle[] {
@@ -45,6 +46,7 @@ interface AnalysisState {
   /** True when the error is a whatSub-relay upsell wall (quota / license) —
    *  ProgressBanner then shows a 「升级 Pro」 CTA next to the message. */
   errorUpsell: boolean;
+  quotaError: QuotaExhaustedDetails | null;
 
   startFor: (videoId: string) => void;
   setPhase: (phase: AnalysisPhase, percent?: number) => void;
@@ -58,7 +60,12 @@ interface AnalysisState {
     totalCues: number,
   ) => void;
   setRetryMessage: (message: string | null) => void;
-  setError: (msg: string, upsell?: boolean, stage?: AnalysisErrorStage) => void;
+  setError: (
+    msg: string,
+    upsell?: boolean,
+    stage?: AnalysisErrorStage,
+    quotaError?: QuotaExhaustedDetails | null,
+  ) => void;
   updateSubtitle: (idx: number, partial: Partial<Subtitle>) => void;
   deleteSubtitle: (idx: number) => void;
   insertSubtitle: (idx: number, sub: Subtitle) => void;
@@ -77,6 +84,7 @@ export const useAnalysis = create<AnalysisState>((set) => ({
   errorStage: null,
   retryMessage: null,
   errorUpsell: false,
+  quotaError: null,
 
   startFor: (id) =>
     set({
@@ -90,6 +98,7 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       errorStage: null,
       retryMessage: null,
       errorUpsell: false,
+      quotaError: null,
     }),
   setPhase: (phase, percent) =>
     set((s) => ({ phase, progressPercent: percent ?? s.progressPercent })),
@@ -128,12 +137,13 @@ export const useAnalysis = create<AnalysisState>((set) => ({
         : 100,
     }),
   setRetryMessage: (retryMessage) => set({ retryMessage }),
-  setError: (msg, upsell = false, stage = "analysis") =>
+  setError: (msg, upsell = false, stage = "analysis", quotaError = null) =>
     set({
       phase: "error",
       errorMessage: msg,
       errorUpsell: upsell,
       errorStage: stage,
+      quotaError,
       retryMessage: null,
     }),
   updateSubtitle: (idx, partial) =>
@@ -171,5 +181,6 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       errorStage: null,
       retryMessage: null,
       errorUpsell: false,
+      quotaError: null,
     }),
 }));

@@ -160,6 +160,33 @@ All standard pipeline data files live under `data/videos/`:
 - **每条字幕最多 2 个 highlightWords**: 不要超过 2 个。
 - **写完立即跑验证脚本**: 不要跳过验证直接交付。验证项：时间戳顺序、hw 子串匹配、ht 子串匹配、keyNote 长度、KP 比例。
 
+## Mobile-requested Library replacement (2026-07-29)
+
+The desktop queue processor supports two modes. Ordinary imports remain the
+legacy `{ url }` flow: import, analyze, sync, then mark done. A `replace` item
+has `targetLibraryEntryId` and is visible only because this desktop polls with
+`supportedModes=import,replace`; old desktops default to `import` and cannot
+claim it. This capability gate must remain in place while older desktop builds
+exist.
+
+For a replacement, verify the queued YouTube ID, import/transcribe/analyze,
+stage media with the queue ID and target ID, and call the backend's atomic
+completion endpoint. Do not use ordinary `syncToCloud` or directly mark a
+replacement done. The backend changes the existing Library row and queue status
+in one transaction, preserving the Library ID and corpus phrases. Any import,
+analysis, staging, or completion error must mark the replacement failed; it must
+not mutate the Library entry. A phone retry is permitted only for a failed
+replacement and receives fresh queue-scoped staging keys; completed jobs are
+terminal.
+
+iOS only exposes this route for a matching canonical YouTube source without OSS
+media, deduplicates active replacements, and blocks the enqueue only if both
+duration and the server-authoritative per-account duration limit are known and
+the duration is over that limit. The backend remains authoritative for all media
+limits. Release safely in this order: deploy the additive backend schema/API and
+capability gate, publish a desktop build with replacement support, then ship or
+expose the iOS action. Never expose the phone action first.
+
 ## 18 Scenes
 
 | Key | Chinese | Typical Content |

@@ -62,9 +62,19 @@ vi.mock("../store/appDialog", () => ({ notify: vi.fn() }));
 vi.mock("../lib/cookieStatus", () => ({
   cookieStatusFor: vi.fn().mockResolvedValue(null),
 }));
+const llmQuotaMock = vi.hoisted(() => vi.fn());
+vi.mock("../lib/api/quota", () => ({
+  llmQuota: llmQuotaMock,
+}));
 vi.mock("./SiteLoginModal", () => ({ SiteLoginModal: () => null }));
 
-const settingsState = { settings: { whisperModel: "small", cookieSource: "system" } };
+const settingsState = {
+  settings: {
+    whisperModel: "small",
+    cookieSource: "system",
+    vendorId: "deepseek",
+  },
+};
 vi.mock("../store/settings", () => {
   const useSettings = () => settingsState;
   useSettings.getState = () => settingsState;
@@ -86,6 +96,15 @@ function resolveDeferredSiteLoginListeners() {
 }
 
 beforeEach(() => {
+  settingsState.settings.vendorId = "deepseek";
+  llmQuotaMock.mockReset();
+  llmQuotaMock.mockResolvedValue({
+    used: 0,
+    limit: 5_000_000,
+    requestCount: 0,
+    tier: "pro",
+    periodResetAt: Date.UTC(2026, 7, 1),
+  });
   deferSiteLoginListenerRegistrations = false;
   deferredSiteLoginUnlistenResolvers.splice(0);
   lateSiteLoginUnlistenMock.mockClear();
@@ -94,6 +113,55 @@ beforeEach(() => {
   deferImportCancel = false;
   rejectImportCancel = null;
   resolveDeferredImportCancel = null;
+});
+
+describe("ImportModal — managed AI quota preflight", () => {
+  beforeEach(() => {
+    invokeMock.mockClear();
+  });
+
+  it("blocks import before download when managed Pro quota is exhausted", async () => {
+    settingsState.settings.vendorId = "whatsub-managed";
+    llmQuotaMock.mockResolvedValue({
+      used: 5_000_000,
+      limit: 5_000_000,
+      requestCount: 100,
+      tier: "pro",
+      periodResetAt: Date.UTC(2026, 7, 1),
+    });
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    expect(await r.findByText(/本月 AI 额度已用完/)).toBeInTheDocument();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(false);
+  });
+
+  it("skips quota lookup for a user-supplied API provider", async () => {
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(true),
+    );
+    expect(llmQuotaMock).not.toHaveBeenCalled();
+  });
+
+  it("continues importing when the best-effort quota lookup fails", async () => {
+    settingsState.settings.vendorId = "whatsub-managed";
+    llmQuotaMock.mockRejectedValue(new Error("offline"));
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(true),
+    );
+  });
 });
 
 describe("ImportModal — onboarding sample-URL affordance", () => {

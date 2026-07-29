@@ -15,6 +15,12 @@ import type { SiteLoginAction } from "../utils/friendlyError";
 import type { TranslationStyle } from "../types/settings";
 import { cookieStatusFor } from "../lib/cookieStatus";
 import { SiteLoginModal } from "./SiteLoginModal";
+import {
+  preflightManagedQuota,
+  quotaRecoveryMessage,
+  SETTINGS_LLM_LINK,
+  type QuotaExhaustedDetails,
+} from "../llm/quotaRecovery";
 
 export function shouldPromptLogin(
   cookieSource: string | undefined,
@@ -195,6 +201,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   }
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [quotaBlock, setQuotaBlock] = useState<QuotaExhaustedDetails | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   // Diagnosed-error dialog. Deterministic failures get one focused action
   // (login, retry, or background retry); only genuinely unknown failures fall
@@ -510,6 +517,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   async function submit(opts: { background?: boolean } = {}) {
     const background = opts.background ?? false;
     setError(null);
+    setQuotaBlock(null);
     const sourceKind = tab;
     const sourceValue = tab === "url" ? urlValue.trim() : filePath;
     if (!sourceValue) {
@@ -525,6 +533,15 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     setValidationError(null);
     if (!settings.whisperModel) {
       setError("Whisper 模型未配置（去设置页选一个并下载）");
+      return;
+    }
+
+    const managedQuotaBlock =
+      settings.vendorId === "whatsub-managed"
+        ? await preflightManagedQuota(settings)
+        : null;
+    if (managedQuotaBlock) {
+      setQuotaBlock(managedQuotaBlock);
       return;
     }
 
@@ -1366,6 +1383,21 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
             <span className="font-medium flex-1">下载失败 — 看排查清单</span>
             <span className="shrink-0 text-[10px] text-red-300/70">▸</span>
           </button>
+        )}
+
+        {quotaBlock && (
+          <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            <div className="leading-relaxed">
+              {quotaRecoveryMessage(quotaBlock)}
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate(SETTINGS_LLM_LINK)}
+              className="mt-2 rounded bg-amber-400 px-2.5 py-1 text-xs font-medium text-black hover:bg-amber-300"
+            >
+              切换自己的 API
+            </button>
+          </div>
         )}
 
         {(() => {

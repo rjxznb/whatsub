@@ -154,7 +154,7 @@ function isPersistedAnalysis(value: unknown): value is PersistedAnalysis {
   );
 }
 
-function isSubtitle(value: unknown): value is Subtitle {
+export function isSubtitle(value: unknown): value is Subtitle {
   return (
     isRecord(value) &&
     isFiniteNumber(value.time) &&

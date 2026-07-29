@@ -6,6 +6,8 @@ import {
   StaleAnalysisSessionError,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
+import type { AnalysisPreview } from "../llm/analyze";
+import { analysisRetryMessage } from "../llm/analysisRetryMessage";
 import { getProvider } from "../llm/providers";
 import { useSettings } from "./settings";
 import { useLibrary } from "./library";
@@ -16,7 +18,7 @@ export interface BgAnalysisJob {
   videoId: string;
   label: string;
   phase: "transcribing" | "analyzing" | "done" | "error";
-  /** Visible model outputs. This may be lower than committedCueOffset. */
+  /** Visible model outputs, including the current uncommitted preview. */
   subtitleCount: number;
   /** Authoritative count of transcript inputs committed to analysis.json. */
   committedCueOffset: number;
@@ -189,10 +191,14 @@ async function driveAnalysis(runtime: BgRuntime): Promise<void> {
         if (runtimes.get(runtime.videoId) !== runtime) return;
         publishAnalysis(runtime, analysis, "analyzing");
       },
-      onRetry: ({ nextAttempt, maxAttempts }) => {
+      onPreview: (committed, preview) => {
+        publishPreview(runtime, committed, preview);
+      },
+      onRetry: (event) => {
+        if (runtimes.get(runtime.videoId) !== runtime) return;
         updateJob(runtime.videoId, (job) => ({
           ...job,
-          retryMessage: `网络波动，正在进行第 ${nextAttempt}/${maxAttempts} 次尝试…`,
+          retryMessage: analysisRetryMessage(event),
         }));
       },
     });
@@ -244,6 +250,22 @@ function publishAnalysis(
       },
     },
   }));
+}
+
+function publishPreview(
+  runtime: BgRuntime,
+  committed: CheckpointedAnalysis,
+  preview: AnalysisPreview | null,
+): void {
+  if (runtimes.get(runtime.videoId) !== runtime) return;
+  publishAnalysis(
+    runtime,
+    {
+      ...committed,
+      subtitles: [...committed.subtitles, ...(preview?.subtitles ?? [])],
+    },
+    "analyzing",
+  );
 }
 
 function failRuntime(runtime: BgRuntime, error: unknown): void {

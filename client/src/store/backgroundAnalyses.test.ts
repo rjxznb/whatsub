@@ -105,7 +105,7 @@ describe("background analysis lease handoff", () => {
       async *stream(request: { userPrompt: string }) {
         prompts.push(request.userPrompt);
         if (prompts.length === 1) {
-          yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+          yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
         } else {
           yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
         }
@@ -127,14 +127,14 @@ describe("background analysis lease handoff", () => {
     expect(useBgAnalyses.getState().jobs["video-1"]?.committedCueOffset).toBe(51);
   });
 
-  it("publishes a new background snapshot only after save resolves", async () => {
+  it("publishes cue previews before save while keeping the checkpoint committed", async () => {
     let releaseSave!: () => void;
     const saveGate = new Promise<void>((resolve) => {
       releaseSave = resolve;
     });
     mocks.getProvider.mockReturnValue({
       async *stream() {
-        yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+        yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
       },
     });
     const { session, save } = fakeSession(initialAnalysis(), () => saveGate);
@@ -148,7 +148,7 @@ describe("background analysis lease handoff", () => {
     });
     await waitFor(() => expect(save).toHaveBeenCalled());
 
-    expect(useBgAnalyses.getState().jobs["video-1"]?.subtitleCount).toBe(47);
+    expect(useBgAnalyses.getState().jobs["video-1"]?.subtitleCount).toBe(48);
     expect(useBgAnalyses.getState().jobs["video-1"]?.committedCueOffset).toBe(50);
 
     releaseSave();
@@ -157,9 +157,10 @@ describe("background analysis lease handoff", () => {
     );
   });
 
-  it("cancels an uncommitted batch without publishing or closing a handed-back lease", async () => {
+  it("takes over with durable analysis and discards an uncommitted preview", async () => {
     mocks.getProvider.mockReturnValue({
       async *stream(request: { signal?: AbortSignal }) {
+        yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
         await new Promise<void>((_, reject) => {
           request.signal?.addEventListener(
             "abort",
@@ -178,14 +179,65 @@ describe("background analysis lease handoff", () => {
       style: "colloquial",
     });
 
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.subtitleCount).toBe(48),
+    );
+
     const takeover = await takeOverBackground("video-1");
 
     expect(takeover?.session).toBe(session);
+    expect(takeover?.analysis.subtitles).toHaveLength(47);
     expect(takeover?.analysis.checkpoint.nextCueOffset).toBe(50);
     expect(save).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(useBgAnalyses.getState().jobs["video-1"]).toBeUndefined();
   });
+
+  it("rolls back visible previews when unresolved cues exhaust repair attempts", async () => {
+    const extendedCues: SrtCue[] = [
+      ...cues,
+      { index: 52, time: 51, endTime: 52, text: "Cue input 52" },
+    ];
+    let attempt = 0;
+    mocks.getProvider.mockReturnValue({
+      retryProfile: "deepseek-analysis",
+      async *stream() {
+        attempt += 1;
+        if (attempt === 1) {
+          yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
+        }
+        yield "{malformed json}\n";
+      },
+    });
+    const { session, save } = fakeSession(initialAnalysis());
+
+    runInBackground({
+      videoId: "video-1",
+      label: "Video",
+      cues: extendedCues,
+      session,
+      style: "colloquial",
+    });
+
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.subtitleCount).toBe(48),
+    );
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.retryMessage).toContain(
+        "正在补齐 1 条字幕",
+      ),
+    );
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("error"),
+      { timeout: 10_000 },
+    );
+
+    const failed = useBgAnalyses.getState().jobs["video-1"];
+    expect(failed?.subtitleCount).toBe(47);
+    expect(failed?.committedCueOffset).toBe(50);
+    expect(failed?.errorMessage).toContain("52");
+    expect(save).not.toHaveBeenCalled();
+  }, 15_000);
 
   it("runs summary-only continuation without sending another cue batch", async () => {
     const prompts: string[] = [];
@@ -216,7 +268,7 @@ describe("background analysis lease handoff", () => {
         if (request.userPrompt.includes("GLOBAL keyPhrases summary")) {
           yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
         } else {
-          yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+          yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
         }
       },
     });
@@ -250,7 +302,7 @@ describe("background analysis lease handoff", () => {
         if (request.userPrompt.includes("GLOBAL keyPhrases summary")) {
           yield `${JSON.stringify({ type: "summary", keyPhrases: [] })}\n`;
         } else {
-          yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+          yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
         }
       },
     });
@@ -301,7 +353,7 @@ describe("background analysis lease handoff", () => {
           throw new ProviderTransportError("temporary network failure", "send");
         }
         await retryGate;
-        yield `${JSON.stringify({ type: "cue", index: 51, translation: "第五十一句" })}\n`;
+        yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
       },
     });
     const { session } = fakeSession(initialAnalysis());

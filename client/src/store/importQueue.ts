@@ -21,11 +21,17 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { listPending, setStatus, claimItem } from "../lib/api/importQueue";
+import { listPending, setStatus, claimItem, type ImportQueueItem } from "../lib/api/importQueue";
 import { runInBackground, useBgAnalyses } from "./backgroundAnalyses";
 import { openStoredAnalysisSession } from "../llm/analysisSession";
 import { useSettings } from "./settings";
-import { syncToCloud } from "../lib/api/librarySync";
+import { extractYouTubeId } from "../lib/syncSourceUrl";
+import {
+  completeReplacement,
+  stageReplacement,
+  syncToCloud,
+  type ReplacementPayload,
+} from "../lib/api/librarySync";
 import { useLibrary } from "./library";
 import { useDownloadQueue } from "./downloadQueue";
 
@@ -111,87 +117,7 @@ async function processNextPendingItem(): Promise<void> {
     return;
   }
 
-  try {
-    // ---- Step 1: import_video (yt-dlp + Whisper) ----
-    const settings = useSettings.getState().settings;
-    if (!settings.whisperModel) {
-      throw new Error("whisper_model_not_configured");
-    }
-
-    const importResult = await invoke<{
-      videoId: string;
-      srtPath: string;
-      durationSec: number;
-    }>("import_video", {
-      req: {
-        sourceKind: "url",
-        sourceValue: item.url,
-        whisperModel: settings.whisperModel,
-        quality: "standard",
-        analysisStyle: "neutral",
-        background: true,
-      },
-    });
-
-    const videoId = importResult.videoId;
-    console.info(`[importQueue] import_video done, videoId=${videoId}`);
-
-    // ---- Step 2: atomically bind transcript cues to their analysis lease ----
-    const stored = await openStoredAnalysisSession(videoId);
-    if (!stored) {
-      throw new Error("transcript_not_found_after_import");
-    }
-    const { cues, session } = stored;
-    console.info(`[importQueue] loaded ${cues.length} cues for ${videoId}`);
-
-    // ---- Step 3: start LLM analysis in background ----
-    // runInBackground is fire-and-forget; it writes analysis.json and flips
-    // library status to "ready" on completion.
-    runInBackground({
-      videoId,
-      label: item.url,
-      cues,
-      session,
-      style: "neutral",
-    });
-
-    // ---- Step 4: wait for analysis to reach "done" (or "error") ----
-    await waitForAnalysisDone(videoId);
-
-    // ---- Step 5: sync to cloud (with visible upload progress) ----
-    console.info(`[importQueue] syncing ${videoId} to cloud`);
-    // Show an "uploading" row in the queue widget; Uploading events update its
-    // transcode %, then the result branches it to done(removed)/upload_failed.
-    useDownloadQueue.getState().upsert(videoId, {
-      videoId,
-      sourceKind: "url",
-      sourceValue: item.url,
-      label: item.url,
-      phase: "uploading",
-      percent: 0,
-      startedAt: Date.now(),
-    });
-    const syncRes = await syncToCloud(videoId);
-    applyUploadResult(videoId, syncRes.videoUploaded);
-
-    // Refresh the library store so the card's ☁️ / sync_error reflects reality.
-    await useLibrary.getState().reload();
-
-    // ---- Step 6: mark queue item done ----
-    // Captions-only success counts as queue "done"; a failed video upload is
-    // surfaced separately via the upload_failed row + the card's sync_error.
-    await setStatus(item.id, "done");
-    console.info(`[importQueue] item ${item.id} done`);
-  } catch (err: unknown) {
-    const raw = err instanceof Error ? err.message : String(err);
-    const msg = friendlyQueueError(raw);
-    console.error(`[importQueue] item ${item.id} failed:`, msg);
-    try {
-      await setStatus(item.id, "failed", msg);
-    } catch (e2) {
-      console.warn("[importQueue] could not mark item failed:", e2);
-    }
-  }
+  await processClaimedItem(item, liveProcessorDependencies);
 }
 
 /**
@@ -239,3 +165,111 @@ function waitForAnalysisDone(videoId: string): Promise<void> {
     setTimeout(check, PHASE_CHECK_INTERVAL_MS);
   });
 }
+
+interface ImportedVideo {
+  videoId: string;
+}
+
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+export interface QueueProcessorDependencies {
+  getWhisperModel(): string | undefined;
+  importVideo(item: ImportQueueItem, whisperModel: string): Promise<ImportedVideo>;
+  analyze(videoId: string, label: string): Promise<void>;
+  syncImport(videoId: string, sourceUrl: string): Promise<void>;
+  stageReplacement(queueId: string, targetId: string, localVideoId: string): Promise<ReplacementPayload>;
+  completeReplacement(queueId: string, targetId: string, payload: ReplacementPayload): Promise<void>;
+  setStatus(id: string, status: "done" | "failed", error?: string): Promise<void>;
+}
+
+export async function processClaimedItem(
+  item: ImportQueueItem,
+  deps: QueueProcessorDependencies,
+): Promise<void> {
+  try {
+    const isReplacement = (item.mode ?? "import") === "replace";
+    const replacementTarget = isReplacement
+      ? item.targetLibraryEntryId?.trim()
+      : undefined;
+    const replacementYoutubeId = replacementTarget
+      ? extractYouTubeId(item.url)
+      : null;
+    if (isReplacement && !replacementTarget) {
+      throw new Error("replacement_target_missing");
+    }
+    if (
+      replacementTarget
+      && (!replacementYoutubeId || !YOUTUBE_VIDEO_ID.test(replacementYoutubeId))
+    ) {
+      throw new Error("replacement_youtube_invalid");
+    }
+
+    const whisperModel = deps.getWhisperModel();
+    if (!whisperModel) throw new Error("whisper_model_not_configured");
+    const { videoId } = await deps.importVideo(item, whisperModel);
+    if (replacementTarget && videoId !== replacementYoutubeId) {
+      throw new Error("replacement_youtube_mismatch");
+    }
+    await deps.analyze(videoId, item.url);
+    if (replacementTarget) {
+      const payload = await deps.stageReplacement(item.id, replacementTarget, videoId);
+      if (
+        !payload.videoKey
+        || payload.youtubeId !== replacementYoutubeId
+        || extractYouTubeId(payload.sourceUrl) !== replacementYoutubeId
+      ) {
+        throw new Error("replacement_staging_invalid");
+      }
+      await deps.completeReplacement(item.id, replacementTarget, payload);
+    } else {
+      await deps.syncImport(videoId, item.url);
+      await deps.setStatus(item.id, "done");
+    }
+  } catch (err: unknown) {
+    const raw = err instanceof Error ? err.message : String(err);
+    const msg = friendlyQueueError(raw);
+    try {
+      await deps.setStatus(item.id, "failed", msg);
+    } catch (statusError) {
+      console.warn("[importQueue] could not mark item failed:", statusError);
+    }
+  }
+}
+
+const liveProcessorDependencies: QueueProcessorDependencies = {
+  getWhisperModel: () => useSettings.getState().settings.whisperModel,
+  importVideo: async (item, whisperModel) => invoke<ImportedVideo>("import_video", {
+    req: {
+      sourceKind: "url",
+      sourceValue: item.url,
+      whisperModel,
+      quality: "standard",
+      analysisStyle: "neutral",
+      background: true,
+    },
+  }),
+  analyze: async (videoId, label) => {
+    const stored = await openStoredAnalysisSession(videoId);
+    if (!stored) throw new Error("transcript_not_found_after_import");
+    const { cues, session } = stored;
+    runInBackground({ videoId, label, cues, session, style: "neutral" });
+    await waitForAnalysisDone(videoId);
+  },
+  syncImport: async (videoId, sourceUrl) => {
+    useDownloadQueue.getState().upsert(videoId, {
+      videoId,
+      sourceKind: "url",
+      sourceValue: sourceUrl,
+      label: sourceUrl,
+      phase: "uploading",
+      percent: 0,
+      startedAt: Date.now(),
+    });
+    const result = await syncToCloud(videoId);
+    applyUploadResult(videoId, result.videoUploaded);
+    await useLibrary.getState().reload();
+  },
+  stageReplacement,
+  completeReplacement,
+  setStatus,
+};

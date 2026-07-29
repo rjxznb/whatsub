@@ -25,12 +25,20 @@ const NET_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ImportQueueItem {
     pub id: String,
     pub url: String,
+    #[serde(default = "default_import_mode")]
+    pub mode: String,
+    #[serde(rename = "targetLibraryEntryId")]
+    pub target_library_entry_id: Option<String>,
     pub status: String,
     pub error: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "updatedAt")]
     pub updated_at: i64,
+}
+
+fn default_import_mode() -> String {
+    "import".to_string()
 }
 
 #[derive(Deserialize)]
@@ -107,8 +115,8 @@ pub async fn import_queue_enqueue_http<R: Runtime>(
 ) -> Result<String, String> {
     let token = require_token(&app)?;
     let client = build_client()?;
-    let body =
-        serde_json::to_string(&serde_json::json!({ "url": url })).map_err(|e| format!("body: {e}"))?;
+    let body = serde_json::to_string(&serde_json::json!({ "url": url }))
+        .map_err(|e| format!("body: {e}"))?;
     let resp = client
         .post(BASE)
         .bearer_auth(&token)
@@ -134,7 +142,9 @@ pub async fn import_queue_list_pending_http<R: Runtime>(
     let token = require_token(&app)?;
     let client = build_client()?;
     let resp = client
-        .get(format!("{BASE}?status=pending"))
+        .get(format!(
+            "{BASE}?status=pending&supportedModes=import%2Creplace"
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -221,7 +231,9 @@ mod tests {
         // These prefixes are part of the TS contract (caller may regex
         // them). Lock them in so a future refactor doesn't silently
         // rename them.
-        let prefixes = ["timeout:", "connect:", "tls:", "request:", "decode:", "http:", "auth:", "body:"];
+        let prefixes = [
+            "timeout:", "connect:", "tls:", "request:", "decode:", "http:", "auth:", "body:",
+        ];
         for p in prefixes {
             assert!(p.ends_with(':'), "prefix {p} must end with colon");
         }

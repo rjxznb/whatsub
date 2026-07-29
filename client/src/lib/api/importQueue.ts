@@ -13,7 +13,8 @@
  *
  * Endpoints (Rust side):
  *  POST   /api/library/import-queue          { url } → { id }
- *  GET    /api/library/import-queue?status=  → { items: ImportQueueItem[] }
+ *  GET    /api/library/import-queue?status=&supportedModes=import,replace
+ *                                            → { items: ImportQueueItem[] }
  *  POST   /api/library/import-queue/:id/claim → { claimed }
  *  POST   /api/library/import-queue/:id/status { status, error? } → { ok }
  */
@@ -23,6 +24,9 @@ import { invoke } from "@tauri-apps/api/core";
 export interface ImportQueueItem {
   id: string;
   url: string;
+  /** Missing on legacy responses and therefore treated as `import`. */
+  mode?: "import" | "replace";
+  targetLibraryEntryId?: string | null;
   status: "pending" | "processing" | "done" | "failed";
   error: string | null;
   createdAt: number;

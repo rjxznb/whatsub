@@ -17,8 +17,45 @@ export interface SyncOk {
   videoUploaded: boolean;
 }
 
+export interface ReplacementPayload {
+  youtubeId: string;
+  sourceUrl: string;
+  title: string;
+  durationSec: number;
+  thumbUrl?: string;
+  thumbData?: string;
+  transcriptSrt: string;
+  analysisJson: unknown;
+  videoKey: string;
+  audioKey?: string;
+}
+
 export async function syncToCloud(id: string): Promise<SyncOk> {
   return invoke<SyncOk>("library_sync_to_cloud", { id });
+}
+
+export async function stageReplacement(
+  queueId: string,
+  targetId: string,
+  localVideoId: string,
+): Promise<ReplacementPayload> {
+  return invoke<ReplacementPayload>("library_stage_replacement", {
+    queueId,
+    targetId,
+    localVideoId,
+  });
+}
+
+export async function completeReplacement(
+  queueId: string,
+  targetId: string,
+  payload: ReplacementPayload,
+): Promise<void> {
+  await invoke("library_complete_replacement_http", {
+    queueId,
+    targetId,
+    payload,
+  });
 }
 
 export async function unsyncFromCloud(id: string): Promise<void> {

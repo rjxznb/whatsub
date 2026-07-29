@@ -1,8 +1,8 @@
+pub mod auth;
+mod commands;
 mod core;
 mod error;
-mod commands;
 mod pipeline;
-pub mod auth;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -19,9 +19,7 @@ pub fn run() {
         .manage(commands::models::ModelDownloadState::default())
         .manage(commands::youtube_auth::LoginState::default())
         .manage(commands::import::ImportState::default())
-        .setup(|_app| {
-            Ok(())
-        })
+        .setup(|_app| Ok(()))
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
@@ -102,6 +100,8 @@ pub fn run() {
             commands::library_sync::library_unsync_from_cloud,
             commands::library_sync::library_list_synced,
             commands::library_sync::library_materialize_from_cloud,
+            commands::library_replacement::library_stage_replacement,
+            commands::library_replacement::library_complete_replacement_http,
             commands::library::library_upsert_placeholder,
             commands::youtube_search::youtube_search,
             commands::import_queue_http::import_queue_enqueue_http,

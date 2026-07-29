@@ -64,6 +64,7 @@ function fakeSession(
   const session: PersistedAnalysisSession = {
     videoId: "video-1",
     lease: "one-lease",
+    transcriptGeneration: "sha256:test",
     get analysis() {
       return current;
     },

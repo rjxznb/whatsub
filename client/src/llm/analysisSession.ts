@@ -51,6 +51,7 @@ const localSessionSlots = new Map<string, LocalSessionSlot>();
 export interface PersistedAnalysisSession {
   readonly videoId: string;
   readonly lease: string;
+  readonly transcriptGeneration: string;
   readonly analysis: CheckpointedAnalysis;
   readonly inflight: AnalysisInflightJournal | null;
   save(next: CheckpointedAnalysis): Promise<CheckpointedAnalysis>;
@@ -322,6 +323,7 @@ function createSession(
   const session: PersistedAnalysisSession = {
     videoId,
     lease,
+    transcriptGeneration,
     get analysis() {
       return current;
     },
@@ -539,10 +541,11 @@ export async function executeAnalysisSession(options: {
   onPreview?: (
     committed: CheckpointedAnalysis,
     preview: AnalysisPreview | null,
-  ) => void;
+  ) => void | Promise<void>;
   onRetry?: (event: AnalysisRetryEvent) => void;
 }): Promise<CheckpointedAnalysis> {
   let committed = options.session.analysis;
+  let activeJournal = options.session.inflight;
   await runAnalysis({
     provider: options.provider,
     cues: options.cues,
@@ -551,7 +554,41 @@ export async function executeAnalysisSession(options: {
     style: options.style,
     signal: options.signal,
     onRetry: options.onRetry,
-    onPreview: (preview) => options.onPreview?.(committed, preview),
+    resumePreview: activeJournal ? previewFromJournal(activeJournal) : null,
+    onPreview: async (preview) => {
+      if (preview) {
+        if (
+          activeJournal
+          && (
+            activeJournal.startCueOffset !== preview.startCueOffset
+            || activeJournal.endCueOffset !== preview.endCueOffset
+          )
+        ) {
+          throw new TypeError("analysis preview changed batch before canonical commit");
+        }
+        const base = activeJournal ?? {
+          version: 1 as const,
+          journalId: crypto.randomUUID(),
+          transcriptGeneration: options.session.transcriptGeneration,
+          transcriptFingerprint: committed.checkpoint.transcriptFingerprint,
+          analysisStyle: options.style,
+          baseRevision: committed.checkpoint.revision,
+          startCueOffset: preview.startCueOffset,
+          endCueOffset: preview.endCueOffset,
+          entries: [],
+        };
+        const next = mergeInflightEntries(base, preview.entries);
+        activeJournal = await options.session.saveInflight(next);
+        await options.onPreview?.(committed, previewFromJournal(activeJournal));
+        return;
+      }
+
+      activeJournal = options.session.inflight;
+      await options.onPreview?.(
+        committed,
+        activeJournal ? previewFromJournal(activeJournal) : null,
+      );
+    },
     onCommit: async (commit) => {
       const candidate = applyCommit(committed, commit);
       committed = await options.session.save(candidate);
@@ -559,6 +596,15 @@ export async function executeAnalysisSession(options: {
     },
   });
   return committed;
+}
+
+function previewFromJournal(journal: AnalysisInflightJournal): AnalysisPreview {
+  return {
+    startCueOffset: journal.startCueOffset,
+    endCueOffset: journal.endCueOffset,
+    entries: journal.entries,
+    subtitles: journal.entries.map((entry) => entry.subtitle),
+  };
 }
 
 function applyCommit(

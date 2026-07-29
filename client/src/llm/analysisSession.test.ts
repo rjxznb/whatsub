@@ -256,6 +256,9 @@ describe("immutable analysis sessions", () => {
           ? { status: "applied", revision: 0 }
           : { status: "rejected", revision: 0 };
       }
+      if (command === "save_analysis_inflight") {
+        return { status: "applied", revision: 0 };
+      }
       throw new Error(`unexpected command: ${command}`);
     });
     const provider: Provider = {
@@ -280,8 +283,135 @@ describe("immutable analysis sessions", () => {
     ).rejects.toBeInstanceOf(StaleAnalysisSessionError);
 
     expect(onCommitted).not.toHaveBeenCalled();
-    expect(onPreview).toHaveBeenLastCalledWith(before, null);
+    expect(onPreview).toHaveBeenLastCalledWith(
+      before,
+      expect.objectContaining({
+        entries: [expect.objectContaining({ cueOffset: 0 })],
+      }),
+    );
     expect(session.analysis).toBe(before);
+  });
+
+  it("saves inflight before publishing a preview", async () => {
+    const oneCue = cues.slice(0, 1);
+    const initial = await checkpointed();
+    initial.checkpoint.transcriptFingerprint = await fingerprintTranscript(oneCue);
+    const order: string[] = [];
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-order", analysis: initial, inflight: null };
+      }
+      if (command === "save_analysis_inflight") {
+        order.push("disk");
+        return { status: "applied", revision: 0 };
+      }
+      if (command === "save_analysis_session") {
+        return { status: "applied", revision: 1 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const provider: Provider = {
+      async *stream() {
+        yield `${JSON.stringify({ index: 1, translation: "first", highlights: [] })}\n`;
+      },
+    };
+    const controller = new AbortController();
+    const session = await openAnalysisSession("preview-order", oneCue, "neutral");
+
+    await executeAnalysisSession({
+      session,
+      provider,
+      cues: oneCue,
+      style: "neutral",
+      signal: controller.signal,
+      onPreview: (_committed, preview) => {
+        if (preview) order.push("ui");
+      },
+      onCommitted: () => controller.abort(),
+    });
+
+    expect(order).toEqual(["disk", "ui"]);
+  });
+
+  it("reuses 23 durable entries and commits all 50 once", async () => {
+    const longCues: SrtCue[] = Array.from({ length: 50 }, (_, index) => ({
+      index: index + 1,
+      time: index,
+      endTime: index + 1,
+      text: `Cue ${index + 1}`,
+    }));
+    const fingerprint = await fingerprintTranscript(longCues);
+    const initial: CheckpointedAnalysis = {
+      subtitles: [],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: fingerprint,
+        nextCueOffset: 0,
+        phase: "cues",
+        revision: 0,
+      },
+    };
+    const durableEntries = longCues.slice(0, 23).map((cue, cueOffset) => ({
+      cueOffset,
+      subtitle: {
+        ...subtitle(cue.text),
+        time: cue.time,
+        endTime: cue.endTime,
+      },
+    }));
+    const durableJournal = await journal({
+      transcriptGeneration: fingerprint,
+      transcriptFingerprint: fingerprint,
+      analysisStyle: "neutral",
+      startCueOffset: 0,
+      endCueOffset: 50,
+      entries: durableEntries,
+    });
+    const savedCanonicals: CheckpointedAnalysis[] = [];
+    mockInvoke.mockImplementation(async (command, args) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-resume-23", analysis: initial, inflight: durableJournal };
+      }
+      if (command === "save_analysis_inflight") {
+        return { status: "applied", revision: 0 };
+      }
+      if (command === "save_analysis_session") {
+        savedCanonicals.push((args as { analysis: CheckpointedAnalysis }).analysis);
+        return { status: "applied", revision: 1 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const requests: string[] = [];
+    const provider: Provider = {
+      async *stream(request) {
+        requests.push(request.userPrompt);
+        yield longCues.slice(23).map((cue) => JSON.stringify({
+          index: cue.index,
+          translation: `translated-${cue.index}`,
+          highlights: [],
+        })).join("\n") + "\n";
+      },
+    };
+    const controller = new AbortController();
+    const session = await openAnalysisSession("resume-23", longCues, "neutral");
+
+    await executeAnalysisSession({
+      session,
+      provider,
+      cues: longCues,
+      style: "neutral",
+      signal: controller.signal,
+      onCommitted: () => controller.abort(),
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).not.toContain("\n1\t");
+    expect(requests[0]).toContain("\n24\t");
+    expect(savedCanonicals[0]?.checkpoint.nextCueOffset).toBe(50);
+    expect(savedCanonicals[0]?.subtitles).toHaveLength(50);
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "save_analysis_session"))
+      .toHaveLength(1);
   });
 
   it("forwards previews before save and replaces them only after save succeeds", async () => {
@@ -299,6 +429,9 @@ describe("immutable analysis sessions", () => {
     mockInvoke.mockImplementation(async (command) => {
       if (command === "begin_analysis_session") {
         return { lease: "lease-preview", analysis: initial };
+      }
+      if (command === "save_analysis_inflight") {
+        return { status: "applied", revision: 0 };
       }
       if (command === "save_analysis_session") {
         saveStarted();
@@ -378,6 +511,9 @@ describe("immutable analysis sessions", () => {
     mockInvoke.mockImplementation(async (command) => {
       if (command === "begin_analysis_session") {
         return { lease: "lease-resume", analysis: initial };
+      }
+      if (command === "save_analysis_inflight") {
+        return { status: "applied", revision: 8 };
       }
       if (command === "save_analysis_session") {
         return { status: "applied", revision: null };

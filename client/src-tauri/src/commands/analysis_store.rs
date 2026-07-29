@@ -2,7 +2,7 @@ use crate::core::paths;
 use crate::error::{AppError, AppResult};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,32 @@ use std::sync::{LazyLock, Mutex};
 static STORE_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ANALYSIS_STORE: LazyLock<Mutex<AnalysisStore>> =
     LazyLock::new(|| Mutex::new(AnalysisStore::default()));
+
+const INFLIGHT_VERSION: u8 = 1;
+const MAX_INFLIGHT_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_INFLIGHT_ENTRIES: usize = 50;
+const MAX_INFLIGHT_ENTRY_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisInflightEntry {
+    pub cue_offset: usize,
+    pub subtitle: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisInflightJournal {
+    pub version: u8,
+    pub journal_id: String,
+    pub transcript_generation: String,
+    pub transcript_fingerprint: String,
+    pub analysis_style: String,
+    pub base_revision: u64,
+    pub start_cue_offset: usize,
+    pub end_cue_offset: usize,
+    pub entries: Vec<AnalysisInflightEntry>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -755,6 +781,160 @@ fn validate_analysis(analysis: &Value) -> AppResult<Option<CheckpointMeta>> {
     }))
 }
 
+fn inflight_path(analysis_path: &Path) -> PathBuf {
+    analysis_path.with_file_name("analysis.inflight.json")
+}
+
+fn inflight_artifacts(path: &Path) -> [PathBuf; 3] {
+    [
+        path.to_path_buf(),
+        path.with_extension("json.tmp"),
+        path.with_extension("json.bak"),
+    ]
+}
+
+fn validate_inflight(journal: &AnalysisInflightJournal) -> AppResult<()> {
+    if journal.version != INFLIGHT_VERSION {
+        return Err(AppError::InvalidInput(
+            "analysis inflight version must be 1".to_string(),
+        ));
+    }
+    for (label, value) in [
+        ("journalId", journal.journal_id.as_str()),
+        (
+            "transcriptGeneration",
+            journal.transcript_generation.as_str(),
+        ),
+        (
+            "transcriptFingerprint",
+            journal.transcript_fingerprint.as_str(),
+        ),
+    ] {
+        if value.trim().is_empty() {
+            return Err(AppError::InvalidInput(format!(
+                "analysis inflight {label} is invalid"
+            )));
+        }
+    }
+    if !matches!(
+        journal.analysis_style.as_str(),
+        "formal" | "neutral" | "colloquial" | "playful" | "cinematic" | "literary"
+    ) {
+        return Err(AppError::InvalidInput(
+            "analysis inflight analysisStyle is invalid".to_string(),
+        ));
+    }
+    let span = journal
+        .end_cue_offset
+        .checked_sub(journal.start_cue_offset)
+        .filter(|span| *span > 0 && *span <= MAX_INFLIGHT_ENTRIES)
+        .ok_or_else(|| {
+            AppError::InvalidInput("analysis inflight cue range is invalid".to_string())
+        })?;
+    if journal.entries.len() > MAX_INFLIGHT_ENTRIES || journal.entries.len() > span {
+        return Err(AppError::InvalidInput(
+            "analysis inflight has too many entries".to_string(),
+        ));
+    }
+
+    let mut offsets = HashSet::with_capacity(journal.entries.len());
+    for entry in &journal.entries {
+        if entry.cue_offset < journal.start_cue_offset || entry.cue_offset >= journal.end_cue_offset
+        {
+            return Err(AppError::InvalidInput(
+                "analysis inflight cueOffset is outside the batch".to_string(),
+            ));
+        }
+        if !offsets.insert(entry.cue_offset) {
+            return Err(AppError::InvalidInput(
+                "analysis inflight cueOffset is duplicated".to_string(),
+            ));
+        }
+        if !entry.subtitle.is_object() {
+            return Err(AppError::InvalidInput(
+                "analysis inflight subtitle must be an object".to_string(),
+            ));
+        }
+        if serde_json::to_vec(entry)?.len() > MAX_INFLIGHT_ENTRY_BYTES {
+            return Err(AppError::InvalidInput(
+                "analysis inflight entry is too large".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn read_inflight_strict(path: &Path) -> AppResult<AnalysisInflightJournal> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > MAX_INFLIGHT_BYTES {
+        return Err(AppError::InvalidInput(
+            "analysis inflight file is too large".to_string(),
+        ));
+    }
+    let bytes = fs::read(path)?;
+    if bytes.len() as u64 > MAX_INFLIGHT_BYTES {
+        return Err(AppError::InvalidInput(
+            "analysis inflight file is too large".to_string(),
+        ));
+    }
+    let journal: AnalysisInflightJournal = serde_json::from_slice(&bytes)?;
+    validate_inflight(&journal)?;
+    Ok(journal)
+}
+
+fn write_inflight_at_with_replacer<F>(
+    path: &Path,
+    journal: &AnalysisInflightJournal,
+    replacer: F,
+) -> AppResult<()>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    validate_inflight(journal)?;
+    let serialized_size = serde_json::to_vec_pretty(journal)?
+        .len()
+        .checked_add(1)
+        .ok_or_else(|| AppError::InvalidInput("analysis inflight file is too large".to_string()))?;
+    if serialized_size as u64 > MAX_INFLIGHT_BYTES {
+        return Err(AppError::InvalidInput(
+            "analysis inflight file is too large".to_string(),
+        ));
+    }
+    let value = serde_json::to_value(journal)?;
+    write_json_atomically_with_replacer(path, &value, replacer)
+}
+
+fn remove_inflight_artifacts_best_effort(path: &Path) {
+    for candidate in inflight_artifacts(path) {
+        match fs::remove_file(&candidate) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!(
+                "analysis inflight cleanup failed for {}: {error}",
+                candidate.display()
+            ),
+        }
+    }
+}
+
+fn load_inflight_best_effort(analysis_path: &Path) -> Option<AnalysisInflightJournal> {
+    let path = inflight_path(analysis_path);
+    if !path.exists() {
+        for stale in inflight_artifacts(&path).into_iter().skip(1) {
+            let _ = fs::remove_file(stale);
+        }
+        return None;
+    }
+    match read_inflight_strict(&path) {
+        Ok(journal) => Some(journal),
+        Err(error) => {
+            eprintln!("analysis inflight ignored for {}: {error}", path.display());
+            remove_inflight_artifacts_best_effort(&path);
+            None
+        }
+    }
+}
+
 fn migrate_and_load_snapshot(path: &Path) -> AppResult<Option<Value>> {
     let visible = read_valid_snapshot(path);
     if let Ok(Some(value)) = visible {
@@ -939,6 +1119,10 @@ mod tests {
             self.0.join("analysis.json")
         }
 
+        fn inflight_path(&self) -> PathBuf {
+            self.0.join("analysis.inflight.json")
+        }
+
         fn transcript_path(&self) -> PathBuf {
             self.0.join("transcript.srt")
         }
@@ -963,6 +1147,125 @@ mod tests {
                 "revision": revision
             }
         })
+    }
+
+    fn inflight_entry(cue_offset: usize, text: &str) -> AnalysisInflightEntry {
+        AnalysisInflightEntry {
+            cue_offset,
+            subtitle: json!({
+                "index": cue_offset + 1,
+                "time": cue_offset as f64,
+                "endTime": cue_offset as f64 + 1.0,
+                "text": text,
+                "translation": format!("{text}-translated"),
+                "isKeyPoint": false,
+                "highlightWords": {},
+                "keyNotes": {},
+                "highlightTranslations": {}
+            }),
+        }
+    }
+
+    fn inflight_journal(
+        journal_id: &str,
+        start_cue_offset: usize,
+        entries: Vec<AnalysisInflightEntry>,
+    ) -> AnalysisInflightJournal {
+        AnalysisInflightJournal {
+            version: INFLIGHT_VERSION,
+            journal_id: journal_id.to_string(),
+            transcript_generation: "sha256:raw".to_string(),
+            transcript_fingerprint: "sha256:semantic".to_string(),
+            analysis_style: "neutral".to_string(),
+            base_revision: 2,
+            start_cue_offset,
+            end_cue_offset: start_cue_offset + 50,
+            entries,
+        }
+    }
+
+    #[test]
+    fn inflight_valid_round_trip() {
+        let dir = TestDir::new("inflight-round-trip");
+        let path = dir.inflight_path();
+        let expected = inflight_journal(
+            "j1",
+            50,
+            vec![inflight_entry(50, "first"), inflight_entry(51, "second")],
+        );
+
+        write_inflight_at_with_replacer(&path, &expected, replace_analysis_file).unwrap();
+
+        assert_eq!(read_inflight_strict(&path).unwrap(), expected);
+        assert_eq!(
+            load_inflight_best_effort(&dir.analysis_path()),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn inflight_rejects_duplicate_and_out_of_range_offsets() {
+        let dir = TestDir::new("inflight-invalid-offsets");
+        let path = dir.inflight_path();
+
+        let duplicate = inflight_journal(
+            "j1",
+            0,
+            vec![inflight_entry(0, "first"), inflight_entry(0, "again")],
+        );
+        assert!(write_inflight_at_with_replacer(&path, &duplicate, replace_analysis_file).is_err());
+
+        let out_of_range = inflight_journal("j1", 50, vec![inflight_entry(49, "before")]);
+        assert!(
+            write_inflight_at_with_replacer(&path, &out_of_range, replace_analysis_file).is_err()
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn inflight_oversized_file_is_ignored_and_removed() {
+        let dir = TestDir::new("inflight-oversized-file");
+        let path = dir.inflight_path();
+        fs::write(&path, vec![b' '; MAX_INFLIGHT_BYTES as usize + 1]).unwrap();
+        fs::write(path.with_extension("json.tmp"), b"temporary").unwrap();
+        fs::write(path.with_extension("json.bak"), b"backup").unwrap();
+
+        assert_eq!(load_inflight_best_effort(&dir.analysis_path()), None);
+        assert!(!path.exists());
+        assert!(!path.with_extension("json.tmp").exists());
+        assert!(!path.with_extension("json.bak").exists());
+    }
+
+    #[test]
+    fn inflight_rejects_oversized_entry() {
+        let dir = TestDir::new("inflight-oversized-entry");
+        let path = dir.inflight_path();
+        let huge = "x".repeat(MAX_INFLIGHT_ENTRY_BYTES + 1);
+        let journal = inflight_journal("j1", 0, vec![inflight_entry(0, &huge)]);
+
+        assert!(write_inflight_at_with_replacer(&path, &journal, replace_analysis_file).is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn inflight_replacement_failure_preserves_previous_file() {
+        let dir = TestDir::new("inflight-replace-failure");
+        let path = dir.inflight_path();
+        let old = inflight_journal("j1", 0, vec![inflight_entry(0, "old")]);
+        write_inflight_at_with_replacer(&path, &old, replace_analysis_file).unwrap();
+
+        let result = write_inflight_at_with_replacer(
+            &path,
+            &inflight_journal(
+                "j1",
+                0,
+                vec![inflight_entry(0, "old"), inflight_entry(1, "new")],
+            ),
+            |_temporary, _destination| Err(std::io::Error::other("replace failed")),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(read_inflight_strict(&path).unwrap(), old);
     }
 
     fn read(path: &Path) -> Value {

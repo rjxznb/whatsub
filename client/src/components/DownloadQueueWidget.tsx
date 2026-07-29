@@ -5,6 +5,7 @@ import { useDownloadQueue, type QueueItem, type QueuePhase } from "../store/down
 import {
   useBgAnalyses,
   cancelBackground,
+  resumeBackgroundAnalysis,
   type BgAnalysisJob,
 } from "../store/backgroundAnalyses";
 import { syncToCloud } from "../lib/api/librarySync";
@@ -37,17 +38,18 @@ export function FailedActions({
 }) {
   const [loginOpen, setLoginOpen] = useState(false);
   const fe = friendlyError(error, "downloading", sourceValue);
+  const requiredLoginAction = fe.loginRequired ? fe.action : undefined;
   return (
     <span className="ml-auto flex items-center gap-2">
       <span className="text-amber-400 truncate max-w-[160px]" title={error}>
         {fe.title}
       </span>
-      {fe.action && (
+      {requiredLoginAction && (
         <button
           className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px]"
           onClick={() => setLoginOpen(true)}
         >
-          立即登录{fe.action.siteLabel}
+          立即登录{requiredLoginAction.siteLabel}
         </button>
       )}
       {!fe.loginRequired && (
@@ -58,10 +60,10 @@ export function FailedActions({
           重试
         </button>
       )}
-      {fe.action && (
+      {loginOpen && requiredLoginAction && (
         <SiteLoginModal
           open={loginOpen}
-          action={fe.action}
+          action={requiredLoginAction}
           onClose={() => setLoginOpen(false)}
           onSuccess={onRetry}
         />
@@ -104,7 +106,9 @@ type UnifiedItem =
       phase: BgAnalysisJob["phase"];
       percent: number;
       subtitleCount: number;
+      committedCueOffset: number;
       totalCues: number;
+      retryMessage?: string | null;
       error?: string | null;
       startedAt: number;
     };
@@ -136,9 +140,13 @@ export function DownloadQueueWidget() {
       videoId: a.videoId,
       label: a.label,
       phase: a.phase,
-      percent: a.totalCues > 0 ? Math.min(100, (a.subtitleCount / a.totalCues) * 100) : 0,
+      percent: a.totalCues > 0
+        ? Math.min(100, (a.committedCueOffset / a.totalCues) * 100)
+        : 0,
       subtitleCount: a.subtitleCount,
+      committedCueOffset: a.committedCueOffset,
       totalCues: a.totalCues,
+      retryMessage: a.retryMessage,
       error: a.errorMessage,
       startedAt: a.startedAt,
     })),
@@ -189,6 +197,7 @@ export function DownloadQueueWidget() {
                 }}
                 onRetry={() => {
                   if (item.kind === "download") void retryUpload(item.videoId);
+                  else resumeBackgroundAnalysis(item.videoId);
                 }}
               />
             ))}
@@ -278,7 +287,12 @@ function Row({
         )}
         {item.kind === "analysis" && item.phase === "analyzing" && (
           <span className="tabular-nums">
-            {item.subtitleCount}/{item.totalCues} 行
+            已处理 {item.committedCueOffset}/{item.totalCues} 条
+          </span>
+        )}
+        {item.kind === "analysis" && item.phase === "analyzing" && item.retryMessage && (
+          <span className="text-amber-300 truncate" title={item.retryMessage}>
+            {item.retryMessage}
           </span>
         )}
         {item.phase === "error" && item.error && item.kind === "download" && (
@@ -299,9 +313,17 @@ function Row({
           />
         )}
         {item.phase === "error" && item.error && item.kind !== "download" && (
-          <span className="text-amber-400 truncate" title={item.error}>
-            {shortError(item.error)}
-          </span>
+          <>
+            <span className="text-amber-400 truncate" title={item.error}>
+              {shortError(item.error)}
+            </span>
+            <button
+              onClick={onRetry}
+              className="ml-auto px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-[10px]"
+            >
+              继续解析
+            </button>
+          </>
         )}
         {item.phase === "upload_failed" && (
           <button

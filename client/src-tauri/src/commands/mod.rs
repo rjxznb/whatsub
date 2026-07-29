@@ -1,6 +1,7 @@
 pub mod settings;
 pub mod library;
 pub mod analysis;
+pub mod analysis_store;
 pub mod models;
 pub mod import;
 pub mod vocabulary;

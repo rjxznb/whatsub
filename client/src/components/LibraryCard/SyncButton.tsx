@@ -6,6 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useDownloadQueue } from "../../store/downloadQueue";
 import { applyUploadResult } from "../../store/importQueue";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { MONTHLY_PRICE_TEXT } from "../../config/subscriptionPricing";
 
 interface Props {
   entry: LibraryEntry;
@@ -24,6 +25,7 @@ interface DialogState {
 }
 
 export function SyncButton({ entry, onChanged }: Props) {
+  const proMonthly = `${MONTHLY_PRICE_TEXT}/月`;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(entry.syncError ?? null);
   // Themed confirm/notice dialog (replaces the OS-native confirm()).
@@ -71,13 +73,13 @@ export function SyncButton({ entry, onChanged }: Props) {
       setError(friendlySyncError(raw));
       // All three upsells deep-link to the desktop Pro card at /#pro (main
       // site, Alipay-web checkout) — NOT the iOS-only /mobile page. Count,
-      // size, and duration are all subscription-tier capabilities, lifted
-      // unanimously by the same ¥12/月 product.
+      // size, and duration are all subscription-tier capabilities using the
+      // same Pro monthly pricing.
       if (raw.includes("quota_exceeded")) {
         setDialog({
           title: "云端视频已达上限",
           message:
-            "云端视频数量已达免费上限 (3 个)。升级 Pro 会员 (¥12/月) 可解锁到 50 个。",
+            `云端视频数量已达免费上限 (3 个)。升级 Pro 会员 (${proMonthly}) 可解锁到 50 个。`,
           confirmLabel: "前往订阅",
           onConfirm: () =>
             void openUrl("https://whatsub.eversay.cc/#pro").catch(() => {}),
@@ -88,7 +90,7 @@ export function SyncButton({ entry, onChanged }: Props) {
         setDialog({
           title: "视频文件超过上限",
           message:
-            "该视频超过免费版限制 (100MB)。升级 Pro 会员 (¥12/月) 可同步 500MB 的视频。",
+            `该视频超过免费版限制 (100MB)。升级 Pro 会员 (${proMonthly}) 可同步 500MB 的视频。`,
           confirmLabel: "前往订阅",
           onConfirm: () =>
             void openUrl("https://whatsub.eversay.cc/#pro").catch(() => {}),
@@ -98,7 +100,7 @@ export function SyncButton({ entry, onChanged }: Props) {
         setDialog({
           title: "视频时长超过上限",
           message:
-            "该视频超过免费版限制 (20 分钟)。升级 Pro 会员 (¥12/月) 可同步 60 分钟的视频。",
+            `该视频超过免费版限制 (20 分钟)。升级 Pro 会员 (${proMonthly}) 可同步 60 分钟的视频。`,
           confirmLabel: "前往订阅",
           onConfirm: () =>
             void openUrl("https://whatsub.eversay.cc/#pro").catch(() => {}),

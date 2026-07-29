@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import type { Subtitle, AnalysisResult } from "../llm/types";
+import type {
+  AnalysisCheckpoint,
+  AnalysisResult,
+  CheckpointedAnalysis,
+  Subtitle,
+} from "../llm/types";
 
 /** Drop entries that share (time, endTime, text) with a previous one. */
 export function dedupSubtitles(subs: Subtitle[]): Subtitle[] {
@@ -24,13 +29,18 @@ export type AnalysisPhase =
   | "complete"
   | "error";
 
+export type AnalysisErrorStage = "transcription" | "analysis";
+
 interface AnalysisState {
   videoId: string | null;
   phase: AnalysisPhase;
   progressPercent: number;
   subtitles: Subtitle[];
   summary: Omit<AnalysisResult, "subtitles"> | null;
+  checkpoint: AnalysisCheckpoint | null;
   errorMessage: string | null;
+  errorStage: AnalysisErrorStage | null;
+  retryMessage: string | null;
   /** True when the error is a whatSub-relay upsell wall (quota / license) —
    *  ProgressBanner then shows a 「升级 Pro」 CTA next to the message. */
   errorUpsell: boolean;
@@ -40,7 +50,9 @@ interface AnalysisState {
   appendSubtitle: (s: Subtitle) => void;
   setSubtitles: (s: Subtitle[]) => void;
   setSummary: (s: Omit<AnalysisResult, "subtitles">) => void;
-  setError: (msg: string, upsell?: boolean) => void;
+  setCommittedAnalysis: (analysis: CheckpointedAnalysis, totalCues: number) => void;
+  setRetryMessage: (message: string | null) => void;
+  setError: (msg: string, upsell?: boolean, stage?: AnalysisErrorStage) => void;
   updateSubtitle: (idx: number, partial: Partial<Subtitle>) => void;
   deleteSubtitle: (idx: number) => void;
   insertSubtitle: (idx: number, sub: Subtitle) => void;
@@ -54,7 +66,10 @@ export const useAnalysis = create<AnalysisState>((set) => ({
   progressPercent: 0,
   subtitles: [],
   summary: null,
+  checkpoint: null,
   errorMessage: null,
+  errorStage: null,
+  retryMessage: null,
   errorUpsell: false,
 
   startFor: (id) =>
@@ -64,7 +79,10 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       progressPercent: 0,
       subtitles: [],
       summary: null,
+      checkpoint: null,
       errorMessage: null,
+      errorStage: null,
+      retryMessage: null,
       errorUpsell: false,
     }),
   setPhase: (phase, percent) =>
@@ -81,8 +99,25 @@ export const useAnalysis = create<AnalysisState>((set) => ({
     }),
   setSubtitles: (s) => set({ subtitles: dedupSubtitles(s) }),
   setSummary: (s) => set({ summary: s }),
-  setError: (msg, upsell = false) =>
-    set({ phase: "error", errorMessage: msg, errorUpsell: upsell }),
+  setCommittedAnalysis: (analysis, totalCues) =>
+    set({
+      subtitles: dedupSubtitles(analysis.subtitles),
+      summary: { keyPhrases: analysis.keyPhrases },
+      checkpoint: analysis.checkpoint,
+      progressPercent: totalCues > 0
+        ? Math.min(100, (analysis.checkpoint.nextCueOffset / totalCues) * 100)
+        : 100,
+      retryMessage: null,
+    }),
+  setRetryMessage: (retryMessage) => set({ retryMessage }),
+  setError: (msg, upsell = false, stage = "analysis") =>
+    set({
+      phase: "error",
+      errorMessage: msg,
+      errorUpsell: upsell,
+      errorStage: stage,
+      retryMessage: null,
+    }),
   updateSubtitle: (idx, partial) =>
     set((st) => ({
       subtitles: st.subtitles.map((s, i) => (i === idx ? { ...s, ...partial } : s)),
@@ -113,7 +148,10 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       progressPercent: 0,
       subtitles: [],
       summary: null,
+      checkpoint: null,
       errorMessage: null,
+      errorStage: null,
+      retryMessage: null,
       errorUpsell: false,
     }),
 }));

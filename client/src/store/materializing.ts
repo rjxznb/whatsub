@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { materializeFromCloud, friendlySyncError } from "../lib/api/librarySync";
+import { deleteVideoAndInvalidateAnalysis } from "../llm/analysisPersistence";
 import { useLibrary } from "./library";
 
 /**
@@ -72,7 +73,7 @@ export const useMaterializing = create<MaterializingState>((set, get) => ({
         errors: { ...s.errors, [id]: friendlySyncError(String(err)) },
       }));
       try {
-        await invoke("library_delete", { id });
+        await deleteVideoAndInvalidateAnalysis(id);
         await useLibrary.getState().reload();
       } catch {
         // best-effort cleanup — ignore secondary errors

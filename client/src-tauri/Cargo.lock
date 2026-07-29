@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "client"
-version = "0.1.104"
+version = "0.1.105"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -504,6 +504,7 @@ dependencies = [
  "tokio-util",
  "url",
  "whoami",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

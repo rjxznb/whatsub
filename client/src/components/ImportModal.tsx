@@ -8,6 +8,7 @@ import { useSettings } from "../store/settings";
 import { useLibrary } from "../store/library";
 import { useAnalysis } from "../store/analysis";
 import { getTier } from "../llm/modelTiers";
+import { cancelImportAndInvalidateAnalysis } from "../llm/analysisPersistence";
 import type { WhisperModelSize } from "../types/settings";
 import { friendlyError, siteKeyForUrl, loginAction } from "../utils/friendlyError";
 import type { SiteLoginAction } from "../utils/friendlyError";
@@ -221,15 +222,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   } | null>(null);
   const [savingLogin, setSavingLogin] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-  // One automatic login launch per source/site during this modal session.
-  // If fresh cookies still cannot download the video, do not trap the user in
-  // an endless browser → retry → browser loop; show the focused diagnosis and
-  // leave the next login attempt explicit.
-  const autoLoginAttemptedRef = useRef(new Set<string>());
-
-  useEffect(() => {
-    autoLoginAttemptedRef.current.clear();
-  }, [urlValue]);
+  const retryAfterLoginRef = useRef(false);
 
   async function beginSiteLogin(action: SiteLoginAction) {
     setLoginError(null);
@@ -242,6 +235,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           harvestDomains: action.harvestDomains,
         },
       });
+      retryAfterLoginRef.current = true;
       setShowErrorDialog(false);
       setPendingLogin({ key: action.siteKey, label: action.siteLabel });
     } catch (e) {
@@ -261,27 +255,8 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
 
     lastShownErrorRef.current = error;
     console.error("[whatsub import error]", error);
-
-    const fe = friendlyError(
-      error,
-      tab === "url" ? "downloading" : phase,
-      tab === "url" ? urlValue : undefined,
-    );
-    if (tab === "url" && fe.loginRequired && fe.action) {
-      const key = `${urlValue.trim()}\u0000${fe.action.siteKey}`;
-      if (!autoLoginAttemptedRef.current.has(key)) {
-        autoLoginAttemptedRef.current.add(key);
-        setShowErrorDialog(false);
-        void beginSiteLogin(fe.action);
-        return;
-      }
-    }
-
     setShowErrorDialog(true);
-    // beginSiteLogin intentionally omitted: this effect is driven only by a
-    // newly-arrived raw error, not by function identity on each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [error, phase, tab, urlValue]);
+  }, [error]);
 
   // submit() is defined further down + captures form state via closure;
   // we ref it so the site-login-success listener (mounted once with
@@ -289,10 +264,22 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // from the first render.
   const submitRef = useRef<() => Promise<void>>(async () => {});
 
+  function restoreDiagnosisAfterLoginCancel() {
+    retryAfterLoginRef.current = false;
+    setPendingLogin(null);
+    setSavingLogin(false);
+    setLoginError(null);
+    setSubmitting(false);
+    setShowErrorDialog(true);
+  }
+
   useEffect(() => {
     const unlistens: Array<() => void> = [];
+    let disposed = false;
     void Promise.all([
       listen("site-login-success", () => {
+        if (!retryAfterLoginRef.current) return;
+        retryAfterLoginRef.current = false;
         setPendingLogin(null);
         setSavingLogin(false);
         setLoginError(null);
@@ -300,13 +287,21 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         // Auto-retry the original import. Cookies are now in the jar
         // so yt-dlp will pick them up on the next invocation.
         void submitRef.current();
-      }).then((un) => unlistens.push(un)),
+      }).then((un) => {
+        if (disposed) un();
+        else unlistens.push(un);
+      }),
       listen("site-login-cancelled", () => {
-        setPendingLogin(null);
-        setSavingLogin(false);
-      }).then((un) => unlistens.push(un)),
+        if (!retryAfterLoginRef.current) return;
+        restoreDiagnosisAfterLoginCancel();
+      }).then((un) => {
+        if (disposed) un();
+        else unlistens.push(un);
+      }),
     ]);
     return () => {
+      disposed = true;
+      retryAfterLoginRef.current = false;
       unlistens.forEach((u) => u());
     };
   }, []);
@@ -324,14 +319,12 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   }
 
   async function cancelLoginInModal() {
+    restoreDiagnosisAfterLoginCancel();
     try {
       await invoke("site_login_cancel");
     } catch {
       // ignore — even if cancel fails, we still want to clear UI state
     }
-    setPendingLogin(null);
-    setSavingLogin(false);
-    setLoginError(null);
   }
 
   // Esc dismisses overlays in priority order: error dialog → close modal.
@@ -346,8 +339,9 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       if (showErrorDialog) {
         setShowErrorDialog(false);
       } else {
-        void cancelInFlight();
-        onClose();
+        void (async () => {
+          if (await cancelInFlight()) onClose();
+        })();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -368,15 +362,52 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // we can call cancel_import on Esc / ✕ / 取消 — Rust computes the id
   // (sha256/youtube id/url hash) and we don't replicate that logic JS-side.
   const currentVideoIdRef = useRef<string | null>(null);
-  async function cancelInFlight(): Promise<void> {
-    const id = currentVideoIdRef.current;
-    if (!id) return;
-    try {
-      await invoke("cancel_import", { videoId: id });
-    } catch (e) {
-      console.warn("cancel_import failed", e);
-    }
-    currentVideoIdRef.current = null;
+  const videoIdWaiterRef = useRef<((id: string) => void) | null>(null);
+  const cancelPromiseRef = useRef<Promise<boolean> | null>(null);
+  const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  function waitForCurrentVideoId(): Promise<string | null> {
+    if (currentVideoIdRef.current) return Promise.resolve(currentVideoIdRef.current);
+    return new Promise((resolve) => {
+      const finish = (id: string | null) => {
+        if (videoIdWaiterRef.current === onVideoId) {
+          videoIdWaiterRef.current = null;
+        }
+        clearTimeout(timeoutId);
+        resolve(id);
+      };
+      const onVideoId = (id: string) => finish(id);
+      const timeoutId = window.setTimeout(() => finish(null), 3_000);
+      videoIdWaiterRef.current = onVideoId;
+    });
+  }
+
+  function cancelInFlight(): Promise<boolean> {
+    if (cancelPromiseRef.current) return cancelPromiseRef.current;
+
+    const promise = (async () => {
+      setCanceling(true);
+      setCancelError(null);
+      try {
+        const id = await waitForCurrentVideoId();
+        if (!id) {
+          throw new Error("尚未取得任务编号，请稍候再试");
+        }
+        await cancelImportAndInvalidateAnalysis(id);
+        currentVideoIdRef.current = null;
+        return true;
+      } catch (e) {
+        console.warn("cancel_import failed", e);
+        setCancelError(`停止失败：${String(e)}`);
+        return false;
+      } finally {
+        setCanceling(false);
+        cancelPromiseRef.current = null;
+      }
+    })();
+    cancelPromiseRef.current = promise;
+    return promise;
   }
   // Monotonic id source for log lines. Increments on every push so
   // simultaneous log events get distinct React keys.
@@ -405,6 +436,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       // cancellation robust no matter which event arrives first.
       if ("video_id" in ev && ev.video_id) {
         currentVideoIdRef.current = ev.video_id;
+        videoIdWaiterRef.current?.(ev.video_id);
       }
       switch (ev.stage) {
         case "Started":
@@ -922,17 +954,30 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
               phase === "transcribing") && (
               <button
                 type="button"
+                disabled={canceling}
                 onClick={() => {
-                  void cancelInFlight();
-                  onClose();
+                  void (async () => {
+                    if (await cancelInFlight()) onClose();
+                  })();
                 }}
-                className="text-zinc-500 hover:text-zinc-200 text-xl leading-none px-2 -mr-2"
-                title="取消下载 (Esc)"
+                className="text-zinc-500 hover:text-zinc-200 disabled:opacity-50 text-xl leading-none px-2 -mr-2"
+                title={canceling ? "正在取消…" : "取消下载 (Esc)"}
               >
                 ×
               </button>
             )}
           </div>
+
+          {canceling && (
+            <div role="status" className="mb-3 text-sm text-amber-300">
+              正在停止并清理…
+            </div>
+          )}
+          {cancelError && (
+            <div role="alert" className="mb-3 text-sm text-red-300">
+              {cancelError}
+            </div>
+          )}
 
           <div className="space-y-3">
             {visiblePhases.map((p) => {

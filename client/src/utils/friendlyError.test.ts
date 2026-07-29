@@ -61,4 +61,28 @@ describe("friendlyError download diagnosis", () => {
     expect(result.retryable).toBe(true);
     expect(result.title).toBe("无法访问视频网站");
   });
+
+  it("classifies every yt-dlp Unsupported URL as an unsupported link", () => {
+    const result = friendlyError(
+      "ERROR: Unsupported URL: https://music.apple.com/cn/station/example",
+      "downloading",
+      "https://music.apple.com/cn/station/example",
+    );
+
+    expect(result.title).toBe("不支持该链接");
+    expect(result.action).toBeUndefined();
+    expect(result.retryable).not.toBe(true);
+    expect(result.generic).not.toBe(true);
+  });
+
+  it("does not suggest login when a known-site URL is explicitly unsupported", () => {
+    const result = friendlyError(
+      "ERROR: Unsupported URL: https://www.youtube.com/custom/unsupported",
+      "downloading",
+      "https://www.youtube.com/custom/unsupported",
+    );
+
+    expect(result.title).toBe("不支持该链接");
+    expect(result.action).toBeUndefined();
+  });
 });

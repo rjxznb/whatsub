@@ -12,6 +12,12 @@ pub enum AppError {
     #[error("subprocess failed: {0}")]
     Subprocess(String),
 
+    /// A kill request was sent, but the shell event stream ended or timed out
+    /// before reporting `Terminated` for that exact child. Callers must keep
+    /// the same-video job fenced because the process may still be alive.
+    #[error("sidecar shutdown was not confirmed: {0}")]
+    SidecarShutdownUnconfirmed(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 

@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { cancelImportAndInvalidateAnalysis } from "../llm/analysisPersistence";
 
 /**
  * Global background-download queue. Tracks every import_video call
@@ -54,8 +54,8 @@ interface DownloadQueueState {
   update: (videoId: string, partial: Partial<QueueItem>) => void;
   /** Remove an entry (after completion, user-cancel, or dismiss). */
   remove: (videoId: string) => void;
-  /** Cancel an active import: optimistically drops the entry and fires
-   *  cancel_import on the Rust side. */
+  /** Cancel an active import. The entry is removed only after Rust confirms
+   *  that the child process exited and partial files were cleaned. */
   cancel: (videoId: string) => Promise<void>;
 }
 
@@ -81,11 +81,12 @@ export const useDownloadQueue = create<DownloadQueueState>((set, get) => ({
     }),
 
   cancel: async (videoId) => {
-    get().remove(videoId);
     try {
-      await invoke("cancel_import", { videoId });
+      await cancelImportAndInvalidateAnalysis(videoId);
+      get().remove(videoId);
     } catch (e) {
       console.warn("cancel_import (queue) failed", e);
+      get().update(videoId, { phase: "error", error: String(e) });
     }
   },
 }));

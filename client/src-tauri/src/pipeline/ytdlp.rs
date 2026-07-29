@@ -1,7 +1,9 @@
 use crate::commands::yt_dlp::resolve_appdata_yt_dlp;
 use crate::core::progress::{emit, PipelineEvent};
 use crate::error::AppResult;
-use crate::pipeline::spawn::{run_external_with_callback, run_sidecar_env};
+use crate::pipeline::spawn::{
+    run_external_with_callback, run_sidecar_env, OutputStream, StallWatch,
+};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
@@ -155,22 +157,22 @@ fn yt_dlp_format(quality: &str) -> &'static str {
     match quality {
         "low" => "bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]\
                   /bv*[ext=mp4][height<=480]+ba[ext=m4a]\
-                  /bv*[height<=480]+ba[ext!=webm]\
+                  /bv*[height<=480]+ba[acodec^=mp4a]\
                   /best[height<=480]/best",
         "high" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
-                   /bv*[height<=1080]+ba[ext!=webm]\
+                   /bv*[height<=1080]+ba[acodec^=mp4a]\
                    /best[height<=1080]/best",
         "best" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
-                   /bv*[height<=1080]+ba[ext!=webm]\
+                   /bv*[height<=1080]+ba[acodec^=mp4a]\
                    /best[height<=1080]/best",
         // "standard" (720p) is the default — chosen because subtitle learning
         // doesn't need 1080p+ and 720p downloads are 2-4× faster on most
         // connections. Anything unrecognized also lands here.
         _ => "bv*[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]\
               /bv*[ext=mp4][height<=720]+ba[ext=m4a]\
-              /bv*[height<=720]+ba[ext!=webm]\
+              /bv*[height<=720]+ba[acodec^=mp4a]\
               /best[height<=720]/best",
     }
 }
@@ -323,12 +325,11 @@ pub async fn download(
         // (= AAC) for >99% of videos, the transcode was never needed
         // there and only created risk.
         //
-        // Tier 3 uses `ba[ext!=webm]` specifically to avoid selecting
-        // Opus-in-WebM audio: the MP4 muxer rejects Opus with `-c:a
-        // copy`, producing "Postprocessing: Conversion failed!" even
-        // though the download itself succeeded. Filtering out webm
-        // forces a fall-through to `best` (pre-merged stream) when
-        // only Opus audio is available — no merge step, no failure.
+        // Tier 3 constrains the audio codec directly to MP4-compatible
+        // AAC (`mp4a`). Merely excluding WebM is insufficient because a
+        // different container can still carry a codec that the MP4 muxer
+        // rejects with `-c:a copy`. If no compatible separate audio exists,
+        // the selector falls through to a pre-merged `best` stream.
         "--postprocessor-args".into(),
         "Merger:-c:v copy -c:a copy".into(),
         "-o".into(),
@@ -439,15 +440,20 @@ pub async fn download(
             );
         };
 
-        // Stall watchdog progress counter — bumped on each parsed progress
-        // line. The spawn loop arms a watchdog on it (once it first moves) and
-        // kills + we resume if it stops advancing mid-download.
+        // The watchdog observes parsed progress while downloading, then the
+        // growing source.temp.mp4 once yt-dlp announces its ffmpeg merge phase.
         let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let progress_count_cb = progress_count.clone();
+        let stall_watch = StallWatch::with_merge_output(
+            progress_count.clone(),
+            merge_temp_path(Path::new(&video_path)),
+        );
+        let stall_watch_cb = stall_watch.clone();
+        let mut merge_start_detector = MergeStartDetector::default();
         // Common stderr callback for both the bundled-sidecar path and
         // the AppData-direct path. Defined here so it's identical in
         // semantics (logs / progress / sub-step detection).
-        let callback = move |chunk: &str| {
+        let callback = move |stream: OutputStream, chunk: &str| {
             // run_sidecar hands us raw stderr CHUNKS (possibly
             // multi-line). emit_log already iterates `.lines()`
             // internally; parse_progress needs the same — its
@@ -458,6 +464,9 @@ pub async fn download(
             // is lost, so the UI never leaves "准备中" until
             // ExtractingAudio fires.
             emit_log(chunk);
+            if observe_merge_chunk(&mut merge_start_detector, stream, chunk) {
+                stall_watch_cb.mark_merging();
+            }
             for actual_line in chunk.lines() {
                 if let Some(step) = detect_prepare_step(actual_line) {
                     emit_step(step);
@@ -510,7 +519,7 @@ pub async fn download(
             run_external_with_callback(
                 &appdata_path,
                 &arg_refs,
-                Some(progress_count.clone()),
+                Some(stall_watch),
                 true,
                 callback,
                 cancel,
@@ -522,7 +531,7 @@ pub async fn download(
                 "yt-dlp",
                 &arg_refs,
                 &[],
-                Some(progress_count.clone()),
+                Some(stall_watch),
                 true,
                 callback,
                 cancel,
@@ -558,9 +567,13 @@ pub async fn download(
                 // re-downloading; only the merge step must re-run. If the
                 // stall was during download (case 1), the .part file is
                 // intact and --continue resumes normally.
-                if msg.contains("stalled") && stall_retries < STALL_MAX_RETRIES {
+                if prepare_stall_retry(
+                    &msg,
+                    stall_retries,
+                    STALL_MAX_RETRIES,
+                    Path::new(&video_path),
+                ) {
                     stall_retries += 1;
-                    let _ = std::fs::remove_file(&video_path);
                     emit(
                         app,
                         PipelineEvent::Log {
@@ -646,6 +659,84 @@ pub async fn download(
         title,
         duration_sec: duration,
     })
+}
+
+/// yt-dlp's stable machine prefix for the start of an ffmpeg merge. The
+/// output path and quoting differ by platform, so neither is part of the
+/// match contract.
+fn is_merge_start_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("[Merger]") && trimmed.contains("Merging formats into")
+}
+
+/// Match yt-dlp's `prepend_extension(filename, "temp")` naming used by
+/// `FFmpegMergerPP`: `source.mp4` becomes `source.temp.mp4`.
+fn merge_temp_path(output: &Path) -> PathBuf {
+    let mut extension = std::ffi::OsString::from("temp");
+    if let Some(original) = output.extension() {
+        extension.push(".");
+        extension.push(original);
+    }
+    output.with_extension(extension)
+}
+
+#[derive(Default)]
+struct MergeStartDetector {
+    pending: String,
+}
+
+impl MergeStartDetector {
+    fn push(&mut self, chunk: &str) -> bool {
+        self.pending.push_str(chunk);
+
+        while let Some(newline) = self.pending.find('\n') {
+            let line = self.pending[..newline].to_string();
+            self.pending.drain(..=newline);
+            if is_merge_start_line(&line) {
+                return true;
+            }
+        }
+
+        if is_merge_start_line(&self.pending) {
+            self.pending.clear();
+            return true;
+        }
+
+        const MAX_PENDING_BYTES: usize = 512;
+        if self.pending.len() > MAX_PENDING_BYTES {
+            let mut keep_from = self.pending.len() - MAX_PENDING_BYTES;
+            while !self.pending.is_char_boundary(keep_from) {
+                keep_from += 1;
+            }
+            self.pending.drain(..keep_from);
+        }
+        false
+    }
+}
+
+fn observe_merge_chunk(
+    detector: &mut MergeStartDetector,
+    stream: OutputStream,
+    chunk: &str,
+) -> bool {
+    stream == OutputStream::Stdout && detector.push(chunk)
+}
+
+/// Prepare a retry after the spawn watchdog kills a stalled process.
+/// Both the temporary and final merge outputs are removed; yt-dlp's `.part`
+/// and fragment cache remain available for `--continue` on the next attempt.
+fn prepare_stall_retry(
+    message: &str,
+    retries: u32,
+    max_retries: u32,
+    output: &Path,
+) -> bool {
+    if !message.contains("stalled") || retries >= max_retries {
+        return false;
+    }
+    let _ = std::fs::remove_file(merge_temp_path(output));
+    let _ = std::fs::remove_file(output);
+    true
 }
 
 /// Stderr-substring match for yt-dlp errors that are likely to succeed
@@ -756,6 +847,121 @@ fn parse_progress(line: &str) -> Option<DownloadProgress> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "whatsub-ytdlp-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn detects_yt_dlp_merger_start() {
+        assert!(is_merge_start_line(
+            "[Merger] Merging formats into \"source.mp4\""
+        ));
+        assert!(!is_merge_start_line("[download] 100% of 42MiB"));
+        assert!(!is_merge_start_line(
+            "[Merger] Fixing MPEG-TS in MP4 container of source.mp4"
+        ));
+    }
+
+    #[test]
+    fn detects_merger_start_split_across_output_chunks() {
+        let mut detector = MergeStartDetector::default();
+        assert!(!detector.push("[download] 100%\n[Merger] Merg"));
+        assert!(detector.push("ing formats into \"source.mp4\"\n"));
+    }
+
+    #[test]
+    fn stderr_does_not_corrupt_split_stdout_merger_line() {
+        let mut detector = MergeStartDetector::default();
+        assert!(!observe_merge_chunk(
+            &mut detector,
+            OutputStream::Stdout,
+            "[Merger] Merg"
+        ));
+        assert!(!observe_merge_chunk(
+            &mut detector,
+            OutputStream::Stderr,
+            "WARNING: unrelated stderr\n"
+        ));
+        assert!(observe_merge_chunk(
+            &mut detector,
+            OutputStream::Stdout,
+            "ing formats into \"source.mp4\"\n"
+        ));
+    }
+
+    #[test]
+    fn stall_retry_removes_merge_outputs_but_preserves_fragments() {
+        let dir = unique_temp_dir("stall-cleanup");
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("source.mp4");
+        let merge_temp = dir.join("source.temp.mp4");
+        let part = dir.join("source.f137.mp4.part");
+        std::fs::write(&output, b"partial merge").unwrap();
+        std::fs::write(&merge_temp, b"ffmpeg partial merge").unwrap();
+        std::fs::write(&part, b"download cache").unwrap();
+
+        assert!(prepare_stall_retry("yt-dlp stalled", 0, 5, &output));
+        assert!(!output.exists());
+        assert!(!merge_temp.exists());
+        assert!(part.exists());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn merge_temp_path_matches_yt_dlp_prepend_extension() {
+        assert_eq!(
+            merge_temp_path(Path::new("downloads/source.mp4")),
+            PathBuf::from("downloads/source.temp.mp4")
+        );
+        assert_eq!(
+            merge_temp_path(Path::new("downloads/source")),
+            PathBuf::from("downloads/source.temp")
+        );
+    }
+
+    #[test]
+    fn non_stall_does_not_remove_output() {
+        let dir = unique_temp_dir("non-stall-cleanup");
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("source.mp4");
+        std::fs::write(&output, b"keep me").unwrap();
+
+        assert!(!prepare_stall_retry("connection reset", 0, 5, &output));
+        assert!(output.exists());
+        assert!(!prepare_stall_retry("yt-dlp stalled", 5, 5, &output));
+        assert!(output.exists());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn all_quality_formats_require_mp4_compatible_separate_audio() {
+        for quality in ["low", "standard", "high", "best"] {
+            let format = yt_dlp_format(quality);
+            assert!(
+                !format.contains("ext!=webm"),
+                "{quality} still relies on a container exclusion: {format}"
+            );
+            for term in format.split('/') {
+                if term.contains("+ba") {
+                    assert!(
+                        term.contains("ba[ext=m4a]")
+                            || term.contains("ba[acodec^=mp4a]"),
+                        "{quality} has an unconstrained separate-audio term: {term}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn parses_full_progress_line() {

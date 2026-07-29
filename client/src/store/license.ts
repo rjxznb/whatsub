@@ -124,7 +124,7 @@ export const useLicense = create<LicenseStore>((set, get) => ({
       }
 
       // No license — try subscription before falling into trial. A pure
-      // subscriber (Alipay 时段会员, iOS 自动续费, 网站 ¥22/月) gets
+      // subscriber (Alipay 时段会员, iOS 自动续费, 网站 Pro 月订阅) gets
       // SUB_ACTIVE which is functionally equivalent to ACTIVE; the gate
       // shows a small "订阅中" pill instead of the trial countdown.
       //

@@ -13,6 +13,7 @@ export interface ProviderRequest {
  */
 export interface Provider {
   stream(req: ProviderRequest): AsyncIterable<string>;
+  retryProfile?: "deepseek-analysis";
 }
 
 export type ProviderFactory = (settings: Settings) => Provider;

@@ -74,3 +74,4 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = ["c
 # silently in the background.
 tokio-util = "0.7"
 base64 = "0.22.1"
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

@@ -1,5 +1,5 @@
 use crate::error::{AppError, AppResult};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::process::CommandEvent;
@@ -13,6 +13,117 @@ use tokio_util::sync::CancellationToken;
 /// disabled (the default for ffmpeg + other sidecars).
 pub type StallCounter = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StallPhase {
+    Preparing,
+    Downloading,
+    Merging,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StallSnapshot {
+    phase: StallPhase,
+    activity: u64,
+}
+
+/// Cloneable liveness probe consumed by the generic spawn loops.
+/// Whisper uses progress-only mode; yt-dlp can switch to observing merge
+/// output growth after its download phase completes.
+#[derive(Clone)]
+pub struct StallWatch {
+    progress: StallCounter,
+    merge_output: Option<PathBuf>,
+    merging: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StallWatch {
+    pub fn progress_only(progress: StallCounter) -> Self {
+        Self {
+            progress,
+            merge_output: None,
+            merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn with_merge_output(progress: StallCounter, merge_output: PathBuf) -> Self {
+        Self {
+            progress,
+            merge_output: Some(merge_output),
+            merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn mark_merging(&self) {
+        self.merging
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> StallSnapshot {
+        if self.merging.load(std::sync::atomic::Ordering::Relaxed) {
+            let activity = self
+                .merge_output
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|meta| meta.len())
+                .unwrap_or(0);
+            StallSnapshot {
+                phase: StallPhase::Merging,
+                activity,
+            }
+        } else {
+            let activity = self.progress.load(std::sync::atomic::Ordering::Relaxed);
+            StallSnapshot {
+                phase: if activity == 0 {
+                    StallPhase::Preparing
+                } else {
+                    StallPhase::Downloading
+                },
+                activity,
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct StallTracker {
+    last_phase: Option<StallPhase>,
+    last_activity: u64,
+    stale_ticks: u32,
+}
+
+impl StallTracker {
+    fn observe(&mut self, snapshot: StallSnapshot) -> bool {
+        if snapshot.phase == StallPhase::Preparing {
+            self.last_phase = None;
+            self.last_activity = 0;
+            self.stale_ticks = 0;
+            return false;
+        }
+
+        if self.last_phase != Some(snapshot.phase) {
+            self.last_phase = Some(snapshot.phase);
+            self.last_activity = snapshot.activity;
+            self.stale_ticks = 0;
+            return false;
+        }
+
+        if snapshot.activity != self.last_activity {
+            self.last_activity = snapshot.activity;
+            self.stale_ticks = 0;
+            return false;
+        }
+
+        self.stale_ticks += 1;
+        self.stale_ticks >= STALL_MAX_TICKS
+    }
+}
+
 // Stall watchdog tuning. The watchdog ARMS only after the counter first moves
 // (download actually started), so the legitimately-silent, sometimes
 // minutes-long sigsolver / 准备中 phase is never killed. Once armed, if the
@@ -21,6 +132,10 @@ pub type StallCounter = std::sync::Arc<std::sync::atomic::AtomicU64>;
 // and resume from the .part (yt-dlp --continue).
 const STALL_TICK_SECS: u64 = 15;
 const STALL_MAX_TICKS: u32 = 8; // 8 × 15s = 120s of zero progress → stalled
+
+pub(crate) fn is_sidecar_shutdown_unconfirmed(error: &AppError) -> bool {
+    matches!(error, AppError::SidecarShutdownUnconfirmed(_))
+}
 
 /// Run a sidecar to completion, capturing stdout. Streams stderr to a callback
 /// for progress parsing AND retains a tail buffer that gets included in the
@@ -35,7 +150,7 @@ pub async fn run_sidecar<F>(
     app: &AppHandle,
     bin_name: &str,
     args: &[&str],
-    on_stderr_line: F,
+    mut on_stderr_line: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
@@ -48,15 +163,16 @@ where
         &[],
         None,
         false,
-        on_stderr_line,
+        move |_stream, chunk| on_stderr_line(chunk),
         cancel,
     )
     .await
 }
 
 /// Like [`run_sidecar`] but injects extra environment variables into the child
-/// process. `stream_stdout` additionally sends stdout chunks to the same callback
-/// while still retaining them in the returned string. Used by yt-dlp because its
+/// process. `stream_stdout` additionally sends stdout chunks to the callback
+/// with an [`OutputStream`] tag while still retaining them in the returned
+/// string. Used by yt-dlp because its
 /// normal extraction/progress messages are stdout, while warnings/errors are
 /// stderr. Whisper keeps this disabled because its callback contract is stderr.
 /// The extra environment is used by whisper.rs to pin the Vulkan device via
@@ -67,13 +183,13 @@ pub async fn run_sidecar_env<F>(
     bin_name: &str,
     args: &[&str],
     extra_env: &[(&str, &str)],
-    stall: Option<StallCounter>,
+    stall: Option<StallWatch>,
     stream_stdout: bool,
     mut on_output: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
-    F: FnMut(&str),
+    F: FnMut(OutputStream, &str),
 {
     let mut cmd = app
         .shell()
@@ -117,8 +233,7 @@ where
     let stall_enabled = stall.is_some();
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(STALL_TICK_SECS));
     ticker.tick().await; // consume the immediate first tick
-    let mut last_count = 0u64;
-    let mut stale_ticks = 0u32;
+    let mut stall_tracker = StallTracker::default();
 
     // Main event loop. Watch child output, the cancel token (so a ✕ click kills
     // the child immediately), AND the stall watchdog tick.
@@ -132,27 +247,20 @@ where
         tokio::select! {
             biased;
             _ = cancel_fut => {
-                // Best-effort kill — the child may already have exited.
+                // `CommandChild::kill` only sends the termination request.
+                // Keep the job registered until this exact sidecar confirms
+                // that it has actually exited.
                 let _ = child.kill();
+                wait_for_sidecar_shutdown(&mut rx).await?;
                 cancelled = true;
                 break;
             }
             _ = ticker.tick(), if stall_enabled => {
-                let c = stall.as_ref().unwrap().load(std::sync::atomic::Ordering::Relaxed);
-                // Only arm once progress has started (c > 0) — never kill the
-                // silent sigsolver/准备中 phase.
-                if c > 0 {
-                    if c == last_count {
-                        stale_ticks += 1;
-                    } else {
-                        stale_ticks = 0;
-                        last_count = c;
-                    }
-                    if stale_ticks >= STALL_MAX_TICKS {
-                        let _ = child.kill();
-                        stalled = true;
-                        break;
-                    }
+                if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
+                    let _ = child.kill();
+                    wait_for_sidecar_shutdown(&mut rx).await?;
+                    stalled = true;
+                    break;
                 }
             }
             ev = rx.recv() => {
@@ -226,8 +334,32 @@ where
     }
 }
 
+async fn wait_for_sidecar_shutdown(
+    rx: &mut tauri::async_runtime::Receiver<CommandEvent>,
+) -> AppResult<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match rx.recv().await {
+                Some(CommandEvent::Terminated(_)) => return Ok(()),
+                None => {
+                    return Err(AppError::SidecarShutdownUnconfirmed(
+                        "event channel closed before Terminated".to_string(),
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        AppError::SidecarShutdownUnconfirmed(
+            "no Terminated event within 10s".to_string(),
+        )
+    })?
+}
+
 /// Returns true when the event loop should exit (Terminated arrived).
-fn handle_event<F: FnMut(&str)>(
+fn handle_event<F: FnMut(OutputStream, &str)>(
     event: CommandEvent,
     stdout: &mut String,
     stderr_tail: &mut std::collections::VecDeque<String>,
@@ -241,13 +373,13 @@ fn handle_event<F: FnMut(&str)>(
             let chunk = String::from_utf8_lossy(&bytes).to_string();
             stdout.push_str(&chunk);
             if stream_stdout {
-                on_output(&chunk);
+                on_output(OutputStream::Stdout, &chunk);
             }
             false
         }
         CommandEvent::Stderr(bytes) => {
             let chunk = String::from_utf8_lossy(&bytes).to_string();
-            on_output(&chunk);
+            on_output(OutputStream::Stderr, &chunk);
             for line in chunk.lines() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
@@ -280,13 +412,13 @@ fn handle_event<F: FnMut(&str)>(
 pub async fn run_external_with_callback<F>(
     exe: &Path,
     args: &[&str],
-    stall: Option<StallCounter>,
+    stall: Option<StallWatch>,
     stream_stdout: bool,
     mut on_output: F,
     cancel: Option<&CancellationToken>,
 ) -> AppResult<String>
 where
-    F: FnMut(&str),
+    F: FnMut(OutputStream, &str),
 {
     let mut cmd = tokio::process::Command::new(exe);
     cmd.args(args)
@@ -319,8 +451,7 @@ where
     let stall_enabled = stall.is_some();
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(STALL_TICK_SECS));
     ticker.tick().await; // consume the immediate first tick
-    let mut last_count = 0u64;
-    let mut stale_ticks = 0u32;
+    let mut stall_tracker = StallTracker::default();
 
     // Read both pipes concurrently, watch for cancellation, until both
     // are EOF (which happens when the child exits). Then child.wait()
@@ -342,22 +473,13 @@ where
                 return Err(AppError::Cancelled);
             }
             _ = ticker.tick(), if stall_enabled => {
-                let c = stall.as_ref().unwrap().load(std::sync::atomic::Ordering::Relaxed);
-                if c > 0 {
-                    if c == last_count {
-                        stale_ticks += 1;
-                    } else {
-                        stale_ticks = 0;
-                        last_count = c;
-                    }
-                    if stale_ticks >= STALL_MAX_TICKS {
-                        let _ = child.kill().await;
-                        return Err(AppError::Subprocess(format!(
-                            "{} stalled — no progress for ~{}s",
-                            exe.display(),
-                            STALL_TICK_SECS * STALL_MAX_TICKS as u64
-                        )));
-                    }
+                if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
+                    let _ = child.kill().await;
+                    return Err(AppError::Subprocess(format!(
+                        "{} stalled — no progress for ~{}s",
+                        exe.display(),
+                        STALL_TICK_SECS * STALL_MAX_TICKS as u64
+                    )));
                 }
             }
             r = stdout.read(&mut buf_out), if !stdout_done => {
@@ -367,7 +489,7 @@ where
                         stdout_buf.extend_from_slice(&buf_out[..n]);
                         if stream_stdout {
                             let chunk = String::from_utf8_lossy(&buf_out[..n]).to_string();
-                            on_output(&chunk);
+                            on_output(OutputStream::Stdout, &chunk);
                         }
                     },
                     Err(_) => stdout_done = true,
@@ -378,7 +500,7 @@ where
                     Ok(0) => stderr_done = true,
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf_err[..n]).to_string();
-                        on_output(&chunk);
+                        on_output(OutputStream::Stderr, &chunk);
                         for line in chunk.lines() {
                             let t = line.trim();
                             if t.is_empty() { continue; }
@@ -430,11 +552,134 @@ where
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn sidecar_shutdown_waits_for_the_terminated_event() {
+        let (tx, mut rx) = tauri::async_runtime::channel(2);
+        let mut waiting = Box::pin(wait_for_sidecar_shutdown(&mut rx));
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+
+        tx.send(CommandEvent::Terminated(
+            tauri_plugin_shell::process::TerminatedPayload {
+                code: None,
+                signal: Some(9),
+            },
+        ))
+        .await
+        .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn closed_sidecar_event_channel_is_not_exit_confirmation() {
+        let (tx, mut rx) = tauri::async_runtime::channel(1);
+        drop(tx);
+
+        let error = wait_for_sidecar_shutdown(&mut rx).await.unwrap_err();
+
+        assert!(is_sidecar_shutdown_unconfirmed(&error));
+        assert!(error.to_string().contains("closed before Terminated"));
+    }
+
+    fn snapshot(phase: StallPhase, activity: u64) -> StallSnapshot {
+        StallSnapshot { phase, activity }
+    }
+
+    #[test]
+    fn preparing_never_stalls() {
+        let mut tracker = StallTracker::default();
+
+        for _ in 0..(STALL_MAX_TICKS * 2) {
+            assert!(!tracker.observe(snapshot(StallPhase::Preparing, 0)));
+        }
+    }
+
+    #[test]
+    fn downloading_stalls_after_eight_unchanged_samples() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+        }
+        assert!(tracker.observe(snapshot(StallPhase::Downloading, 1)));
+    }
+
+    #[test]
+    fn merge_growth_resets_stale_samples() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+        }
+
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 20)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 20)));
+        }
+    }
+
+    #[test]
+    fn merge_stalls_after_eight_unchanged_sizes() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 10)));
+        }
+        assert!(tracker.observe(snapshot(StallPhase::Merging, 10)));
+    }
+
+    #[test]
+    fn phase_change_resets_the_baseline() {
+        let mut tracker = StallTracker::default();
+        assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Downloading, 1)));
+        }
+
+        assert!(!tracker.observe(snapshot(StallPhase::Merging, 0)));
+        for _ in 0..(STALL_MAX_TICKS - 1) {
+            assert!(!tracker.observe(snapshot(StallPhase::Merging, 0)));
+        }
+        assert!(tracker.observe(snapshot(StallPhase::Merging, 0)));
+    }
+
+    #[test]
+    fn filesystem_backed_watch_observes_merge_file_growth() {
+        let path = std::env::temp_dir().join(format!(
+            "whatsub-stall-watch-{}-{}.temp.mp4",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let watch = StallWatch::with_merge_output(counter, path.clone());
+
+        assert_eq!(watch.snapshot().phase, StallPhase::Preparing);
+        watch.mark_merging();
+        assert_eq!(watch.snapshot().activity, 0);
+        std::fs::write(&path, b"12345").unwrap();
+        assert_eq!(watch.snapshot().activity, 5);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn stdout_is_retained_and_streamed_when_enabled() {
         let mut stdout = String::new();
         let mut stderr_tail = std::collections::VecDeque::new();
-        let mut streamed = Vec::<String>::new();
+        let mut streamed = Vec::<(OutputStream, String)>::new();
         let mut exit_code = None;
 
         let terminated = handle_event(
@@ -443,13 +688,19 @@ mod tests {
             &mut stderr_tail,
             20,
             true,
-            &mut |chunk| streamed.push(chunk.to_string()),
+            &mut |stream, chunk| streamed.push((stream, chunk.to_string())),
             &mut exit_code,
         );
 
         assert!(!terminated);
         assert_eq!(stdout, "[youtube] Downloading webpage\n");
-        assert_eq!(streamed, vec!["[youtube] Downloading webpage\n"]);
+        assert_eq!(
+            streamed,
+            vec![(
+                OutputStream::Stdout,
+                "[youtube] Downloading webpage\n".to_string()
+            )]
+        );
         assert!(stderr_tail.is_empty());
     }
 
@@ -457,7 +708,7 @@ mod tests {
     fn stdout_is_only_retained_when_streaming_is_disabled() {
         let mut stdout = String::new();
         let mut stderr_tail = std::collections::VecDeque::new();
-        let mut streamed = Vec::<String>::new();
+        let mut streamed = Vec::<(OutputStream, String)>::new();
         let mut exit_code = None;
 
         handle_event(
@@ -466,7 +717,7 @@ mod tests {
             &mut stderr_tail,
             20,
             false,
-            &mut |chunk| streamed.push(chunk.to_string()),
+            &mut |stream, chunk| streamed.push((stream, chunk.to_string())),
             &mut exit_code,
         );
 

@@ -2,9 +2,9 @@
 
 ## 背景
 
-0.1.105 修复了一个数据完整性问题：yt-dlp 下载完成后进入 ffmpeg 合并阶段时不再输出 `[progress]`，原有 watchdog 因此在 120 秒后误判卡死并杀死进程。重试时，残缺但可播放的 `source.mp4` 会让 yt-dlp 跳过合并，最终把截断视频当作成功结果。
+0.1.105 针对一个数据完整性问题增加了清理：yt-dlp 下载完成后进入 ffmpeg 合并阶段时不再输出 `[progress]`，原有 watchdog 因此在 120 秒后误判卡死并杀死进程。进一步核对 yt-dlp 源码后确认，merger 实际写入 `source.temp.mp4`，完成后才重命名为 `source.mp4`。
 
-0.1.105 在 stall 重试前删除 `source.mp4`，避免残缺文件被接受，但没有消除误判本身。合法合并若每次超过 120 秒，仍会被重复终止并最终失败。
+0.1.105 在 stall 重试前删除 `source.mp4`，既没有清理真实的临时合并文件，也没有消除误判本身。合法合并若每次超过 120 秒，仍会被重复终止并最终失败。
 
 0.1.104 通过 `ba[ext!=webm]` 避免常见的 Opus-in-WebM 音频直接复制到 MP4，但“不是 WebM”并不等于“编码一定与 MP4 兼容”。格式链需要直接约束兼容音频。
 
@@ -13,7 +13,7 @@
 1. 下载阶段无进度 120 秒时，watchdog 仍能终止并触发断点续传。
 2. ffmpeg 合并阶段以输出文件增长作为活跃信号，不因缺少 yt-dlp 进度日志而误杀。
 3. 合并输出连续 120 秒不增长时，仍能识别真正卡死。
-4. stall 重试继续删除残缺 `source.mp4`，但不删除 yt-dlp 的 `.part` 和分片缓存。
+4. stall 重试删除残缺的 `source.temp.mp4` 和最终 `source.mp4`，但不删除 yt-dlp 的 `.part` 和分片缓存。
 5. 所有画质档位的分离音频选择只允许 MP4 兼容 AAC；无法满足时回退到预合并格式。
 6. 上述行为均有纯逻辑回归测试，不依赖真实网络或启动 yt-dlp。
 
@@ -32,7 +32,7 @@
 
 - 下载活动计数；每解析到一条有效 `[progress]` 就递增。
 - 当前阶段：`Preparing`、`Downloading`、`Merging`。
-- 合并输出路径，即本次任务的 `source.mp4`。
+- 合并输出路径，即 yt-dlp `prepend_extension(..., "temp")` 生成的 `source.temp.mp4`。
 
 准备阶段不启用 stall 判断，保持现有签名解析阶段可以长时间安静运行的行为。第一次下载进度将阶段设为 `Downloading`。检测到 yt-dlp 的 `[Merger] Merging formats into` 日志后将阶段设为 `Merging`。
 
@@ -42,7 +42,7 @@ watchdog 每 15 秒采样一次：
 
 - `Preparing`：不累计 stale tick。
 - `Downloading`：比较下载活动计数；计数增加则清零 stale tick，否则累计。
-- `Merging`：读取 `source.mp4` 的当前字节数；文件增长则清零 stale tick，否则累计。
+- `Merging`：读取 `source.temp.mp4` 的当前字节数；文件增长则清零 stale tick，否则累计。
 
 连续 8 次采样没有活动，即约 120 秒，返回现有的 `stalled` 错误。下载和合并阶段切换时重置比较基线，防止上一个阶段的计数影响下一个阶段。
 
@@ -50,7 +50,7 @@ watchdog 每 15 秒采样一次：
 
 ### 3. 合并阶段检测
 
-新增纯函数识别 yt-dlp 合并日志。匹配稳定的机器前缀 `[Merger]` 和 `Merging formats into`，不依赖输出文件名、语言或引号样式。callback 在逐行处理输出时先更新阶段，再继续现有日志和进度事件处理。
+新增纯函数识别 yt-dlp 合并日志。匹配稳定的机器前缀 `[Merger]` 和 `Merging formats into`，不依赖输出文件名、语言或引号样式。进程回调保留 stdout/stderr 来源，合并检测器只缓冲 stdout，避免 stderr 警告插入被拆分的 merger 行。callback 更新阶段后继续现有日志和进度事件处理。
 
 预合并格式不会产生 `[Merger]`；这种情况下进程通常在下载结束后立即退出，保持下载阶段即可。
 
@@ -58,7 +58,7 @@ watchdog 每 15 秒采样一次：
 
 把“stall 时删除最终输出”的判定提取为小型纯逻辑/文件操作边界，测试确保：
 
-- 只有 stall 且仍有重试预算时删除 `source.mp4`。
+- 只有 stall 且仍有重试预算时删除 `source.temp.mp4` 与最终 `source.mp4`。
 - 普通网络错误不删除已存在文件。
 - `.part` 和分片文件不在清理范围内。
 

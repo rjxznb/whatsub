@@ -1,7 +1,7 @@
 use crate::core::paths;
 use crate::core::progress::{emit, GpuDevice, PipelineEvent};
 use crate::error::{AppError, AppResult};
-use crate::pipeline::spawn::run_sidecar_env;
+use crate::pipeline::spawn::{run_sidecar_env, StallWatch};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Manager};
@@ -130,6 +130,9 @@ impl WhisperRecovery {
             Ok(()) => WhisperRecoveryDecision::Complete,
             Err(AppError::Cancelled) => {
                 WhisperRecoveryDecision::Failed(AppError::Cancelled)
+            }
+            Err(error) if crate::pipeline::spawn::is_sidecar_shutdown_unconfirmed(&error) => {
+                WhisperRecoveryDecision::Failed(error)
             }
             Err(error) if should_fallback_to_cpu(&error, self.mode) => {
                 self.gpu_error = Some(error.to_string());
@@ -678,9 +681,9 @@ async fn run_whisper_once(
         "whisper-cli",
         &whisper_args,
         env,
-        Some(progress_count.clone()),
+        Some(StallWatch::progress_only(progress_count.clone())),
         false,
-        move |chunk| {
+        move |_stream, chunk| {
             // run_sidecar hands us raw stderr CHUNKS that may contain
             // multiple lines. emit_log / detect_backend already split
             // internally; parse_progress's `.find("progress =")` only
@@ -1058,6 +1061,24 @@ mod tests {
             recovery.handle_attempt(Err(AppError::Cancelled)),
             WhisperRecoveryDecision::Failed(AppError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn unconfirmed_shutdown_during_cpu_recovery_remains_structural() {
+        let mut recovery = WhisperRecovery::new(false);
+
+        assert!(matches!(
+            recovery.handle_attempt(Err(gpu_access_violation())),
+            WhisperRecoveryDecision::RetryOnCpu { .. }
+        ));
+        let terminal = recovery.handle_attempt(Err(
+            AppError::SidecarShutdownUnconfirmed("test channel closed".into()),
+        ));
+
+        let WhisperRecoveryDecision::Failed(error) = terminal else {
+            panic!("unconfirmed shutdown must be terminal");
+        };
+        assert!(crate::pipeline::spawn::is_sidecar_shutdown_unconfirmed(&error));
     }
 
     #[test]

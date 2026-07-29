@@ -23,12 +23,20 @@ import { fetch } from "@tauri-apps/plugin-http";
 // WebView so no plugin-http is needed here.
 import { invoke } from "@tauri-apps/api/core";
 import { parseRelayError, RelayError } from "./relayErrors";
+import {
+  isAbortError,
+  ProviderHttpError,
+  ProviderProtocolError,
+  ProviderTransportError,
+} from "./errors";
+import { inferVendorId } from "../vendors";
 
 export function createOpenAICompatibleProvider(
   settings: Settings,
 ): Provider & AgentProvider {
   const cfg = settings.openaiCompatible;
   const baseUrl = cfg.baseUrl.replace(/\/$/, "");
+  const vendorId = inferVendorId(settings.llmProvider, cfg.baseUrl);
 
   // DeepSeek V4 (deepseek-v4-flash / -pro) defaults thinking mode to ENABLED,
   // so it emits a long reasoning chain before the answer — much slower than the
@@ -69,39 +77,70 @@ export function createOpenAICompatibleProvider(
     return "Bearer ";
   }
 
+  async function throwResponseFailure(resp: Response): Promise<never> {
+    let body = "";
+    let bodyReadCause: unknown;
+    try {
+      body = await resp.text();
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      bodyReadCause = error;
+    }
+    const retryAfterMs = parseRetryAfter(resp.headers.get("retry-after"));
+    if (isWhatsubRelay) {
+      const info = parseRelayError(resp.status, body);
+      if (info) {
+        throw new RelayError(info, resp.status, body, retryAfterMs, {
+          cause: bodyReadCause,
+        });
+      }
+    }
+    throw new ProviderHttpError(
+      `OpenAI-compatible API ${resp.status}: ${body}`,
+      resp.status,
+      body,
+      retryAfterMs,
+      { cause: bodyReadCause },
+    );
+  }
+
   return {
+    ...(vendorId === "deepseek" || vendorId === "whatsub-managed"
+      ? { retryProfile: "deepseek-analysis" as const }
+      : {}),
     async *stream(req: ProviderRequest): AsyncIterable<string> {
       const authHeader = await resolveAuthHeader();
-      const resp = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: authHeader,
-        },
-        body: JSON.stringify({
-          model: cfg.model,
-          stream: true,
-          messages: [
-            { role: "system", content: req.systemPrompt },
-            { role: "user", content: req.userPrompt },
-          ],
-          ...deepseekNoThink,
-        }),
-        signal: req.signal,
-      });
+      let resp: Response;
+      try {
+        resp = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: authHeader,
+          },
+          body: JSON.stringify({
+            model: cfg.model,
+            stream: true,
+            messages: [
+              { role: "system", content: req.systemPrompt },
+              { role: "user", content: req.userPrompt },
+            ],
+            ...deepseekNoThink,
+          }),
+          signal: req.signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("OpenAI-compatible request failed", "send", {
+          cause: error,
+        });
+      }
 
       if (!resp.ok) {
-        const text = await resp.text();
-        // For the whatSub relay, turn the structured {error,message} body into
-        // a friendly RelayError (e.g. quota wall) instead of a raw status dump.
-        if (isWhatsubRelay) {
-          const info = parseRelayError(resp.status, text);
-          if (info) throw new RelayError(info, resp.status);
-        }
-        throw new Error(`OpenAI-compatible API ${resp.status}: ${text}`);
+        await throwResponseFailure(resp);
       }
       if (!resp.body) {
-        throw new Error("response body missing");
+        throw new ProviderProtocolError("response body missing");
       }
 
       yield* parseSSEStream(resp.body);
@@ -128,37 +167,40 @@ export function createOpenAICompatibleProvider(
         ...deepseekNoThink,
       };
       const authHeader = await resolveAuthHeader();
-      const resp = await fetch(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: authHeader,
-        },
-        body: JSON.stringify(body),
-        signal: opts.signal,
-      });
-      if (!resp.ok || !resp.body) {
-        const text = resp.body ? await resp.text() : "no body";
-        let message = `OpenAI-compatible API ${resp.status}: ${text}`;
-        let upsell = false;
-        // Relay rejections carry a friendly message — surface it as-is so the
-        // agent bubble shows "额度已用完→升级 Pro" rather than a status dump.
-        if (isWhatsubRelay) {
-          const info = parseRelayError(resp.status, text);
-          if (info) {
-            message = info.message;
-            upsell = info.upsell;
-          }
-        }
-        yield { type: "error", message, upsell };
-        return;
+      let resp: Response;
+      try {
+        resp = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: authHeader,
+          },
+          body: JSON.stringify(body),
+          signal: opts.signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("OpenAI-compatible request failed", "send", {
+          cause: error,
+        });
       }
+      if (!resp.ok) await throwResponseFailure(resp);
+      if (!resp.body) throw new ProviderProtocolError("response body missing");
       const reader = resp.body
         .pipeThrough(new TextDecoderStream())
         .getReader();
       async function* raw(): AsyncGenerator<string> {
         while (true) {
-          const { value, done } = await reader.read();
+          let value: string | undefined;
+          let done: boolean;
+          try {
+            ({ value, done } = await reader.read());
+          } catch (error) {
+            if (isAbortError(error)) throw error;
+            throw new ProviderTransportError("OpenAI-compatible response read failed", "read", {
+              cause: error,
+            });
+          }
           if (done) return;
           if (value) yield value;
         }
@@ -196,8 +238,10 @@ export async function* parseOpenAIStream(
       let parsed: any;
       try {
         parsed = JSON.parse(data);
-      } catch {
-        continue;
+      } catch (error) {
+        throw new ProviderProtocolError("Malformed OpenAI-compatible SSE data", {
+          cause: error,
+        });
       }
       const choice = parsed?.choices?.[0];
       const delta = choice?.delta;
@@ -330,7 +374,16 @@ async function* parseSSEStream(
   let buffer = "";
 
   while (true) {
-    const { done, value } = await reader.read();
+    let done: boolean;
+    let value: Uint8Array | undefined;
+    try {
+      ({ done, value } = await reader.read());
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      throw new ProviderTransportError("OpenAI-compatible response read failed", "read", {
+        cause: error,
+      });
+    }
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
@@ -345,11 +398,21 @@ async function* parseSSEStream(
         const obj = JSON.parse(payload);
         const delta = obj?.choices?.[0]?.delta?.content;
         if (typeof delta === "string") yield delta;
-      } catch {
-        // skip malformed lines
+      } catch (error) {
+        throw new ProviderProtocolError("Malformed OpenAI-compatible SSE data", {
+          cause: error,
+        });
       }
     }
   }
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
 }
 
 // Silence TS unused-import warnings when only used by types in JSDoc.

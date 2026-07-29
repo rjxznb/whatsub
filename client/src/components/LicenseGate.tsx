@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Loader2, ShieldAlert, Cloud, WifiOff, ArrowLeft, Mail, ChevronDown, KeyRound } from 'lucide-react';
 import { useLicense, type ActivateError } from '../store/license';
+import { MONTHLY_PRICE_TEXT, YEARLY_PRICE_TEXT } from '../config/subscriptionPricing';
 import { TrialBanner } from './TrialBanner';
 
 /**
@@ -636,7 +637,7 @@ function SubLoginForm() {
       {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
 
       <p className="mt-2 text-[10px] text-zinc-600 leading-relaxed">
-        订阅了 whatSub Pro（月度 ¥22 / 年度 ¥168）？用同一邮箱登录即可解锁，无需买断授权码。
+        订阅了 whatSub Pro（月度 {MONTHLY_PRICE_TEXT} / 年度 {YEARLY_PRICE_TEXT}）？用同一邮箱登录即可解锁，无需买断授权码。
       </p>
     </div>
   );

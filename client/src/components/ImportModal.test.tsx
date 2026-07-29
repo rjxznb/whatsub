@@ -11,22 +11,52 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 // Capture the pipeline-event handler so tests can drive real events.
 let pipelineHandler: ((e: { payload: unknown }) => void) | null = null;
 const eventHandlers = new Map<string, (e: { payload: unknown }) => void>();
+let deferSiteLoginListenerRegistrations = false;
+const deferredSiteLoginUnlistenResolvers: Array<() => void> = [];
+const lateSiteLoginUnlistenMock = vi.fn();
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (name: string, cb: (e: { payload: unknown }) => void) => {
+  listen: vi.fn((name: string, cb: (e: { payload: unknown }) => void) => {
     eventHandlers.set(name, cb);
     if (name === "pipeline-event") pipelineHandler = cb;
-    return () => {};
+    if (
+      deferSiteLoginListenerRegistrations &&
+      (name === "site-login-success" || name === "site-login-cancelled")
+    ) {
+      return new Promise<() => void>((resolve) => {
+        deferredSiteLoginUnlistenResolvers.push(() => resolve(lateSiteLoginUnlistenMock));
+      });
+    }
+    return Promise.resolve(() => {});
   }),
 }));
 // Controllable invoke: `import_video` never settles, so the modal stays on the
 // progress view — the state the ✕-cancel tests exercise.
+let deferSiteLoginCancel = false;
+let resolveDeferredSiteLoginCancel: (() => void) | null = null;
+let deferImportCancel = false;
+let rejectImportCancel: Error | null = null;
+let resolveDeferredImportCancel: (() => void) | null = null;
 const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
   if (cmd === "import_video") return new Promise(() => {});
+  if (cmd === "cancel_import") {
+    if (rejectImportCancel) return Promise.reject(rejectImportCancel);
+    if (deferImportCancel) {
+      return new Promise<void>((resolve) => {
+        resolveDeferredImportCancel = resolve;
+      });
+    }
+  }
+  if (cmd === "site_login_cancel" && deferSiteLoginCancel) {
+    return new Promise<void>((resolve) => {
+      resolveDeferredSiteLoginCancel = resolve;
+    });
+  }
   return Promise.resolve(null);
 });
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (p: string) => p,
-  invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args),
+  invoke: (cmd: string, args?: unknown) =>
+    args === undefined ? invokeMock(cmd) : invokeMock(cmd, args),
 }));
 vi.mock("../store/appDialog", () => ({ notify: vi.fn() }));
 vi.mock("../lib/cookieStatus", () => ({
@@ -50,6 +80,21 @@ vi.mock("../store/analysis", () => ({
 function urlInput(): HTMLInputElement {
   return document.querySelector<HTMLInputElement>('[data-tour="url-input"]')!;
 }
+
+function resolveDeferredSiteLoginListeners() {
+  deferredSiteLoginUnlistenResolvers.splice(0).forEach((resolve) => resolve());
+}
+
+beforeEach(() => {
+  deferSiteLoginListenerRegistrations = false;
+  deferredSiteLoginUnlistenResolvers.splice(0);
+  lateSiteLoginUnlistenMock.mockClear();
+  deferSiteLoginCancel = false;
+  resolveDeferredSiteLoginCancel = null;
+  deferImportCancel = false;
+  rejectImportCancel = null;
+  resolveDeferredImportCancel = null;
+});
 
 describe("ImportModal — onboarding sample-URL affordance", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -107,8 +152,8 @@ describe("ImportModal — onboarding sample-URL affordance", () => {
 describe("ImportModal — ✕ cancels the in-flight import", () => {
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
-  async function startImport() {
-    const r = render(<ImportModal onClose={() => {}} />);
+  async function startImport(onClose: () => void = () => {}) {
+    const r = render(<ImportModal onClose={onClose} />);
     fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
     fireEvent.click(r.getByRole("button", { name: "开始解析" }));
     await flush(); // let the listener register + progress view mount
@@ -158,16 +203,85 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
 
     expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLog" });
   });
+
+  it("does not close until the backend confirms process cleanup", async () => {
+    deferImportCancel = true;
+    const onClose = vi.fn();
+    const r = await startImport(onClose);
+    pipelineHandler?.({ payload: { stage: "Started", video_id: "vidWait" } });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await flush();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(r.getByText("正在停止并清理…")).toBeTruthy();
+
+    await act(async () => resolveDeferredImportCancel?.());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps the progress window open when cancellation fails", async () => {
+    rejectImportCancel = new Error("cancel timeout");
+    const onClose = vi.fn();
+    const r = await startImport(onClose);
+    pipelineHandler?.({ payload: { stage: "Started", video_id: "vidFail" } });
+    await flush();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+
+    await waitFor(() => expect(r.getByText(/停止失败.*cancel timeout/)).toBeTruthy());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("waits for the first task id instead of closing an unknown running import", async () => {
+    const onClose = vi.fn();
+    const r = await startImport(onClose);
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await waitFor(() => expect(r.getByText("正在停止并清理…")).toBeTruthy());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith("cancel_import", expect.anything());
+
+    await act(async () => {
+      pipelineHandler?.({ payload: { stage: "Log", video_id: "vidLate", line: "starting" } });
+    });
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLate" }),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
 });
 
 describe("ImportModal — diagnosed download failures", () => {
   const flush = () => new Promise((r) => setTimeout(r, 0));
+  const loginButtonName = "\u91cd\u65b0\u767b\u5f55 YouTube";
+  const cancelButtonName = "\u53d6\u6d88";
+  const pendingLoginText = "\u7b49\u5f85 YouTube \u767b\u5f55\u5b8c\u6210";
+  const diagnosisText = "YouTube \u8981\u6c42\u767b\u5f55\u9a8c\u8bc1";
 
-  async function startImport() {
-    const r = render(<ImportModal onClose={() => {}} />);
+  async function startImport(onClose: () => void = () => {}) {
+    const r = render(<ImportModal onClose={onClose} />);
     fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
     fireEvent.click(r.getByRole("button", { name: "开始解析" }));
     await flush();
+    return r;
+  }
+
+  async function startPendingYouTubeLogin() {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "ERROR: Sign in to confirm you're not a bot. Use --cookies.",
+        },
+      });
+    });
+    fireEvent.click(await r.findByRole("button", { name: loginButtonName }));
+    await waitFor(() => expect(r.getByText(pendingLoginText)).toBeInTheDocument());
     return r;
   }
 
@@ -177,17 +291,43 @@ describe("ImportModal — diagnosed download failures", () => {
     eventHandlers.clear();
   });
 
-  it("opens the YouTube login flow immediately for a bot-check error", async () => {
+  it("shows the YouTube auth diagnosis without starting login", async () => {
     const r = await startImport();
-    pipelineHandler?.({
-      payload: {
-        stage: "Failed",
-        video_id: "auth-video",
-        error: "ERROR: [youtube] Sign in to confirm you’re not a bot. Use --cookies.",
-      },
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "ERROR: [youtube] Sign in to confirm you’re not a bot. Use --cookies.",
+        },
+      });
     });
 
-    await waitFor(() => {
+    await waitFor(() =>
+      expect(r.getByText("YouTube 要求登录验证")).toBeInTheDocument(),
+    );
+    expect(r.getAllByText(/触发了反机器人检测/)).not.toHaveLength(0);
+    expect(r.getByRole("button", { name: "重新登录 YouTube" })).toBeInTheDocument();
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "site_login_start"),
+    ).toHaveLength(0);
+  });
+
+  it("starts YouTube login only after the diagnosis action is clicked", async () => {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "The provided account cookies are no longer valid. Please refresh your cookies.",
+        },
+      });
+    });
+
+    fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
+
+    await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("site_login_start", {
         args: {
           key: "youtube",
@@ -195,27 +335,116 @@ describe("ImportModal — diagnosed download failures", () => {
           loginUrl: "https://www.youtube.com/",
           harvestDomains: ["youtube.com", "google.com", "googleusercontent.com"],
         },
-      });
-    });
+      }),
+    );
     expect(r.getByText("等待 YouTube 登录完成")).toBeInTheDocument();
   });
 
-  it("automatically retries once after fresh cookies are saved", async () => {
-    await startImport();
-    pipelineHandler?.({
-      payload: {
-        stage: "Failed",
-        video_id: "auth-video",
-        error: "The provided account cookies are no longer valid. Please refresh your cookies.",
-      },
+  it("retries the original import only once after login succeeds", async () => {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "The provided account cookies are no longer valid. Please refresh your cookies.",
+        },
+      });
     });
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("site_login_start", expect.anything()));
+    fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
+    await waitFor(() =>
+      expect(r.getByText("等待 YouTube 登录完成")).toBeInTheDocument(),
+    );
 
-    eventHandlers.get("site-login-success")?.({ payload: {} });
+    await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+    });
 
     await waitFor(() => {
-      expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(2);
+      const calls = invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.[1]).toEqual(calls[0]?.[1]);
     });
+  });
+
+  it("returns to the diagnosis without retrying when login is cancelled", async () => {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Failed",
+          video_id: "auth-video",
+          error: "ERROR: Sign in to confirm you're not a bot. Use --cookies.",
+        },
+      });
+    });
+    fireEvent.click(await r.findByRole("button", { name: "重新登录 YouTube" }));
+    fireEvent.click(await r.findByRole("button", { name: "取消" }));
+
+    await waitFor(() => expect(r.getByText("YouTube 要求登录验证")).toBeInTheDocument());
+    expect(invokeMock).toHaveBeenCalledWith("site_login_cancel");
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+    expect(urlInput().value).toBe(SAMPLE_URL);
+  });
+
+  it("revokes authorized late login listeners after unmount", async () => {
+    deferSiteLoginListenerRegistrations = true;
+    const r = await startPendingYouTubeLogin();
+
+    r.unmount();
+    await act(async () => {
+      resolveDeferredSiteLoginListeners();
+      await Promise.resolve();
+    });
+    expect(lateSiteLoginUnlistenMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+    });
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+  });
+
+  it("does not retry when success arrives while local cancellation is pending", async () => {
+    const r = await startPendingYouTubeLogin();
+    deferSiteLoginCancel = true;
+
+    fireEvent.click(r.getByRole("button", { name: cancelButtonName }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("site_login_cancel"));
+
+    await act(async () => {
+      eventHandlers.get("site-login-success")?.({ payload: {} });
+    });
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+
+    expect(resolveDeferredSiteLoginCancel).not.toBeNull();
+    await act(async () => {
+      resolveDeferredSiteLoginCancel?.();
+    });
+    await waitFor(() => expect(r.getByText(diagnosisText)).toBeInTheDocument());
+  });
+
+  it("ignores a site-login-cancelled event without an authorized login", async () => {
+    await startImport();
+
+    await act(async () => {
+      eventHandlers.get("site-login-cancelled")?.({ payload: {} });
+    });
+
+    expect(document.querySelector('[data-tour="url-input"]')).toBeNull();
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+  });
+
+  it("restores the diagnosis when site-login-cancelled arrives during login", async () => {
+    const r = await startPendingYouTubeLogin();
+
+    await act(async () => {
+      eventHandlers.get("site-login-cancelled")?.({ payload: {} });
+    });
+
+    await waitFor(() => expect(r.getByText(diagnosisText)).toBeInTheDocument());
+    expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video")).toHaveLength(1);
+    expect(urlInput().value).toBe(SAMPLE_URL);
   });
 
   it("shows a focused network diagnosis without opening login", async () => {

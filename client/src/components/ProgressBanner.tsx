@@ -47,6 +47,7 @@ export function ProgressBanner({
     errorUpsell,
     errorStage,
     retryMessage,
+    subtitles,
     committedCueOffset,
     inflightCueCount,
     inflightBatchSize,
@@ -74,7 +75,9 @@ export function ProgressBanner({
       <div className="flex-1 font-medium">
         {PHASE_LABELS[phase] ?? phase}
         {(isAnalyzing || isPaused) &&
-          ` · 正式完成 ${committedCueOffset} 条 · 本批已保存 ${inflightCueCount}/${inflightBatchSize} 条`}
+          (inflightBatchSize > 0
+            ? ` · 正式完成 ${committedCueOffset} 条 · 本批已保存 ${inflightCueCount}/${inflightBatchSize} 条`
+            : ` · 已生成 ${subtitles.length} 行字幕`)}
         {retryMessage && ` · ${retryMessage}`}
         {quotaError
           ? ` — ${quotaRecoveryMessage(quotaError)}`

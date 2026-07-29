@@ -33,6 +33,30 @@ describe("ProgressBanner recovery actions", () => {
     expect(onStop).toHaveBeenCalledOnce();
   });
 
+  it("keeps the generated-subtitle fallback when paused without an inflight batch", () => {
+    useAnalysis.setState({
+      phase: "paused",
+      subtitles: Array.from({ length: 47 }, (_, index) => ({
+        time: index,
+        endTime: index + 1,
+        text: `Cue ${index + 1}`,
+        translation: `Translation ${index + 1}`,
+        isKeyPoint: false,
+        highlightWords: [],
+        keyNotes: {},
+        highlightTranslations: {},
+      })),
+      committedCueOffset: 50,
+      inflightCueCount: 0,
+      inflightBatchSize: 0,
+    });
+
+    render(<ProgressBanner />);
+
+    expect(screen.getByText(/已生成 47 行字幕/)).toBeInTheDocument();
+    expect(screen.queryByText(/本批已保存/)).toBeNull();
+  });
+
   it("offers checkpoint continuation for an analysis error", () => {
     const onContinue = vi.fn();
     useAnalysis.setState({

@@ -166,7 +166,6 @@ impl AnalysisStore {
         self.active.remove(video_id);
         let analysis = if reset {
             remove_snapshot_artifacts(path)?;
-            remove_inflight_artifacts(&inflight_path(path))?;
             None
         } else {
             migrate_and_load_snapshot(path)?
@@ -226,7 +225,6 @@ impl AnalysisStore {
         self.active.remove(video_id);
         let analysis = if reset {
             remove_snapshot_artifacts(analysis_path)?;
-            remove_inflight_artifacts(&inflight_path(analysis_path))?;
             None
         } else {
             migrate_and_load_snapshot(analysis_path)?
@@ -538,7 +536,7 @@ impl AnalysisStore {
         // Revocation is the destructive boundary. Even if the filesystem
         // operation fails, the retired producer must never write again.
         self.revoke(video_id);
-        for candidate in snapshot_artifacts(path) {
+        for candidate in all_analysis_artifacts(path) {
             match remove(&candidate) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -714,6 +712,29 @@ fn replace_materialized_snapshot_at(
     transcript: &str,
     analysis: Value,
 ) -> AppResult<()> {
+    replace_materialized_snapshot_at_with(
+        store,
+        video_id,
+        transcript_path,
+        analysis_path,
+        transcript,
+        analysis,
+        |from, to| fs::rename(from, to),
+    )
+}
+
+fn replace_materialized_snapshot_at_with<M>(
+    store: &mut AnalysisStore,
+    video_id: &str,
+    transcript_path: &Path,
+    analysis_path: &Path,
+    transcript: &str,
+    analysis: Value,
+    mut rename: M,
+) -> AppResult<()>
+where
+    M: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
     validate_analysis(&analysis)?;
     store.revoke(video_id);
 
@@ -757,16 +778,16 @@ fn replace_materialized_snapshot_at(
 
     let install_result = (|| -> AppResult<()> {
         if had_analysis {
-            fs::rename(analysis_path, &analysis_backup)?;
+            rename(analysis_path, &analysis_backup)?;
             analysis_backed_up = true;
         }
         if had_transcript {
-            fs::rename(transcript_path, &transcript_backup)?;
+            rename(transcript_path, &transcript_backup)?;
             transcript_backed_up = true;
         }
-        fs::rename(&transcript_temporary, transcript_path)?;
+        rename(&transcript_temporary, transcript_path)?;
         transcript_committed = true;
-        fs::rename(&analysis_temporary, analysis_path)?;
+        rename(&analysis_temporary, analysis_path)?;
         analysis_committed = true;
         Ok(())
     })();
@@ -788,7 +809,7 @@ fn replace_materialized_snapshot_at(
                 analysis_committed,
             },
             |path| fs::remove_file(path),
-            |from, to| fs::rename(from, to),
+            |from, to| rename(from, to),
         );
         let rollback_detail = if rollback_errors.is_empty() {
             String::new()
@@ -802,6 +823,11 @@ fn replace_materialized_snapshot_at(
 
     let _ = fs::remove_file(transcript_backup);
     let _ = fs::remove_file(analysis_backup);
+    // The new transcript + canonical analysis are now both visible. Only at
+    // this point is the old-generation local journal obsolete. Cleanup is
+    // best effort so a successful cloud materialization never becomes a
+    // user-visible failure after its atomic pair has committed.
+    remove_inflight_artifacts_best_effort(&inflight_path(analysis_path));
     remove_obsolete_artifacts(analysis_path)
 }
 
@@ -1357,7 +1383,7 @@ fn read_valid_snapshot(path: &Path) -> AppResult<Option<Value>> {
 }
 
 fn remove_snapshot_artifacts(path: &Path) -> AppResult<()> {
-    for candidate in snapshot_artifacts(path) {
+    for candidate in all_analysis_artifacts(path) {
         match fs::remove_file(candidate) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1388,6 +1414,12 @@ fn snapshot_artifacts(path: &Path) -> Vec<PathBuf> {
         generation.with_extension("json.tmp"),
         generation.with_extension("json.bak"),
     ]
+}
+
+fn all_analysis_artifacts(path: &Path) -> Vec<PathBuf> {
+    let mut artifacts = snapshot_artifacts(path);
+    artifacts.extend(inflight_artifacts(&inflight_path(path)));
+    artifacts
 }
 
 fn write_json_atomically_with_replacer<F>(path: &Path, value: &Value, replacer: F) -> AppResult<()>
@@ -2339,6 +2371,24 @@ mod tests {
     }
 
     #[test]
+    fn delete_snapshot_removes_analysis_and_inflight_artifacts() {
+        let dir = TestDir::new("delete-all-analysis-artifacts");
+        let analysis_path = dir.analysis_path();
+        let mut store = AnalysisStore::default();
+        for path in all_analysis_artifacts(&analysis_path) {
+            fs::write(&path, b"stale").unwrap();
+        }
+
+        store
+            .delete_snapshot_at_with("v1", &analysis_path, |path| fs::remove_file(path))
+            .unwrap();
+
+        assert!(all_analysis_artifacts(&analysis_path)
+            .into_iter()
+            .all(|path| !path.exists()));
+    }
+
+    #[test]
     fn destructive_boundary_blocks_a_new_begin_until_cleanup_finishes() {
         use std::sync::{mpsc, Arc};
         use std::thread;
@@ -2461,6 +2511,87 @@ mod tests {
                 .status,
             SessionSaveStatus::Rejected
         );
+    }
+
+    #[test]
+    fn successful_materialized_replacement_removes_old_inflight() {
+        let dir = TestDir::new("replace-clears-inflight");
+        let analysis_path = dir.analysis_path();
+        let transcript_path = dir.transcript_path();
+        fs::write(&transcript_path, "old transcript").unwrap();
+        seed_analysis_and_inflight(&analysis_path, "j-old");
+        let mut store = AnalysisStore::default();
+
+        replace_materialized_snapshot_at(
+            &mut store,
+            "v1",
+            &transcript_path,
+            &analysis_path,
+            "new transcript",
+            checkpointed_at("sha256:new", 4, 100, "cloud"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&transcript_path).unwrap(),
+            "new transcript"
+        );
+        assert!(!inflight_path(&analysis_path).exists());
+    }
+
+    #[test]
+    fn failed_materialized_replacement_keeps_matching_old_inflight() {
+        let dir = TestDir::new("replace-rollback-keeps-inflight");
+        let analysis_path = dir.analysis_path();
+        let transcript_path = dir.transcript_path();
+        fs::write(&transcript_path, "old transcript").unwrap();
+        seed_analysis_and_inflight(&analysis_path, "j-old");
+        let old_journal = read_inflight_strict(&inflight_path(&analysis_path)).unwrap();
+        let mut store = AnalysisStore::default();
+
+        let result = replace_materialized_snapshot_at_with(
+            &mut store,
+            "v1",
+            &transcript_path,
+            &analysis_path,
+            "new transcript",
+            checkpointed_at("sha256:new", 4, 100, "cloud"),
+            |_from, _to| Err(std::io::Error::other("install failed")),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(&transcript_path).unwrap(),
+            "old transcript"
+        );
+        assert_eq!(
+            read_inflight_strict(&inflight_path(&analysis_path)).unwrap(),
+            old_journal
+        );
+    }
+
+    #[test]
+    fn changed_transcript_generation_never_adopts_old_inflight() {
+        let dir = TestDir::new("generation-rejects-inflight");
+        let analysis_path = dir.analysis_path();
+        let transcript_path = dir.transcript_path();
+        fs::write(&transcript_path, "new transcript").unwrap();
+        seed_analysis_and_inflight(&analysis_path, "j-old");
+        let mut store = AnalysisStore::default();
+
+        let opened = store
+            .begin_for_transcript_at(
+                "v1",
+                &transcript_path,
+                &analysis_path,
+                false,
+                None,
+                "neutral",
+            )
+            .unwrap()
+            .unwrap();
+
+        assert!(opened.session.inflight.is_none());
     }
 
     #[test]

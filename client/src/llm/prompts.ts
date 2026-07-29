@@ -86,25 +86,23 @@ OUTPUT FORMAT — REQUIRED
 
 PER-CUE OBJECT SCHEMA
 {
-  "type": "cue",
   "index": number,
-  "time": number,
-  "endTime": number,
-  "text": string,
   "translation": string,
   "isKeyPoint": boolean,
-  "highlightWords": string[],
-  "keyNotes": { [phrase: string]: string },
-  "highlightTranslations": { [phrase: string]: string }
+  "highlights": [{
+    "source": string,
+    "translation": string,
+    "note": string
+  }]
 }
 
-CONCRETE EXAMPLE (correct shape — keyNotes and highlightTranslations are JSON OBJECTS keyed by each highlightWord, NEVER a single string):
-{"type":"cue","index":12,"time":45.2,"endTime":47.8,"text":"I need to catch up on emails","translation":"我得把邮件处理一下","isKeyPoint":true,"highlightWords":["catch up"],"keyNotes":{"catch up":"动词短语，表示「赶上、补做」，用于落下进度后追回的语境，常搭配 on/with"},"highlightTranslations":{"catch up":"处理一下"}}
+CONCRETE EXAMPLE:
+{"index":12,"translation":"我得把邮件处理一下","isKeyPoint":true,"highlights":[{"source":"catch up","translation":"处理一下","note":"动词短语，表示赶上或补做落下的事情"}]}
 
 WRONG (these have caused real bugs — DO NOT do this):
-- keyNotes as one big string: "keyNotes": "catch up 表示赶上..."   ← MUST be a {phrase: note} object
-- keyNotes empty when highlightWords non-empty: "highlightWords":["catch up"], "keyNotes":{}
-- mismatched keys: "highlightWords":["catch up"], "keyNotes":{"to catch up":"..."}   ← key must match the highlightWord string EXACTLY
+- Echoing source-owned fields such as text, time, or endTime.
+- Returning highlights whose source is not an exact substring of the cue text.
+- Returning a highlight translation that is not an exact substring of translation.
 
 SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
 {
@@ -118,13 +116,13 @@ SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
 
 CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
-1. highlightWords MUST be exact substrings of the cue's "text", character-for-character. If the original text has a typo like "teddy beir", use "teddy beir" — DO NOT correct it to "teddy bear".
+1. Each highlight source MUST be an exact substring of the cue text, character-for-character. If the original text has a typo like "teddy beir", use "teddy beir" — DO NOT correct it to "teddy bear".
 
-2. highlightTranslations VALUES MUST be exact substrings of "translation". Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
+2. Each highlight translation MUST be an exact substring of the cue translation. Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
 
-3. keyNotes values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
+3. Highlight note values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
 
-4. Each cue: AT MOST 2 highlightWords. Quality over quantity.
+4. Each cue: AT MOST 2 highlights. Quality over quantity.
 
 5. isKeyPoint=true ratio: target 30-50% of cues. Greetings, fillers, "yes/no/thank you" are NOT key points.
 
@@ -132,31 +130,40 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
 7. {{STYLE_GUIDANCE}}
 
-8. Each highlightWord must be a substring of THE SAME CUE'S text. Don't span across cues.
+8. Each highlight source must be a substring of THE SAME CUE'S text. Don't span across cues.
 
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
 
-10. keyNotes and highlightTranslations MUST be JSON OBJECTS (dictionaries) — never strings, never arrays. Every entry in highlightWords MUST appear as a key (exact string, character-for-character) in BOTH keyNotes AND highlightTranslations. If you can't write a 40-120 character keyNote AND find a translation substring for a phrase, omit that phrase from highlightWords entirely.
+10. highlights MUST be an array of {source, translation, note} objects. If you can't write a 40-120 character note AND find an exact translation substring for a phrase, omit that highlight entirely.
 `;
 
-export function buildUserPrompt(cues: SrtCue[]): string {
-  const cuesJson = cues
-    .map((c) => `${c.index}\t${c.time.toFixed(2)}\t${c.endTime.toFixed(2)}\t${JSON.stringify(c.text)}`)
+function serializeCues(cues: readonly SrtCue[]): string {
+  return cues
+    .map((cue) => `${cue.index}\t${cue.time.toFixed(2)}\t${cue.endTime.toFixed(2)}\t${JSON.stringify(cue.text)}`)
     .join("\n");
+}
+
+export function buildUserPrompt(cues: readonly SrtCue[]): string {
+  const cuesJson = serializeCues(cues);
   return `Subtitle cues (tab-separated: index<TAB>start<TAB>end<TAB>JSON-encoded text):
 ${cuesJson}
 
 Produce one JSON-line per cue in order. Per-cue lines ONLY — do NOT emit a summary line; the summary will be requested separately.`;
 }
 
-export function buildContinuationPrompt(cues: SrtCue[]): string {
-  const cuesJson = cues
-    .map((c) => `${c.index}\t${c.time.toFixed(2)}\t${c.endTime.toFixed(2)}\t${JSON.stringify(c.text)}`)
-    .join("\n");
+export function buildContinuationPrompt(cues: readonly SrtCue[]): string {
+  const cuesJson = serializeCues(cues);
   return `Continuing analysis. Next batch:
 ${cuesJson}
 
 One JSON object per cue. Do NOT emit a summary line.`;
+}
+
+export function buildRepairPrompt(cues: readonly SrtCue[]): string {
+  return `The following subtitle cues are still unresolved. Return exactly one JSON object for every supplied index and no other indexes:
+${serializeCues(cues)}
+
+One compact JSON object per cue. No markdown, prose, source-field echoes, or summary line.`;
 }
 
 /**

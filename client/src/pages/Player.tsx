@@ -25,6 +25,7 @@ import { ProgressBanner } from "../components/ProgressBanner";
 import { TinyModelHint } from "../components/TinyModelHint";
 import {
   executeAnalysisSession,
+  analysisPreviewFromJournal,
   openStoredAnalysisSession,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
@@ -39,7 +40,7 @@ import {
 } from "../store/backgroundAnalyses";
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
-import type { AnalysisResult, CheckpointedAnalysis, SrtCue } from "../llm/types";
+import type { AnalysisResult, SrtCue } from "../llm/types";
 import { useTutorRuntime } from "../store/tutorRuntime";
 import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
@@ -52,14 +53,18 @@ export function canEditSubtitles(phase: AnalysisPhase): boolean {
   return phase !== "analyzing";
 }
 
-export function rollbackForegroundPreview(
+export function restoreForegroundDurablePreview(
   videoId: string,
-  committed: CheckpointedAnalysis,
+  session: PersistedAnalysisSession,
   totalCues: number,
 ): void {
   const state = useAnalysis.getState();
   if (state.videoId !== videoId) return;
-  state.setAnalysisPreview(committed, null, totalCues);
+  state.setAnalysisPreview(
+    session.analysis,
+    session.inflight ? analysisPreviewFromJournal(session.inflight) : null,
+    totalCues,
+  );
 }
 
 export function ownsForegroundAnalysis(
@@ -374,7 +379,8 @@ export function Player() {
       const upsell = e instanceof RelayError && e.upsell;
       const quotaError = quotaDetailsFromRelayError(
         e,
-        session.analysis.checkpoint.nextCueOffset,
+        session.analysis.checkpoint.nextCueOffset
+          + (session.inflight?.entries.length ?? 0),
         cues.length,
       );
       analysis.setError(msg, upsell, "analysis", quotaError);
@@ -416,7 +422,8 @@ export function Player() {
    * Hand off the in-flight analysis to the background scheduler so the
    * user can navigate away without losing progress. The current request is
    * aborted, then the exact same lease/session is handed to the background.
-   * Only committed checkpoints are rendered in the queue widget.
+   * Canonical checkpoints and the durable inflight journal are rendered in
+   * the queue widget.
    *
    * When the user returns to this Player later for the same videoId,
    * the mount effect calls takeOverBackground() and promotes whatever
@@ -554,6 +561,11 @@ export function Player() {
         sessionRef.current = reclaimed.session;
         analysis.startFor(videoId);
         analysis.setCommittedAnalysis(reclaimed.analysis, reclaimed.cues.length);
+        analysis.setAnalysisPreview(
+          reclaimed.analysis,
+          reclaimed.inflightPreview,
+          reclaimed.cues.length,
+        );
         if (reclaimed.analysis.checkpoint.phase === "complete") {
           analysis.setPhase("complete", 100);
         } else if (reclaimed.errorMessage) {
@@ -612,6 +624,11 @@ export function Player() {
       sessionRef.current = session;
       analysis.startFor(videoId);
       analysis.setCommittedAnalysis(session.analysis, cues.length);
+      analysis.setAnalysisPreview(
+        session.analysis,
+        session.inflight ? analysisPreviewFromJournal(session.inflight) : null,
+        cues.length,
+      );
 
       if (session.analysis.checkpoint.phase === "complete") {
         analysis.setPhase("complete", 100);
@@ -640,12 +657,13 @@ export function Player() {
     return () => {
       cancelled = true;
       retranscribeEpochRef.current += 1;
-      // Abort the current uncommitted batch, then release this producer lease.
+      // Abort the current model request, retain its durable inflight journal,
+      // then release this producer lease.
       abortRef.current?.abort();
       abortRef.current = null;
       const session = sessionRef.current;
       if (session && cuesRef.current) {
-        rollbackForegroundPreview(videoId, session.analysis, cuesRef.current.length);
+        restoreForegroundDurablePreview(videoId, session, cuesRef.current.length);
       }
       sessionRef.current = null;
       void session?.close().catch(() => {});

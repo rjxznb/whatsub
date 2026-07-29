@@ -13,6 +13,7 @@ import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import { ProviderTransportError } from "../llm/providers/errors";
 import { StaleAnalysisSessionError } from "../llm/analysisSession";
 import { RelayError } from "../llm/providers/relayErrors";
+import type { AnalysisInflightJournal } from "../llm/analysisJournal";
 
 const mocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
@@ -53,8 +54,10 @@ const subtitle = (index: number): Subtitle => ({
 function fakeSession(
   initial: CheckpointedAnalysis,
   saveHook?: (next: CheckpointedAnalysis) => void | Promise<void>,
+  initialInflight: AnalysisInflightJournal | null = null,
 ) {
   let current = initial;
+  let inflight = initialInflight;
   const save = vi.fn(async (next: CheckpointedAnalysis) => {
     await saveHook?.(next);
     current = next;
@@ -69,10 +72,13 @@ function fakeSession(
       return current;
     },
     get inflight() {
-      return null;
+      return inflight;
     },
     save,
-    saveInflight: vi.fn(async (next) => next),
+    saveInflight: vi.fn(async (next) => {
+      inflight = next;
+      return next;
+    }),
     close,
   };
   return { session, save, close };
@@ -156,6 +162,7 @@ describe("background analysis lease handoff", () => {
 
     expect(useBgAnalyses.getState().jobs["video-1"]?.subtitleCount).toBe(48);
     expect(useBgAnalyses.getState().jobs["video-1"]?.committedCueOffset).toBe(50);
+    expect(useBgAnalyses.getState().jobs["video-1"]?.inflightCueCount).toBe(1);
 
     releaseSave();
     await waitFor(() =>
@@ -163,7 +170,49 @@ describe("background analysis lease handoff", () => {
     );
   });
 
-  it("takes over with durable analysis and discards an uncommitted preview", async () => {
+  it("publishes an adopted durable journal before requesting more model output", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.getProvider.mockReturnValue({
+      async *stream() {
+        await blocked;
+      },
+    });
+    const committed = initialAnalysis();
+    const journal: AnalysisInflightJournal = {
+      version: 1,
+      journalId: "journal-resume",
+      transcriptGeneration: "sha256:test",
+      transcriptFingerprint: committed.checkpoint.transcriptFingerprint,
+      analysisStyle: "colloquial",
+      baseRevision: committed.checkpoint.revision,
+      startCueOffset: 50,
+      endCueOffset: 51,
+      entries: [{ cueOffset: 50, subtitle: subtitle(50) }],
+    };
+    const { session } = fakeSession(committed, undefined, journal);
+
+    runInBackground({
+      videoId: "video-1",
+      label: "Video",
+      cues,
+      session,
+      style: "colloquial",
+    });
+
+    const job = useBgAnalyses.getState().jobs["video-1"];
+    expect(job?.committedCueOffset).toBe(50);
+    expect(job?.inflightCueCount).toBe(1);
+    expect(job?.inflightBatchSize).toBe(1);
+    expect(job?.subtitleCount).toBe(48);
+
+    release();
+    await cancelBackground("video-1");
+  });
+
+  it("takes over with canonical analysis and its durable inflight preview", async () => {
     mocks.getProvider.mockReturnValue({
       async *stream(request: { signal?: AbortSignal }) {
         yield `${JSON.stringify({ index: 51, translation: "第五十一句", highlights: [] })}\n`;
@@ -194,12 +243,14 @@ describe("background analysis lease handoff", () => {
     expect(takeover?.session).toBe(session);
     expect(takeover?.analysis.subtitles).toHaveLength(47);
     expect(takeover?.analysis.checkpoint.nextCueOffset).toBe(50);
+    expect(takeover?.inflightPreview?.entries).toHaveLength(1);
+    expect(takeover?.inflightPreview?.entries[0]?.cueOffset).toBe(50);
     expect(save).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(useBgAnalyses.getState().jobs["video-1"]).toBeUndefined();
   });
 
-  it("rolls back visible previews when unresolved cues exhaust repair attempts", async () => {
+  it("keeps durable previews when unresolved cues exhaust repair attempts", async () => {
     const extendedCues: SrtCue[] = [
       ...cues,
       { index: 52, time: 51, endTime: 52, text: "Cue input 52" },
@@ -239,8 +290,9 @@ describe("background analysis lease handoff", () => {
     );
 
     const failed = useBgAnalyses.getState().jobs["video-1"];
-    expect(failed?.subtitleCount).toBe(47);
+    expect(failed?.subtitleCount).toBe(48);
     expect(failed?.committedCueOffset).toBe(50);
+    expect(failed?.inflightCueCount).toBe(1);
     expect(failed?.errorMessage).toContain("52");
     expect(save).not.toHaveBeenCalled();
   }, 15_000);

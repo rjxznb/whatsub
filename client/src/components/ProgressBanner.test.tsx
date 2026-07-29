@@ -14,6 +14,25 @@ describe("ProgressBanner recovery actions", () => {
     navigate.mockClear();
   });
 
+  it("shows canonical and durable partial-batch progress while analyzing", () => {
+    const onStop = vi.fn();
+    useAnalysis.setState({
+      phase: "analyzing",
+      committedCueOffset: 50,
+      inflightCueCount: 23,
+      inflightBatchSize: 50,
+      progressPercent: 73,
+    });
+
+    render(<ProgressBanner onStop={onStop} />);
+
+    expect(
+      screen.getByText(/正式完成 50 条 · 本批已保存 23\/50 条/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "暂停解析" }));
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
   it("offers checkpoint continuation for an analysis error", () => {
     const onContinue = vi.fn();
     useAnalysis.setState({

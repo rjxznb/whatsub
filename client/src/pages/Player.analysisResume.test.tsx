@@ -7,7 +7,7 @@ import {
   canEditSubtitles,
   ownsForegroundAnalysis,
   ownsForegroundOperation,
-  rollbackForegroundPreview,
+  restoreForegroundDurablePreview,
 } from "./Player";
 
 const subtitle = (index: number): Subtitle => ({
@@ -93,10 +93,12 @@ describe("Player committed resume state", () => {
 
     expect(state.subtitles).toEqual([subtitle(1), subtitle(51)]);
     expect(state.checkpoint?.nextCueOffset).toBe(50);
-    expect(state.progressPercent).toBe(50);
+    expect(state.progressPercent).toBe(51);
+    expect(state.committedCueOffset).toBe(50);
+    expect(state.inflightCueCount).toBe(1);
   });
 
-  it("rolls preview back to the durable snapshot", () => {
+  it("clears preview only when no durable inflight snapshot exists", () => {
     const committed: CheckpointedAnalysis = {
       subtitles: [subtitle(1)],
       keyPhrases: [],
@@ -122,7 +124,7 @@ describe("Player committed resume state", () => {
     expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);
   });
 
-  it("rolls an uncommitted preview back when the owning Player tears down", () => {
+  it("keeps the durable inflight preview when the owning Player tears down", () => {
     const committed: CheckpointedAnalysis = {
       subtitles: [subtitle(1)],
       keyPhrases: [],
@@ -135,16 +137,42 @@ describe("Player committed resume state", () => {
       },
     };
 
-    useAnalysis.getState().setAnalysisPreview(committed, {
+    const durablePreview: AnalysisPreview = {
       startCueOffset: 50,
       endCueOffset: 100,
       entries: [{ cueOffset: 50, subtitle: subtitle(51) }],
       subtitles: [subtitle(51)],
-    }, 100);
-    rollbackForegroundPreview("video-1", committed, 100);
+    };
+    const session = {
+      videoId: "video-1",
+      lease: "lease-1",
+      transcriptGeneration: "sha256:generation",
+      analysis: committed,
+      inflight: {
+        version: 1 as const,
+        journalId: "journal-1",
+        transcriptGeneration: "sha256:generation",
+        transcriptFingerprint: committed.checkpoint.transcriptFingerprint,
+        analysisStyle: "colloquial" as const,
+        baseRevision: committed.checkpoint.revision,
+        startCueOffset: durablePreview.startCueOffset,
+        endCueOffset: durablePreview.endCueOffset,
+        entries: durablePreview.entries,
+      },
+      save: async (next: CheckpointedAnalysis) => next,
+      saveInflight: async (next: NonNullable<PersistedAnalysisSession["inflight"]>) => next,
+      close: async () => undefined,
+    } satisfies PersistedAnalysisSession;
 
-    expect(useAnalysis.getState().subtitles).toEqual(committed.subtitles);
+    useAnalysis.getState().setAnalysisPreview(committed, durablePreview, 100);
+    restoreForegroundDurablePreview("video-1", session, 100);
+
+    expect(useAnalysis.getState().subtitles).toEqual([
+      ...committed.subtitles,
+      subtitle(51),
+    ]);
     expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);
+    expect(useAnalysis.getState().inflightCueCount).toBe(1);
   });
 
   it("rejects stale foreground continuations after session or video ownership changes", () => {

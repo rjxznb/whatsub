@@ -76,6 +76,34 @@ describe("background analysis rows", () => {
     useBgAnalyses.setState({ jobs: {} });
   });
 
+  it("shows canonical plus durable inflight progress", () => {
+    useBgAnalyses.setState({
+      jobs: {
+        "video-1": {
+          videoId: "video-1",
+          label: "Video",
+          phase: "analyzing",
+          subtitleCount: 70,
+          committedCueOffset: 50,
+          inflightCueCount: 23,
+          inflightBatchSize: 50,
+          totalCues: 100,
+          errorMessage: null,
+          quotaError: null,
+          retryMessage: null,
+          startedAt: 1,
+          subtitles: [],
+          summary: null,
+        },
+      },
+    });
+
+    render(<DownloadQueueWidget />);
+    fireEvent.click(screen.getByTitle(/后台任务/));
+
+    expect(screen.getByText("已保存 73/100 条")).toBeInTheDocument();
+  });
+
   it("shows committed input progress and an explicit continuation action", () => {
     useBgAnalyses.setState({
       jobs: {
@@ -85,6 +113,8 @@ describe("background analysis rows", () => {
           phase: "error",
           subtitleCount: 47,
           committedCueOffset: 50,
+          inflightCueCount: 0,
+          inflightBatchSize: 0,
           totalCues: 100,
           errorMessage: "temporary provider failure",
           quotaError: null,
@@ -112,6 +142,8 @@ describe("background analysis rows", () => {
           phase: "error",
           subtitleCount: 47,
           committedCueOffset: 50,
+          inflightCueCount: 0,
+          inflightBatchSize: 0,
           totalCues: 100,
           errorMessage: "quota exceeded",
           quotaError: {

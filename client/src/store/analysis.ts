@@ -37,6 +37,12 @@ interface AnalysisState {
   videoId: string | null;
   phase: AnalysisPhase;
   progressPercent: number;
+  /** Transcript inputs durably committed to analysis.json. */
+  committedCueOffset: number;
+  /** Current batch entries durably committed to analysis.inflight.json. */
+  inflightCueCount: number;
+  /** Total transcript inputs in the current batch. */
+  inflightBatchSize: number;
   subtitles: Subtitle[];
   summary: Omit<AnalysisResult, "subtitles"> | null;
   checkpoint: AnalysisCheckpoint | null;
@@ -77,6 +83,9 @@ export const useAnalysis = create<AnalysisState>((set) => ({
   videoId: null,
   phase: "idle",
   progressPercent: 0,
+  committedCueOffset: 0,
+  inflightCueCount: 0,
+  inflightBatchSize: 0,
   subtitles: [],
   summary: null,
   checkpoint: null,
@@ -91,6 +100,9 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       videoId: id,
       phase: "downloading",
       progressPercent: 0,
+      committedCueOffset: 0,
+      inflightCueCount: 0,
+      inflightBatchSize: 0,
       subtitles: [],
       summary: null,
       checkpoint: null,
@@ -119,6 +131,9 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       subtitles: dedupSubtitles(analysis.subtitles),
       summary: { keyPhrases: analysis.keyPhrases },
       checkpoint: analysis.checkpoint,
+      committedCueOffset: analysis.checkpoint.nextCueOffset,
+      inflightCueCount: 0,
+      inflightBatchSize: 0,
       progressPercent: totalCues > 0
         ? Math.min(100, (analysis.checkpoint.nextCueOffset / totalCues) * 100)
         : 100,
@@ -132,8 +147,17 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       ]),
       summary: { keyPhrases: committed.keyPhrases },
       checkpoint: committed.checkpoint,
+      committedCueOffset: committed.checkpoint.nextCueOffset,
+      inflightCueCount: preview?.entries.length ?? 0,
+      inflightBatchSize: preview
+        ? preview.endCueOffset - preview.startCueOffset
+        : 0,
       progressPercent: totalCues > 0
-        ? Math.min(100, (committed.checkpoint.nextCueOffset / totalCues) * 100)
+        ? Math.min(
+            100,
+            ((committed.checkpoint.nextCueOffset + (preview?.entries.length ?? 0))
+              / totalCues) * 100,
+          )
         : 100,
     }),
   setRetryMessage: (retryMessage) => set({ retryMessage }),
@@ -174,6 +198,9 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       videoId: null,
       phase: "idle",
       progressPercent: 0,
+      committedCueOffset: 0,
+      inflightCueCount: 0,
+      inflightBatchSize: 0,
       subtitles: [],
       summary: null,
       checkpoint: null,

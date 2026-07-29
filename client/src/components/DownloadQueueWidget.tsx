@@ -114,6 +114,8 @@ type UnifiedItem =
       percent: number;
       subtitleCount: number;
       committedCueOffset: number;
+      inflightCueCount: number;
+      inflightBatchSize: number;
       totalCues: number;
       retryMessage?: string | null;
       error?: string | null;
@@ -150,10 +152,15 @@ export function DownloadQueueWidget() {
       label: a.label,
       phase: a.phase,
       percent: a.totalCues > 0
-        ? Math.min(100, (a.committedCueOffset / a.totalCues) * 100)
+        ? Math.min(
+            100,
+            ((a.committedCueOffset + a.inflightCueCount) / a.totalCues) * 100,
+          )
         : 0,
       subtitleCount: a.subtitleCount,
       committedCueOffset: a.committedCueOffset,
+      inflightCueCount: a.inflightCueCount,
+      inflightBatchSize: a.inflightBatchSize,
       totalCues: a.totalCues,
       retryMessage: a.retryMessage,
       error: a.errorMessage,
@@ -300,7 +307,7 @@ function Row({
         )}
         {item.kind === "analysis" && item.phase === "analyzing" && (
           <span className="tabular-nums">
-            已处理 {item.committedCueOffset}/{item.totalCues} 条
+            已保存 {item.committedCueOffset + item.inflightCueCount}/{item.totalCues} 条
           </span>
         )}
         {item.kind === "analysis" && item.phase === "analyzing" && item.retryMessage && (

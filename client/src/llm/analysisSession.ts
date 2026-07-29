@@ -554,7 +554,7 @@ export async function executeAnalysisSession(options: {
     style: options.style,
     signal: options.signal,
     onRetry: options.onRetry,
-    resumePreview: activeJournal ? previewFromJournal(activeJournal) : null,
+    resumePreview: activeJournal ? analysisPreviewFromJournal(activeJournal) : null,
     onPreview: async (preview) => {
       if (preview) {
         if (
@@ -579,14 +579,14 @@ export async function executeAnalysisSession(options: {
         };
         const next = mergeInflightEntries(base, preview.entries);
         activeJournal = await options.session.saveInflight(next);
-        await options.onPreview?.(committed, previewFromJournal(activeJournal));
+        await options.onPreview?.(committed, analysisPreviewFromJournal(activeJournal));
         return;
       }
 
       activeJournal = options.session.inflight;
       await options.onPreview?.(
         committed,
-        activeJournal ? previewFromJournal(activeJournal) : null,
+        activeJournal ? analysisPreviewFromJournal(activeJournal) : null,
       );
     },
     onCommit: async (commit) => {
@@ -598,7 +598,9 @@ export async function executeAnalysisSession(options: {
   return committed;
 }
 
-function previewFromJournal(journal: AnalysisInflightJournal): AnalysisPreview {
+export function analysisPreviewFromJournal(
+  journal: AnalysisInflightJournal,
+): AnalysisPreview {
   return {
     startCueOffset: journal.startCueOffset,
     endCueOffset: journal.endCueOffset,

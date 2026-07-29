@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   executeAnalysisSession,
   openStoredAnalysisSession,
+  analysisPreviewFromJournal,
   StaleAnalysisSessionError,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
@@ -22,10 +23,13 @@ export interface BgAnalysisJob {
   videoId: string;
   label: string;
   phase: "transcribing" | "analyzing" | "done" | "error";
-  /** Visible model outputs, including the current uncommitted preview. */
+  /** Visible model outputs, including the current durable inflight preview. */
   subtitleCount: number;
   /** Authoritative count of transcript inputs committed to analysis.json. */
   committedCueOffset: number;
+  /** Current batch entries durably saved in analysis.inflight.json. */
+  inflightCueCount: number;
+  inflightBatchSize: number;
   totalCues: number;
   errorMessage: string | null;
   quotaError: QuotaExhaustedDetails | null;
@@ -73,6 +77,7 @@ export interface BackgroundTakeover {
   session: PersistedAnalysisSession;
   cues: SrtCue[];
   analysis: CheckpointedAnalysis;
+  inflightPreview: AnalysisPreview | null;
   errorMessage: string | null;
   quotaError: QuotaExhaustedDetails | null;
 }
@@ -94,7 +99,14 @@ export function runInBackground(opts: RunInBackgroundOptions): void {
     runner: Promise.resolve(),
   };
   runtimes.set(opts.videoId, runtime);
-  publishAnalysis(runtime, opts.session.analysis, "analyzing");
+  publishAnalysis(
+    runtime,
+    opts.session.analysis,
+    "analyzing",
+    opts.session.inflight
+      ? analysisPreviewFromJournal(opts.session.inflight)
+      : null,
+  );
   runtime.runner = (async () => {
     try {
       await opts.waitFor;
@@ -139,6 +151,8 @@ export function retranscribeAndAnalyzeInBackground(opts: RetranscribeBgOptions):
         phase: "transcribing",
         subtitleCount: 0,
         committedCueOffset: 0,
+        inflightCueCount: 0,
+        inflightBatchSize: 0,
         totalCues: 0,
         errorMessage: null,
         quotaError: null,
@@ -174,7 +188,14 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
     runtime.session = stored.session;
     runtime.needsSessionReload = false;
     if (runtime.controller.signal.aborted) return;
-    publishAnalysis(runtime, runtime.session.analysis, "analyzing");
+    publishAnalysis(
+      runtime,
+      runtime.session.analysis,
+      "analyzing",
+      runtime.session.inflight
+        ? analysisPreviewFromJournal(runtime.session.inflight)
+        : null,
+    );
     await driveAnalysis(runtime);
   } catch (error) {
     failRuntime(runtime, error);
@@ -240,6 +261,7 @@ function publishAnalysis(
   runtime: BgRuntime,
   analysis: CheckpointedAnalysis,
   phase: BgAnalysisJob["phase"],
+  preview: AnalysisPreview | null = null,
 ): void {
   const previous = useBgAnalyses.getState().jobs[runtime.videoId];
   useBgAnalyses.setState((state) => ({
@@ -249,14 +271,18 @@ function publishAnalysis(
         videoId: runtime.videoId,
         label: runtime.label,
         phase,
-        subtitleCount: analysis.subtitles.length,
+        subtitleCount: analysis.subtitles.length + (preview?.subtitles.length ?? 0),
         committedCueOffset: analysis.checkpoint.nextCueOffset,
+        inflightCueCount: preview?.entries.length ?? 0,
+        inflightBatchSize: preview
+          ? preview.endCueOffset - preview.startCueOffset
+          : 0,
         totalCues: runtime.cues?.length ?? 0,
         errorMessage: null,
         quotaError: null,
         retryMessage: null,
         startedAt: previous?.startedAt ?? Date.now(),
-        subtitles: analysis.subtitles,
+        subtitles: [...analysis.subtitles, ...(preview?.subtitles ?? [])],
         summary: { keyPhrases: analysis.keyPhrases },
       },
     },
@@ -269,14 +295,7 @@ function publishPreview(
   preview: AnalysisPreview | null,
 ): void {
   if (runtimes.get(runtime.videoId) !== runtime) return;
-  publishAnalysis(
-    runtime,
-    {
-      ...committed,
-      subtitles: [...committed.subtitles, ...(preview?.subtitles ?? [])],
-    },
-    "analyzing",
-  );
+  publishAnalysis(runtime, committed, "analyzing", preview);
 }
 
 function failRuntime(runtime: BgRuntime, error: unknown): void {
@@ -289,6 +308,7 @@ function failRuntime(runtime: BgRuntime, error: unknown): void {
     const committedCueOffset =
       runtime.session?.analysis.checkpoint.nextCueOffset ??
       job.committedCueOffset;
+    const savedCueOffset = committedCueOffset + job.inflightCueCount;
     const totalCues = runtime.cues?.length ?? job.totalCues;
     return {
       ...job,
@@ -297,7 +317,7 @@ function failRuntime(runtime: BgRuntime, error: unknown): void {
       errorMessage: error instanceof Error ? error.message : String(error),
       quotaError: quotaDetailsFromRelayError(
         error,
-        committedCueOffset,
+        savedCueOffset,
         totalCues,
       ),
     };
@@ -324,7 +344,12 @@ async function reopenStaleSessionAndContinue(runtime: BgRuntime): Promise<void> 
     runtime.cues = cues;
     runtime.session = session;
     runtime.needsSessionReload = false;
-    publishAnalysis(runtime, session.analysis, "analyzing");
+    publishAnalysis(
+      runtime,
+      session.analysis,
+      "analyzing",
+      session.inflight ? analysisPreviewFromJournal(session.inflight) : null,
+    );
     await driveAnalysis(runtime);
   } catch (error) {
     failRuntime(runtime, error);
@@ -371,7 +396,7 @@ export async function cancelBackground(videoId: string): Promise<void> {
   removeJob(videoId);
 }
 
-/** Reverse handoff: abort only the uncommitted batch and return the same lease. */
+/** Reverse handoff: abort the request and return the same lease plus durable journal. */
 export async function takeOverBackground(videoId: string): Promise<BackgroundTakeover | null> {
   const runtime = runtimes.get(videoId);
   if (!runtime) return null;
@@ -391,6 +416,9 @@ export async function takeOverBackground(videoId: string): Promise<BackgroundTak
     session: runtime.session,
     cues: runtime.cues,
     analysis: runtime.session.analysis,
+    inflightPreview: runtime.session.inflight
+      ? analysisPreviewFromJournal(runtime.session.inflight)
+      : null,
     errorMessage,
     quotaError,
   };

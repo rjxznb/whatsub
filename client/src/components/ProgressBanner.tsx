@@ -29,7 +29,7 @@ interface Props {
   onRetranscribe?: () => void;
   /** Hand the running analysis off to the background scheduler so the
    *  user can navigate away without losing progress. Shown alongside
-   *  「停止解析」 during the analyzing phase. */
+   *  「暂停解析」 during the analyzing phase. */
   onMoveToBackground?: () => void;
 }
 
@@ -47,7 +47,9 @@ export function ProgressBanner({
     errorUpsell,
     errorStage,
     retryMessage,
-    subtitles,
+    committedCueOffset,
+    inflightCueCount,
+    inflightBatchSize,
     quotaError,
   } = useAnalysis();
   if (phase === "idle" || phase === "complete") return null;
@@ -71,7 +73,8 @@ export function ProgressBanner({
       )}
       <div className="flex-1 font-medium">
         {PHASE_LABELS[phase] ?? phase}
-        {(isAnalyzing || isPaused) && ` · 已生成 ${subtitles.length} 行字幕`}
+        {(isAnalyzing || isPaused) &&
+          ` · 正式完成 ${committedCueOffset} 条 · 本批已保存 ${inflightCueCount}/${inflightBatchSize} 条`}
         {retryMessage && ` · ${retryMessage}`}
         {quotaError
           ? ` — ${quotaRecoveryMessage(quotaError)}`
@@ -92,7 +95,7 @@ export function ProgressBanner({
           onClick={onStop}
           className="px-3 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs transition-colors"
         >
-          停止解析
+          暂停解析
         </button>
       )}
       {isPaused && onContinue && (

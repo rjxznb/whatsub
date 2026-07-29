@@ -28,6 +28,7 @@ import {
   openStoredAnalysisSession,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
+import { analysisRetryMessage } from "../llm/analysisRetryMessage";
 import { getProvider } from "../llm/providers";
 import { RelayError } from "../llm/providers/relayErrors";
 import {
@@ -294,10 +295,12 @@ export function Player() {
         onCommitted: (persisted) => {
           analysis.setCommittedAnalysis(persisted, cues.length);
         },
-        onRetry: ({ nextAttempt, maxAttempts }) => {
-          analysis.setRetryMessage(
-            `网络波动，正在进行第 ${nextAttempt}/${maxAttempts} 次尝试…`,
-          );
+        onPreview: (committed, preview) => {
+          if (sessionRef.current !== session) return;
+          analysis.setAnalysisPreview(committed, preview, cues.length);
+        },
+        onRetry: (event) => {
+          analysis.setRetryMessage(analysisRetryMessage(event));
         },
       });
       analysis.setRetryMessage(null);

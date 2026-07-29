@@ -5,6 +5,7 @@ import type {
   CheckpointedAnalysis,
   Subtitle,
 } from "../llm/types";
+import type { AnalysisPreview } from "../llm/analyze";
 
 /** Drop entries that share (time, endTime, text) with a previous one. */
 export function dedupSubtitles(subs: Subtitle[]): Subtitle[] {
@@ -51,6 +52,11 @@ interface AnalysisState {
   setSubtitles: (s: Subtitle[]) => void;
   setSummary: (s: Omit<AnalysisResult, "subtitles">) => void;
   setCommittedAnalysis: (analysis: CheckpointedAnalysis, totalCues: number) => void;
+  setAnalysisPreview: (
+    committed: CheckpointedAnalysis,
+    preview: AnalysisPreview | null,
+    totalCues: number,
+  ) => void;
   setRetryMessage: (message: string | null) => void;
   setError: (msg: string, upsell?: boolean, stage?: AnalysisErrorStage) => void;
   updateSubtitle: (idx: number, partial: Partial<Subtitle>) => void;
@@ -108,6 +114,18 @@ export const useAnalysis = create<AnalysisState>((set) => ({
         ? Math.min(100, (analysis.checkpoint.nextCueOffset / totalCues) * 100)
         : 100,
       retryMessage: null,
+    }),
+  setAnalysisPreview: (committed, preview, totalCues) =>
+    set({
+      subtitles: dedupSubtitles([
+        ...committed.subtitles,
+        ...(preview?.subtitles ?? []),
+      ]),
+      summary: { keyPhrases: committed.keyPhrases },
+      checkpoint: committed.checkpoint,
+      progressPercent: totalCues > 0
+        ? Math.min(100, (committed.checkpoint.nextCueOffset / totalCues) * 100)
+        : 100,
     }),
   setRetryMessage: (retryMessage) => set({ retryMessage }),
   setError: (msg, upsell = false, stage = "analysis") =>

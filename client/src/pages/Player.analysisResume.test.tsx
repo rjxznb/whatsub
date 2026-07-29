@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAnalysis } from "../store/analysis";
 import type { CheckpointedAnalysis, Subtitle } from "../llm/types";
+import type { AnalysisPreview } from "../llm/analyze";
 import { canEditSubtitles } from "./Player";
 
 const subtitle = (index: number): Subtitle => ({
@@ -60,6 +61,57 @@ describe("Player committed resume state", () => {
     expect(state.subtitles).toEqual(persisted.subtitles);
     expect(state.summary?.keyPhrases).toEqual(persisted.keyPhrases);
     expect(state.retryMessage).toBeNull();
+  });
+
+  it("shows preview cues without advancing the committed checkpoint", () => {
+    const committed: CheckpointedAnalysis = {
+      subtitles: [subtitle(1)],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: "sha256:fixture",
+        nextCueOffset: 50,
+        phase: "cues",
+        revision: 7,
+      },
+    };
+    const preview: AnalysisPreview = {
+      startCueOffset: 50,
+      endCueOffset: 100,
+      subtitles: [subtitle(51)],
+    };
+
+    useAnalysis.getState().setAnalysisPreview(committed, preview, 100);
+    const state = useAnalysis.getState();
+
+    expect(state.subtitles).toEqual([subtitle(1), subtitle(51)]);
+    expect(state.checkpoint?.nextCueOffset).toBe(50);
+    expect(state.progressPercent).toBe(50);
+  });
+
+  it("rolls preview back to the durable snapshot", () => {
+    const committed: CheckpointedAnalysis = {
+      subtitles: [subtitle(1)],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: "sha256:fixture",
+        nextCueOffset: 50,
+        phase: "cues",
+        revision: 7,
+      },
+    };
+    const preview: AnalysisPreview = {
+      startCueOffset: 50,
+      endCueOffset: 100,
+      subtitles: [subtitle(51)],
+    };
+
+    useAnalysis.getState().setAnalysisPreview(committed, preview, 100);
+    useAnalysis.getState().setAnalysisPreview(committed, null, 100);
+
+    expect(useAnalysis.getState().subtitles).toEqual(committed.subtitles);
+    expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);
   });
 
   it("locks manual subtitle edits while the analysis producer is saving", () => {

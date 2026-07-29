@@ -3,6 +3,7 @@ import type { TranslationStyle } from "../types/settings";
 import {
   runAnalysis,
   type AnalysisCommit,
+  type AnalysisPreview,
   type AnalysisRetryEvent,
 } from "./analyze";
 import { parsePersistedAnalysis, prepareAnalysis } from "./analysisCheckpoint";
@@ -329,6 +330,10 @@ export async function executeAnalysisSession(options: {
   style: TranslationStyle;
   signal?: AbortSignal;
   onCommitted?: (analysis: CheckpointedAnalysis, commit: AnalysisCommit) => void;
+  onPreview?: (
+    committed: CheckpointedAnalysis,
+    preview: AnalysisPreview | null,
+  ) => void;
   onRetry?: (event: AnalysisRetryEvent) => void;
 }): Promise<CheckpointedAnalysis> {
   let committed = options.session.analysis;
@@ -340,6 +345,7 @@ export async function executeAnalysisSession(options: {
     style: options.style,
     signal: options.signal,
     onRetry: options.onRetry,
+    onPreview: (preview) => options.onPreview?.(committed, preview),
     onCommit: async (commit) => {
       const candidate = applyCommit(committed, commit);
       committed = await options.session.save(candidate);

@@ -212,10 +212,11 @@ describe("immutable analysis sessions", () => {
     });
     const provider: Provider = {
       async *stream() {
-        yield `${JSON.stringify({ type: "cue", translation: "第一句" })}\n`;
+        yield `${JSON.stringify({ index: 1, translation: "第一句", highlights: [] })}\n`;
       },
     };
     const onCommitted = vi.fn();
+    const onPreview = vi.fn();
     const session = await openAnalysisSession("failed-save", cues.slice(0, 1));
     const before = session.analysis;
 
@@ -226,11 +227,85 @@ describe("immutable analysis sessions", () => {
         cues: cues.slice(0, 1),
         style: "colloquial",
         onCommitted,
+        onPreview,
       }),
     ).rejects.toBeInstanceOf(StaleAnalysisSessionError);
 
     expect(onCommitted).not.toHaveBeenCalled();
+    expect(onPreview).toHaveBeenLastCalledWith(before, null);
     expect(session.analysis).toBe(before);
+  });
+
+  it("forwards previews before save and replaces them only after save succeeds", async () => {
+    const initial = await checkpointed();
+    initial.checkpoint.transcriptFingerprint = await fingerprintTranscript(cues.slice(0, 1));
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => { releaseStream = resolve; });
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => { releaseSave = resolve; });
+    let previewSeen!: () => void;
+    const previewPromise = new Promise<void>((resolve) => { previewSeen = resolve; });
+    let saveStarted!: () => void;
+    const saveStartedPromise = new Promise<void>((resolve) => { saveStarted = resolve; });
+
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-preview", analysis: initial };
+      }
+      if (command === "save_analysis_session") {
+        saveStarted();
+        await saveGate;
+        return { status: "applied", revision: 1 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const provider: Provider = {
+      async *stream() {
+        yield `${JSON.stringify({ index: 1, translation: "第一句", highlights: [] })}\n`;
+        await streamGate;
+      },
+    };
+    const controller = new AbortController();
+    const onPreview = vi.fn(() => previewSeen());
+    const onCommitted = vi.fn(() => controller.abort());
+    const session = await openAnalysisSession("preview-save", cues.slice(0, 1));
+    const durableBefore = session.analysis;
+
+    const run = executeAnalysisSession({
+      session,
+      provider,
+      cues: cues.slice(0, 1),
+      style: "colloquial",
+      signal: controller.signal,
+      onPreview,
+      onCommitted,
+    });
+
+    await previewPromise;
+    expect(onPreview).toHaveBeenLastCalledWith(
+      durableBefore,
+      expect.objectContaining({
+        subtitles: [expect.objectContaining({ text: "First", translation: "第一句" })],
+      }),
+    );
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "save_analysis_session"))
+      .toHaveLength(0);
+
+    releaseStream();
+    await saveStartedPromise;
+    expect(onCommitted).not.toHaveBeenCalled();
+    expect(session.analysis).toBe(durableBefore);
+
+    releaseSave();
+    await run;
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        checkpoint: expect.objectContaining({ nextCueOffset: 1, phase: "summary" }),
+      }),
+      null,
+    );
   });
 
   it("resumes from the committed input offset rather than the output subtitle count", async () => {

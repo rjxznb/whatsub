@@ -7,6 +7,7 @@ import {
   StaleAnalysisSessionError,
 } from "./analysisSession";
 import { fingerprintTranscript } from "./analysisCheckpoint";
+import type { AnalysisInflightJournal } from "./analysisJournal";
 import type { Provider } from "./providers/types";
 import type { CheckpointedAnalysis, SrtCue, Subtitle } from "./types";
 
@@ -16,6 +17,16 @@ const cues: SrtCue[] = [
   { index: 1, time: 0, endTime: 1, text: "First" },
   { index: 2, time: 1, endTime: 2, text: "Second" },
 ];
+
+const transcript = [
+  "1",
+  "00:00:00,000 --> 00:00:01,000",
+  "First",
+  "",
+  "2",
+  "00:00:01,000 --> 00:00:02,000",
+  "Second",
+].join("\n");
 
 const subtitle = (text: string): Subtitle => ({
   time: 0,
@@ -43,6 +54,23 @@ async function checkpointed(
       phase,
       revision,
     },
+  };
+}
+
+async function journal(
+  overrides: Partial<AnalysisInflightJournal> = {},
+): Promise<AnalysisInflightJournal> {
+  return {
+    version: 1,
+    journalId: "journal-1",
+    transcriptGeneration: "sha256:file-old",
+    transcriptFingerprint: await fingerprintTranscript(cues),
+    analysisStyle: "neutral",
+    baseRevision: 0,
+    startCueOffset: 0,
+    endCueOffset: 2,
+    entries: [{ cueOffset: 0, subtitle: subtitle("First") }],
+    ...overrides,
   };
 }
 
@@ -110,15 +138,26 @@ describe("immutable analysis sessions", () => {
   it("closes a mismatched continuation lease and explicitly begins a reset session", async () => {
     const mismatched = await checkpointed(4, 1);
     mismatched.checkpoint.transcriptFingerprint = "sha256:different";
+    const transcriptGeneration = await fingerprintTranscript(cues);
     let begins = 0;
     mockInvoke.mockImplementation(async (command, args) => {
       if (command === "begin_analysis_session") {
         begins += 1;
         if (begins === 1) {
-          expect(args).toEqual({ videoId: "changed", reset: false });
+          expect(args).toEqual({
+            videoId: "changed",
+            reset: false,
+            transcriptGeneration,
+            analysisStyle: "colloquial",
+          });
           return { lease: "lease-old", analysis: mismatched };
         }
-        expect(args).toEqual({ videoId: "changed", reset: true });
+        expect(args).toEqual({
+          videoId: "changed",
+          reset: true,
+          transcriptGeneration,
+          analysisStyle: "colloquial",
+        });
         return { lease: "lease-reset", analysis: null };
       }
       if (command === "end_analysis_session") return undefined;
@@ -133,9 +172,25 @@ describe("immutable analysis sessions", () => {
 
     expect(session.lease).toBe("lease-reset");
     expect(mockInvoke.mock.calls).toEqual([
-      ["begin_analysis_session", { videoId: "changed", reset: false }],
+      [
+        "begin_analysis_session",
+        {
+          videoId: "changed",
+          reset: false,
+          transcriptGeneration,
+          analysisStyle: "colloquial",
+        },
+      ],
       ["end_analysis_session", { videoId: "changed", lease: "lease-old" }],
-      ["begin_analysis_session", { videoId: "changed", reset: true }],
+      [
+        "begin_analysis_session",
+        {
+          videoId: "changed",
+          reset: true,
+          transcriptGeneration,
+          analysisStyle: "colloquial",
+        },
+      ],
       [
         "save_analysis_session",
         expect.objectContaining({ videoId: "changed", lease: "lease-reset" }),
@@ -146,15 +201,6 @@ describe("immutable analysis sessions", () => {
   it("reopens a mismatched stored transcript only against the same generation", async () => {
     const mismatched = await checkpointed(4, 1);
     mismatched.checkpoint.transcriptFingerprint = "sha256:different";
-    const transcript = [
-      "1",
-      "00:00:00,000 --> 00:00:01,000",
-      "First",
-      "",
-      "2",
-      "00:00:01,000 --> 00:00:02,000",
-      "Second",
-    ].join("\n");
     let begins = 0;
     mockInvoke.mockImplementation(async (command, args) => {
       if (command === "begin_analysis_session_from_transcript") {
@@ -164,6 +210,7 @@ describe("immutable analysis sessions", () => {
             videoId: "stored",
             reset: false,
             expectedGeneration: null,
+            analysisStyle: "colloquial",
           });
           return {
             transcript,
@@ -175,6 +222,7 @@ describe("immutable analysis sessions", () => {
           videoId: "stored",
           reset: true,
           expectedGeneration: "sha256:file-old",
+          analysisStyle: "colloquial",
         });
         return {
           transcript,
@@ -190,7 +238,7 @@ describe("immutable analysis sessions", () => {
       throw new Error(`unexpected command: ${command}`);
     });
 
-    const stored = await openStoredAnalysisSession("stored");
+    const stored = await openStoredAnalysisSession("stored", { style: "colloquial" });
 
     expect(stored?.cues).toEqual(cues);
     expect(stored?.session.lease).toBe("lease-reset");
@@ -463,5 +511,136 @@ describe("immutable analysis sessions", () => {
     const second = await secondPromise;
     expect(beginCount).toBe(2);
     await second.close();
+  });
+
+  it("adopts a matching journal and saves monotonic updates with the lease", async () => {
+    const initial = await checkpointed();
+    const startedJournal = await journal();
+    const nextJournal = await journal({
+      entries: [
+        ...startedJournal.entries,
+        { cueOffset: 1, subtitle: { ...subtitle("Second"), time: 1, endTime: 2 } },
+      ],
+    });
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session_from_transcript") {
+        return {
+          transcript,
+          transcriptGeneration: "sha256:file-old",
+          session: { lease: "lease-1", analysis: initial, inflight: startedJournal },
+        };
+      }
+      if (command === "save_analysis_inflight") {
+        return { status: "applied", revision: 0 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const stored = await openStoredAnalysisSession("journal-adopt", { style: "neutral" });
+    expect(stored?.session.inflight?.entries).toHaveLength(1);
+
+    await stored!.session.saveInflight(nextJournal);
+    expect(stored?.session.inflight?.entries).toHaveLength(2);
+    expect(mockInvoke).toHaveBeenCalledWith("save_analysis_inflight", {
+      videoId: "journal-adopt",
+      lease: "lease-1",
+      journal: nextJournal,
+    });
+  });
+
+  it("discards a semantically mismatched journal before exposing the session", async () => {
+    const initial = await checkpointed();
+    const staleJournal = await journal({ journalId: "stale-journal", analysisStyle: "formal" });
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session_from_transcript") {
+        return {
+          transcript,
+          transcriptGeneration: "sha256:file-old",
+          session: { lease: "lease-1", analysis: initial, inflight: staleJournal },
+        };
+      }
+      if (command === "discard_analysis_inflight") {
+        return { status: "applied", revision: 0 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const stored = await openStoredAnalysisSession("journal-stale", { style: "neutral" });
+
+    expect(stored?.session.inflight).toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith("discard_analysis_inflight", {
+      videoId: "journal-stale",
+      lease: "lease-1",
+      journalId: "stale-journal",
+    });
+  });
+
+  it("serializes canonical and inflight saves and close waits for the shared tail", async () => {
+    const initial = await checkpointed();
+    const generation = await fingerprintTranscript(cues);
+    const pendingJournal = await journal({ transcriptGeneration: generation });
+    let releaseInflight!: () => void;
+    const inflightGate = new Promise<void>((resolve) => { releaseInflight = resolve; });
+    let inflightStarted!: () => void;
+    const inflightStartedPromise = new Promise<void>((resolve) => { inflightStarted = resolve; });
+
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-tail", analysis: initial, inflight: null };
+      }
+      if (command === "save_analysis_inflight") {
+        inflightStarted();
+        await inflightGate;
+        return { status: "applied", revision: 0 };
+      }
+      if (command === "save_analysis_session") {
+        return { status: "applied", revision: 1 };
+      }
+      if (command === "end_analysis_session") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const session = await openAnalysisSession("tail", cues, "neutral");
+    const inflightSave = session.saveInflight(pendingJournal);
+    await inflightStartedPromise;
+    const canonicalSave = session.save({
+      ...initial,
+      checkpoint: { ...initial.checkpoint, revision: 1 },
+    });
+    const close = session.close();
+    await Promise.resolve();
+
+    expect(mockInvoke.mock.calls.some(([command]) => command === "save_analysis_session"))
+      .toBe(false);
+    expect(mockInvoke.mock.calls.some(([command]) => command === "end_analysis_session"))
+      .toBe(false);
+
+    releaseInflight();
+    await Promise.all([inflightSave, canonicalSave, close]);
+    expect(mockInvoke.mock.calls.map(([command]) => command)).toEqual([
+      "begin_analysis_session",
+      "save_analysis_inflight",
+      "save_analysis_session",
+      "end_analysis_session",
+    ]);
+  });
+
+  it("marks a session stale when an inflight save is rejected", async () => {
+    const initial = await checkpointed();
+    const generation = await fingerprintTranscript(cues);
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-stale", analysis: initial, inflight: null };
+      }
+      if (command === "save_analysis_inflight") {
+        return { status: "rejected", revision: 0 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const session = await openAnalysisSession("stale-inflight", cues, "neutral");
+    await expect(
+      session.saveInflight(await journal({ transcriptGeneration: generation })),
+    ).rejects.toBeInstanceOf(StaleAnalysisSessionError);
   });
 });

@@ -258,7 +258,7 @@ const liveProcessorDependencies: QueueProcessorDependencies = {
     },
   }),
   analyze: async (videoId, label) => {
-    const stored = await openStoredAnalysisSession(videoId);
+    const stored = await openStoredAnalysisSession(videoId, { style: "neutral" });
     if (!stored) throw new Error("transcript_not_found_after_import");
     const { cues, session } = stored;
     runInBackground({ videoId, label, cues, session, style: "neutral" });

@@ -6,7 +6,18 @@ import {
   type AnalysisPreview,
   type AnalysisRetryEvent,
 } from "./analyze";
-import { parsePersistedAnalysis, prepareAnalysis } from "./analysisCheckpoint";
+import {
+  fingerprintTranscript,
+  parsePersistedAnalysis,
+  prepareAnalysis,
+} from "./analysisCheckpoint";
+import {
+  journalMatchesSession,
+  mergeInflightEntries,
+  parseAnalysisInflightJournal,
+  type AnalysisInflightJournal,
+  type JournalSessionContext,
+} from "./analysisJournal";
 import { parseSrt } from "./parseSrt";
 import type { Provider } from "./providers/types";
 import type { CheckpointedAnalysis, SrtCue } from "./types";
@@ -14,6 +25,7 @@ import type { CheckpointedAnalysis, SrtCue } from "./types";
 interface AnalysisSessionStart {
   lease: string;
   analysis: unknown | null;
+  inflight: unknown | null;
 }
 
 interface AnalysisTranscriptSessionStart {
@@ -40,8 +52,15 @@ export interface PersistedAnalysisSession {
   readonly videoId: string;
   readonly lease: string;
   readonly analysis: CheckpointedAnalysis;
+  readonly inflight: AnalysisInflightJournal | null;
   save(next: CheckpointedAnalysis): Promise<CheckpointedAnalysis>;
+  saveInflight(next: AnalysisInflightJournal): Promise<AnalysisInflightJournal>;
   close(): Promise<void>;
+}
+
+export interface OpenStoredAnalysisSessionOptions {
+  reset?: boolean;
+  style: TranslationStyle;
 }
 
 export interface StoredAnalysisSession {
@@ -62,10 +81,12 @@ export class StaleAnalysisSessionError extends Error {
 export async function openAnalysisSession(
   videoId: string,
   cues: readonly SrtCue[],
+  style: TranslationStyle = "colloquial",
 ): Promise<PersistedAnalysisSession> {
   const release = await acquireLocalSessionSlot(videoId);
   try {
-    const started = await begin(videoId, false);
+    const transcriptGeneration = await fingerprintTranscript(cues);
+    const started = await begin(videoId, false, transcriptGeneration, style);
     let prepared: Awaited<ReturnType<typeof prepareAnalysis>>;
     try {
       prepared = await prepareAnalysis(cues, started.analysis);
@@ -76,10 +97,25 @@ export async function openAnalysisSession(
 
     if (prepared.reason === "fingerprint-mismatch") {
       await end(videoId, started.lease);
-      return beginPreparedSession(videoId, cues, await begin(videoId, true), release);
+      return beginPreparedSession(
+        videoId,
+        cues,
+        await begin(videoId, true, transcriptGeneration, style),
+        transcriptGeneration,
+        style,
+        release,
+      );
     }
 
-    return createPreparedSession(videoId, cues, started, prepared, release);
+    return createPreparedSession(
+      videoId,
+      cues,
+      started,
+      prepared,
+      transcriptGeneration,
+      style,
+      release,
+    );
   } catch (error) {
     release();
     throw error;
@@ -89,10 +125,19 @@ export async function openAnalysisSession(
 export async function resetAnalysisSession(
   videoId: string,
   cues: readonly SrtCue[],
+  style: TranslationStyle = "colloquial",
 ): Promise<PersistedAnalysisSession> {
   const release = await acquireLocalSessionSlot(videoId);
   try {
-    return await beginPreparedSession(videoId, cues, await begin(videoId, true), release);
+    const transcriptGeneration = await fingerprintTranscript(cues);
+    return await beginPreparedSession(
+      videoId,
+      cues,
+      await begin(videoId, true, transcriptGeneration, style),
+      transcriptGeneration,
+      style,
+      release,
+    );
   } catch (error) {
     release();
     throw error;
@@ -106,11 +151,12 @@ export async function resetAnalysisSession(
  */
 export async function openStoredAnalysisSession(
   videoId: string,
-  reset = false,
+  options: OpenStoredAnalysisSessionOptions,
 ): Promise<StoredAnalysisSession | null> {
   const release = await acquireLocalSessionSlot(videoId);
   try {
-    const started = await beginFromTranscript(videoId, reset, null);
+    const reset = options.reset ?? false;
+    const started = await beginFromTranscript(videoId, reset, null, options.style);
     if (!started) {
       release();
       return null;
@@ -122,6 +168,8 @@ export async function openStoredAnalysisSession(
         videoId,
         cues,
         started.session,
+        started.transcriptGeneration,
+        options.style,
         release,
       );
       return { cues, session };
@@ -140,6 +188,8 @@ export async function openStoredAnalysisSession(
         cues,
         started.session,
         prepared,
+        started.transcriptGeneration,
+        options.style,
         release,
       );
       return { cues, session };
@@ -150,6 +200,7 @@ export async function openStoredAnalysisSession(
       videoId,
       true,
       started.transcriptGeneration,
+      options.style,
     );
     if (!restarted) {
       throw new Error(`transcript disappeared while opening analysis session for ${videoId}`);
@@ -159,6 +210,8 @@ export async function openStoredAnalysisSession(
       videoId,
       cues,
       restarted.session,
+      restarted.transcriptGeneration,
+      options.style,
       release,
     );
     return { cues, session };
@@ -172,6 +225,8 @@ async function beginPreparedSession(
   videoId: string,
   cues: readonly SrtCue[],
   started: AnalysisSessionStart,
+  transcriptGeneration: string,
+  style: TranslationStyle,
   release: () => void,
 ): Promise<PersistedAnalysisSession> {
   let prepared: Awaited<ReturnType<typeof prepareAnalysis>>;
@@ -185,7 +240,15 @@ async function beginPreparedSession(
     await end(videoId, started.lease);
     throw new Error(`reset analysis session retained a mismatched snapshot for ${videoId}`);
   }
-  return createPreparedSession(videoId, cues, started, prepared, release);
+  return createPreparedSession(
+    videoId,
+    cues,
+    started,
+    prepared,
+    transcriptGeneration,
+    style,
+    release,
+  );
 }
 
 async function createPreparedSession(
@@ -193,9 +256,39 @@ async function createPreparedSession(
   cues: readonly SrtCue[],
   started: AnalysisSessionStart,
   prepared: Awaited<ReturnType<typeof prepareAnalysis>>,
+  transcriptGeneration: string,
+  style: TranslationStyle,
   release: () => void,
 ): Promise<PersistedAnalysisSession> {
-  const session = createSession(videoId, started.lease, cues, prepared.analysis, release);
+  let inflight: AnalysisInflightJournal | null;
+  try {
+    inflight = await resolveInflight(
+      videoId,
+      started.lease,
+      started.inflight,
+      {
+        transcriptGeneration,
+        transcriptFingerprint: prepared.analysis.checkpoint.transcriptFingerprint,
+        analysisStyle: style,
+        baseRevision: prepared.analysis.checkpoint.revision,
+        nextCueOffset: prepared.analysis.checkpoint.nextCueOffset,
+        cueCount: cues.length,
+      },
+    );
+  } catch (error) {
+    await endIgnoringFailure(videoId, started.lease);
+    throw error;
+  }
+  const session = createSession(
+    videoId,
+    started.lease,
+    cues,
+    prepared.analysis,
+    inflight,
+    transcriptGeneration,
+    style,
+    release,
+  );
   try {
     if (prepared.needsSave) await session.save(prepared.analysis);
     return session;
@@ -214,9 +307,13 @@ function createSession(
   lease: string,
   cues: readonly SrtCue[],
   initial: CheckpointedAnalysis,
+  initialInflight: AnalysisInflightJournal | null,
+  transcriptGeneration: string,
+  style: TranslationStyle,
   release: () => void,
 ): PersistedAnalysisSession {
   let current = initial;
+  let currentInflight = initialInflight;
   let stale = false;
   let closed = false;
   let saveTail = Promise.resolve();
@@ -228,9 +325,13 @@ function createSession(
     get analysis() {
       return current;
     },
+    get inflight() {
+      return currentInflight;
+    },
     save(next) {
+      if (closed || stale) return Promise.reject(new StaleAnalysisSessionError(videoId));
       const operation = saveTail.then(async () => {
-        if (closed || stale) throw new StaleAnalysisSessionError(videoId);
+        if (stale) throw new StaleAnalysisSessionError(videoId);
         const validated = await validateCandidate(cues, next);
         const outcome = await invoke<SessionSaveOutcome>("save_analysis_session", {
           videoId,
@@ -242,7 +343,43 @@ function createSession(
           throw new StaleAnalysisSessionError(videoId, outcome);
         }
         current = validated;
+        if (
+          currentInflight
+          && current.checkpoint.nextCueOffset >= currentInflight.endCueOffset
+        ) {
+          currentInflight = null;
+        }
         return current;
+      });
+      saveTail = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
+    saveInflight(next) {
+      if (closed || stale) return Promise.reject(new StaleAnalysisSessionError(videoId));
+      const operation = saveTail.then(async () => {
+        if (stale) throw new StaleAnalysisSessionError(videoId);
+        const validated = validateInflightCandidate(
+          next,
+          currentInflight,
+          current,
+          cues.length,
+          transcriptGeneration,
+          style,
+        );
+        const outcome = await invoke<SessionSaveOutcome>("save_analysis_inflight", {
+          videoId,
+          lease,
+          journal: validated,
+        });
+        if (outcome.status === "rejected") {
+          stale = true;
+          throw new StaleAnalysisSessionError(videoId, outcome);
+        }
+        currentInflight = validated;
+        return currentInflight;
       });
       saveTail = operation.then(
         () => undefined,
@@ -261,6 +398,64 @@ function createSession(
   return session;
 }
 
+async function resolveInflight(
+  videoId: string,
+  lease: string,
+  raw: unknown,
+  context: JournalSessionContext,
+): Promise<AnalysisInflightJournal | null> {
+  const parsed = parseAnalysisInflightJournal(raw);
+  if (parsed && journalMatchesSession(parsed, context)) return parsed;
+
+  const journalId = parsed?.journalId
+    ?? (isRecord(raw) && typeof raw.journalId === "string" ? raw.journalId : null);
+  if (!journalId) return null;
+  const outcome = await invoke<SessionSaveOutcome>("discard_analysis_inflight", {
+    videoId,
+    lease,
+    journalId,
+  });
+  if (outcome.status === "rejected") {
+    throw new StaleAnalysisSessionError(videoId, outcome);
+  }
+  return null;
+}
+
+function validateInflightCandidate(
+  candidate: AnalysisInflightJournal,
+  previous: AnalysisInflightJournal | null,
+  analysis: CheckpointedAnalysis,
+  cueCount: number,
+  transcriptGeneration: string,
+  style: TranslationStyle,
+): AnalysisInflightJournal {
+  const parsed = parseAnalysisInflightJournal(candidate);
+  if (!parsed) {
+    throw new TypeError("analysis session inflight save requires a valid journal");
+  }
+  if (!journalMatchesSession(parsed, {
+    transcriptGeneration,
+    transcriptFingerprint: analysis.checkpoint.transcriptFingerprint,
+    analysisStyle: style,
+    baseRevision: analysis.checkpoint.revision,
+    nextCueOffset: analysis.checkpoint.nextCueOffset,
+    cueCount,
+  })) {
+    throw new TypeError("analysis inflight journal does not match the session");
+  }
+  if (previous) {
+    const merged = mergeInflightEntries(previous, parsed.entries);
+    if (JSON.stringify(merged) !== JSON.stringify(parsed)) {
+      throw new TypeError("analysis inflight journal is not a monotonic update");
+    }
+  }
+  return parsed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function validateCandidate(
   cues: readonly SrtCue[],
   candidate: CheckpointedAnalysis,
@@ -276,18 +471,29 @@ async function validateCandidate(
   return parsed as CheckpointedAnalysis;
 }
 
-async function begin(videoId: string, reset: boolean): Promise<AnalysisSessionStart> {
-  return invoke<AnalysisSessionStart>("begin_analysis_session", { videoId, reset });
+async function begin(
+  videoId: string,
+  reset: boolean,
+  transcriptGeneration: string,
+  analysisStyle: TranslationStyle,
+): Promise<AnalysisSessionStart> {
+  return invoke<AnalysisSessionStart>("begin_analysis_session", {
+    videoId,
+    reset,
+    transcriptGeneration,
+    analysisStyle,
+  });
 }
 
 async function beginFromTranscript(
   videoId: string,
   reset: boolean,
   expectedGeneration: string | null,
+  analysisStyle: TranslationStyle,
 ): Promise<AnalysisTranscriptSessionStart | null> {
   return invoke<AnalysisTranscriptSessionStart | null>(
     "begin_analysis_session_from_transcript",
-    { videoId, reset, expectedGeneration },
+    { videoId, reset, expectedGeneration, analysisStyle },
   );
 }
 

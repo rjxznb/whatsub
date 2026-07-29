@@ -67,7 +67,11 @@ function fakeSession(
     get analysis() {
       return current;
     },
+    get inflight() {
+      return null;
+    },
     save,
+    saveInflight: vi.fn(async (next) => next),
     close,
   };
   return { session, save, close };
@@ -332,7 +336,9 @@ describe("background analysis lease handoff", () => {
     resumeBackgroundAnalysis("video-1");
     await waitFor(() => expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("done"));
     expect(close).toHaveBeenCalledTimes(1);
-    expect(mocks.openStoredAnalysisSession).toHaveBeenCalledWith("video-1");
+    expect(mocks.openStoredAnalysisSession).toHaveBeenCalledWith("video-1", {
+      style: "colloquial",
+    });
   });
 
   it("retries a failed stale-session reopen without ever retranscribing", async () => {

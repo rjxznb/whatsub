@@ -571,7 +571,9 @@ export function Player() {
 
       let stored;
       try {
-        stored = await openStoredAnalysisSession(videoId);
+        stored = await openStoredAnalysisSession(videoId, {
+          style: entry?.analysisStyle ?? "colloquial",
+        });
       } catch (error) {
         if (!cancelled) {
           analysis.setError(

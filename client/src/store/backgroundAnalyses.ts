@@ -160,7 +160,10 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
     });
     if (runtime.controller.signal.aborted) return;
 
-    const stored = await openStoredAnalysisSession(runtime.videoId, true);
+    const stored = await openStoredAnalysisSession(runtime.videoId, {
+      reset: true,
+      style: runtime.style,
+    });
     if (!stored) throw new Error("找不到 transcript.srt — 重新转录可能失败了");
     if (runtime.controller.signal.aborted) {
       await stored.session.close().catch(() => {});
@@ -308,7 +311,9 @@ async function reopenStaleSessionAndContinue(runtime: BgRuntime): Promise<void> 
     await staleSession?.close().catch(() => {});
     if (runtime.controller.signal.aborted || runtime.disposition !== "background") return;
 
-    const stored = await openStoredAnalysisSession(runtime.videoId);
+    const stored = await openStoredAnalysisSession(runtime.videoId, {
+      style: runtime.style,
+    });
     if (!stored) throw new Error("找不到 transcript.srt — 无法恢复解析进度");
     const { cues, session } = stored;
     if (runtime.controller.signal.aborted || runtime.disposition !== "background") {

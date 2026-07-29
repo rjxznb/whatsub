@@ -11,7 +11,7 @@ import {
   ProviderTransportError,
 } from "./providers/errors";
 import type { Provider, ProviderRequest } from "./providers/types";
-import type { AnalysisCheckpoint, SrtCue } from "./types";
+import type { AnalysisCheckpoint, SrtCue, Subtitle } from "./types";
 
 interface StreamScript {
   chunks?: readonly string[];
@@ -56,6 +56,27 @@ const cueLine = (index: number, translation = `translation-${index}`) =>
     isKeyPoint: false,
     highlights: [],
   })}\n`;
+
+const subtitleFromCue = (cue: SrtCue, translation = `translation-${cue.index}`): Subtitle => ({
+  time: cue.time,
+  endTime: cue.endTime,
+  text: cue.text,
+  translation,
+  isKeyPoint: false,
+  highlightWords: [],
+  keyNotes: {},
+  highlightTranslations: {},
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 const summaryLine = `${JSON.stringify({
   type: "summary",
@@ -105,7 +126,7 @@ describe("runAnalysis", () => {
       checkpoint: checkpoint(),
       batchSize: 3,
       signal: controller.signal,
-      onPreview: (preview) => previews.push(preview),
+      onPreview: (preview) => { previews.push(preview); },
       onCommit: async (commit) => {
         commits.push(commit);
         controller.abort();
@@ -130,6 +151,144 @@ describe("runAnalysis", () => {
       ],
       checkpoint: { nextCueOffset: 3, phase: "summary" },
     });
+  });
+
+  it("awaits preview persistence before consuming the next provider chunk", async () => {
+    const persisted = deferred<void>();
+    const previewStarted = deferred<void>();
+    const consumed: number[] = [];
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const provider = scriptedProvider([{
+      chunks: [cueLine(0), cueLine(1)],
+      onChunk: (index) => consumed.push(index),
+    }]);
+
+    const run = runAnalysis({
+      provider,
+      cues: cues(2),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      signal: controller.signal,
+      onPreview: async (preview) => {
+        if (!preview) return;
+        calls.push(`save:${preview.entries.length}`);
+        if (preview.entries.length === 1) {
+          previewStarted.resolve();
+          await persisted.promise;
+        }
+        calls.push(`visible:${preview.entries.length}`);
+      },
+      onCommit: async () => controller.abort(),
+    });
+
+    await previewStarted.promise;
+    expect(consumed).toEqual([0]);
+    expect(calls).toEqual(["save:1"]);
+
+    persisted.resolve();
+    await run;
+    expect(consumed).toEqual([0, 1]);
+    expect(calls).toEqual(["save:1", "visible:1", "save:2", "visible:2"]);
+  });
+
+  it("requests only missing offsets from a 23-entry resumed batch", async () => {
+    const batch = cues(50, 1);
+    const resumeEntries = batch.slice(0, 23).map((cue, cueOffset) => ({
+      cueOffset,
+      subtitle: subtitleFromCue(cue),
+    }));
+    const provider = scriptedProvider([{
+      chunks: batch.slice(23).map((cue) => cueLine(cue.index)),
+    }]);
+    const controller = new AbortController();
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: batch,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      batchSize: 50,
+      resumePreview: {
+        startCueOffset: 0,
+        endCueOffset: 50,
+        entries: resumeEntries,
+        subtitles: resumeEntries.map((entry) => entry.subtitle),
+      },
+      signal: controller.signal,
+      onPreview: async () => {},
+      onCommit: async (commit) => {
+        commits.push(commit);
+        controller.abort();
+      },
+    });
+
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0].userPrompt).not.toContain("\n1\t");
+    expect(provider.requests[0].userPrompt).not.toContain("\n23\t");
+    expect(provider.requests[0].userPrompt).toContain("\n24\t");
+    expect(commits[0]).toMatchObject({ kind: "cues" });
+    expect(commits[0].kind === "cues" && commits[0].subtitles).toHaveLength(50);
+  });
+
+  it("rejects a resume preview for another batch before calling the provider", async () => {
+    const provider = scriptedProvider([{ error: new Error("provider must not be called") }]);
+
+    await expect(runAnalysis({
+      provider,
+      cues: cues(2),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      resumePreview: {
+        startCueOffset: 1,
+        endCueOffset: 2,
+        entries: [{ cueOffset: 1, subtitle: subtitleFromCue(cues(2)[1]) }],
+        subtitles: [subtitleFromCue(cues(2)[1])],
+      },
+      onCommit: async () => {},
+    })).rejects.toThrow(/resume preview.*current batch/i);
+
+    expect(provider.requests).toEqual([]);
+  });
+
+  it("waits for an already-started preview save before honoring abort", async () => {
+    const persisted = deferred<void>();
+    const previewStarted = deferred<void>();
+    const controller = new AbortController();
+    const consumed: number[] = [];
+    const publishedLengths: number[] = [];
+    const original = checkpoint();
+    const provider = scriptedProvider([{
+      chunks: [cueLine(0), cueLine(1)],
+      onChunk: (index) => consumed.push(index),
+    }]);
+
+    const run = runAnalysis({
+      provider,
+      cues: cues(2),
+      previouslyAnalyzed: [],
+      checkpoint: original,
+      signal: controller.signal,
+      onPreview: async (preview) => {
+        if (!preview) return;
+        previewStarted.resolve();
+        await persisted.promise;
+        publishedLengths.push(preview.entries.length);
+      },
+      onCommit: async () => {},
+    });
+
+    await previewStarted.promise;
+    controller.abort();
+    await Promise.resolve();
+    expect(consumed).toEqual([0]);
+    expect(publishedLengths).toEqual([]);
+
+    persisted.resolve();
+    expect(await run).toBe(original);
+    expect(consumed).toEqual([0]);
+    expect(publishedLengths).toEqual([1]);
   });
 
   it("keeps validated output after a failed read and retries only unresolved cues", async () => {
@@ -237,12 +396,14 @@ describe("runAnalysis", () => {
     ]);
     const controller = new AbortController();
     const commits: AnalysisCommit[] = [];
+    const previews: AnalysisPreview[] = [];
 
     await runWithTimers(runAnalysis({
       provider,
       cues: duplicateIndexes,
       previouslyAnalyzed: [],
       checkpoint: checkpoint(),
+      onPreview: (preview) => { if (preview) previews.push(preview); },
       onCommit: async (commit) => { commits.push(commit); controller.abort(); },
       signal: controller.signal,
     }));
@@ -257,6 +418,8 @@ describe("runAnalysis", () => {
       ],
       checkpoint: { nextCueOffset: 2 },
     });
+    expect(previews[previews.length - 1]?.entries.map((entry) => entry.cueOffset))
+      .toEqual([0, 1]);
   });
 
   it("publishes no commit and does not mutate the original checkpoint after four failures", async () => {
@@ -292,7 +455,7 @@ describe("runAnalysis", () => {
       cues: cues(3),
       previouslyAnalyzed: [],
       checkpoint: original,
-      onPreview: (preview) => previews.push(preview),
+      onPreview: (preview) => { previews.push(preview); },
       onCommit: async (commit) => { commits.push(commit); },
     }))).rejects.toThrow(/3.*0.*1.*2/);
 
@@ -395,7 +558,7 @@ describe("runAnalysis", () => {
       previouslyAnalyzed: [],
       checkpoint: original,
       signal: controller.signal,
-      onPreview: (preview) => previews.push(preview),
+      onPreview: (preview) => { previews.push(preview); },
       onCommit: async (commit) => { commits.push(commit); },
     });
 

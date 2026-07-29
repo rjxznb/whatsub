@@ -84,6 +84,7 @@ describe("Player committed resume state", () => {
     const preview: AnalysisPreview = {
       startCueOffset: 50,
       endCueOffset: 100,
+      entries: [{ cueOffset: 50, subtitle: subtitle(51) }],
       subtitles: [subtitle(51)],
     };
 
@@ -110,6 +111,7 @@ describe("Player committed resume state", () => {
     const preview: AnalysisPreview = {
       startCueOffset: 50,
       endCueOffset: 100,
+      entries: [{ cueOffset: 50, subtitle: subtitle(51) }],
       subtitles: [subtitle(51)],
     };
 
@@ -136,6 +138,7 @@ describe("Player committed resume state", () => {
     useAnalysis.getState().setAnalysisPreview(committed, {
       startCueOffset: 50,
       endCueOffset: 100,
+      entries: [{ cueOffset: 50, subtitle: subtitle(51) }],
       subtitles: [subtitle(51)],
     }, 100);
     rollbackForegroundPreview("video-1", committed, 100);

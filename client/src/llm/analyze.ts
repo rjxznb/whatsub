@@ -1,4 +1,5 @@
 import type { TranslationStyle } from "../types/settings";
+import type { AnalysisInflightEntry } from "./analysisJournal";
 import type { Provider } from "./providers/types";
 import {
   isAbortError,
@@ -46,6 +47,7 @@ export type AnalysisCommit =
 export interface AnalysisPreview {
   startCueOffset: number;
   endCueOffset: number;
+  entries: AnalysisInflightEntry[];
   subtitles: Subtitle[];
 }
 
@@ -60,7 +62,8 @@ export interface RunAnalysisOptions {
   previouslyAnalyzed: readonly Subtitle[];
   checkpoint: AnalysisCheckpoint;
   onCommit: (commit: AnalysisCommit) => Promise<void>;
-  onPreview?: (preview: AnalysisPreview | null) => void;
+  onPreview?: (preview: AnalysisPreview | null) => void | Promise<void>;
+  resumePreview?: AnalysisPreview | null;
   onRetry?: (event: AnalysisRetryEvent) => void;
   batchSize?: number;
   style?: TranslationStyle;
@@ -76,6 +79,11 @@ interface LegacyRunAnalysisOptions {
   batchSize?: number;
   style?: TranslationStyle;
   signal?: AbortSignal;
+}
+
+interface RequestedCue {
+  cueOffset: number;
+  cue: SrtCue;
 }
 
 type LegacyCallbackName = "onCue" | "onSummary";
@@ -171,6 +179,7 @@ async function runTransactionalAnalysis(
   const systemPrompt = buildSystemPrompt(opts.style ?? "colloquial");
   const analyzedCues: Subtitle[] = [...opts.previouslyAnalyzed];
   let currentCheckpoint = opts.checkpoint;
+  let pendingResumePreview = opts.resumePreview ?? null;
 
   try {
     while (
@@ -188,7 +197,9 @@ async function runTransactionalAnalysis(
           batch,
           startCueOffset,
           endCueOffset,
+          pendingResumePreview,
         );
+        pendingResumePreview = null;
 
         throwIfAborted(opts.signal);
         const nextCheckpoint: AnalysisCheckpoint = {
@@ -206,9 +217,9 @@ async function runTransactionalAnalysis(
         });
         currentCheckpoint = nextCheckpoint;
         analyzedCues.push(...subtitles);
-        opts.onPreview?.(null);
+        await opts.onPreview?.(null);
       } catch (error) {
-        opts.onPreview?.(null);
+        await opts.onPreview?.(null);
         throw error;
       }
     }
@@ -309,37 +320,59 @@ async function resolveCueBatch(
   batch: readonly SrtCue[],
   startCueOffset: number,
   endCueOffset: number,
+  resumePreview: AnalysisPreview | null,
 ): Promise<Subtitle[]> {
-  const requestBatch = withUniqueCueIndexes(batch);
+  const requestBatch = withUniqueCueIndexes(batch, startCueOffset);
   const resolved = new Map<number, Subtitle>();
+  seedResumePreview(resumePreview, startCueOffset, endCueOffset, requestBatch, resolved);
   const policy = retryPolicyFor(opts.provider);
   let lastInvalid: InvalidJsonLine | null = null;
 
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
     throwIfAborted(opts.signal);
-    const requestedCues = requestBatch.filter((cue) => !resolved.has(cue.index));
-    if (requestedCues.length === 0) return orderedResolved(requestBatch, resolved);
-    const requested = new Map(requestedCues.map((cue) => [cue.index, cue]));
+    const requestedCues = requestBatch.filter((requested) => !resolved.has(requested.cueOffset));
+    if (requestedCues.length === 0) {
+      return orderedResolvedEntries(requestBatch, resolved).map((entry) => entry.subtitle);
+    }
+    const requested = new Map(requestedCues.map((requested) => [
+      requested.cue.index,
+      requested,
+    ]));
+    const requestedForValidation = new Map(requestedCues.map((requested) => [
+      requested.cue.index,
+      requested.cue,
+    ]));
     let streamError: unknown = null;
 
     try {
       const parser = new JsonLineParser();
+      let dirty = false;
       const handle = (value: unknown) => {
-        const result = validateCueOutput(value, requested);
-        if (result.status !== "resolved" || resolved.has(result.index)) return;
-        resolved.set(result.index, result.subtitle);
-        opts.onPreview?.({
+        const result = validateCueOutput(value, requestedForValidation);
+        if (result.status !== "resolved") return;
+        const matched = requested.get(result.index);
+        if (!matched || resolved.has(matched.cueOffset)) return;
+        resolved.set(matched.cueOffset, result.subtitle);
+        dirty = true;
+      };
+      const publishResolved = async () => {
+        if (!dirty) return;
+        dirty = false;
+        const entries = orderedResolvedEntries(requestBatch, resolved);
+        await opts.onPreview?.({
           startCueOffset,
           endCueOffset,
-          subtitles: orderedResolved(requestBatch, resolved),
+          entries,
+          subtitles: entries.map((entry) => entry.subtitle),
         });
       };
       const invalid = (failure: InvalidJsonLine) => { lastInvalid = failure; };
+      const promptCues = requestedCues.map((requested) => requested.cue);
       const userPrompt = attempt === 1
         ? (startCueOffset === 0
-          ? buildUserPrompt(requestedCues)
-          : buildContinuationPrompt(requestedCues))
-        : buildRepairPrompt(requestedCues);
+          ? buildUserPrompt(promptCues)
+          : buildContinuationPrompt(promptCues))
+        : buildRepairPrompt(promptCues);
 
       for await (const chunk of opts.provider.stream({
         systemPrompt,
@@ -348,9 +381,12 @@ async function resolveCueBatch(
       })) {
         throwIfAborted(opts.signal);
         parser.feed(chunk, handle, invalid);
+        await publishResolved();
+        throwIfAborted(opts.signal);
       }
       throwIfAborted(opts.signal);
       parser.flush(handle, invalid);
+      await publishResolved();
       throwIfAborted(opts.signal);
     } catch (error) {
       if (opts.signal?.aborted && isAbortError(error)) throw error;
@@ -358,9 +394,11 @@ async function resolveCueBatch(
     }
 
     const unresolvedCueIndexes = requestBatch
-      .filter((cue) => !resolved.has(cue.index))
-      .map((cue) => cue.index);
-    if (unresolvedCueIndexes.length === 0) return orderedResolved(requestBatch, resolved);
+      .filter((requested) => !resolved.has(requested.cueOffset))
+      .map((requested) => requested.cue.index);
+    if (unresolvedCueIndexes.length === 0) {
+      return orderedResolvedEntries(requestBatch, resolved).map((entry) => entry.subtitle);
+    }
 
     if (streamError !== null && !isRetryableAnalysisStreamFailure(streamError)) {
       throw streamError;
@@ -388,22 +426,27 @@ async function resolveCueBatch(
   throw new Error("unreachable cue repair state");
 }
 
-function withUniqueCueIndexes(batch: readonly SrtCue[]): SrtCue[] {
+function withUniqueCueIndexes(
+  batch: readonly SrtCue[],
+  startCueOffset: number,
+): RequestedCue[] {
   const reserved = new Set(batch.map((cue) => cue.index));
   const seen = new Set<number>();
   let next = Math.max(0, ...reserved) + 1;
 
-  return batch.map((cue) => {
+  return batch.map((cue, offset) => {
+    let uniqueCue = cue;
     if (!seen.has(cue.index)) {
       seen.add(cue.index);
-      return cue;
+    } else {
+      while (reserved.has(next) || seen.has(next)) next += 1;
+      const unique = next;
+      reserved.add(unique);
+      seen.add(unique);
+      next += 1;
+      uniqueCue = { ...cue, index: unique };
     }
-    while (reserved.has(next) || seen.has(next)) next += 1;
-    const unique = next;
-    reserved.add(unique);
-    seen.add(unique);
-    next += 1;
-    return { ...cue, index: unique };
+    return { cueOffset: startCueOffset + offset, cue: uniqueCue };
   });
 }
 
@@ -413,14 +456,37 @@ function retryPolicyFor(provider: Provider): RetryPolicy {
     : NO_RETRY_POLICY;
 }
 
-function orderedResolved(
-  batch: readonly SrtCue[],
+function orderedResolvedEntries(
+  batch: readonly RequestedCue[],
   resolved: ReadonlyMap<number, Subtitle>,
-): Subtitle[] {
-  return batch.flatMap((cue) => {
-    const subtitle = resolved.get(cue.index);
-    return subtitle ? [subtitle] : [];
+): AnalysisInflightEntry[] {
+  return batch.flatMap((requested) => {
+    const subtitle = resolved.get(requested.cueOffset);
+    return subtitle ? [{ cueOffset: requested.cueOffset, subtitle }] : [];
   });
+}
+
+function seedResumePreview(
+  preview: AnalysisPreview | null,
+  startCueOffset: number,
+  endCueOffset: number,
+  requestBatch: readonly RequestedCue[],
+  resolved: Map<number, Subtitle>,
+): void {
+  if (!preview) return;
+  if (
+    preview.startCueOffset !== startCueOffset
+    || preview.endCueOffset !== endCueOffset
+  ) {
+    throw new TypeError("analysis resume preview does not match the current batch");
+  }
+  const validOffsets = new Set(requestBatch.map((requested) => requested.cueOffset));
+  for (const entry of preview.entries) {
+    if (!validOffsets.has(entry.cueOffset) || resolved.has(entry.cueOffset)) {
+      throw new TypeError("analysis resume preview contains an invalid cue offset");
+    }
+    resolved.set(entry.cueOffset, entry.subtitle);
+  }
 }
 
 function isRetryableAnalysisStreamFailure(error: unknown): boolean {

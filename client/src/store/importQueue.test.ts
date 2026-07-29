@@ -107,4 +107,43 @@ describe("processClaimedItem", () => {
       expect.stringContaining("video_upload_failed"),
     );
   });
+
+  it("fails before analysis when importVideo rejects", async () => {
+    const { deps } = dependencies();
+    vi.mocked(deps.importVideo).mockRejectedValue(new Error("download_failed"));
+
+    await processClaimedItem(replacement, deps);
+
+    expect(deps.analyze).not.toHaveBeenCalled();
+    expect(deps.syncImport).not.toHaveBeenCalled();
+    expect(deps.stageReplacement).not.toHaveBeenCalled();
+    expect(deps.completeReplacement).not.toHaveBeenCalled();
+    expect(deps.setStatus).toHaveBeenCalledWith(replacement.id, "failed", "download_failed");
+    expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
+  });
+
+  it("fails before staging when analysis rejects", async () => {
+    const { deps } = dependencies();
+    vi.mocked(deps.analyze).mockRejectedValue(new Error("analysis_failed"));
+
+    await processClaimedItem(replacement, deps);
+
+    expect(deps.syncImport).not.toHaveBeenCalled();
+    expect(deps.stageReplacement).not.toHaveBeenCalled();
+    expect(deps.completeReplacement).not.toHaveBeenCalled();
+    expect(deps.setStatus).toHaveBeenCalledWith(replacement.id, "failed", "analysis_failed");
+    expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
+  });
+
+  it("fails without a done transition when atomic replacement completion rejects", async () => {
+    const { deps } = dependencies();
+    vi.mocked(deps.completeReplacement).mockRejectedValue(new Error("completion_failed"));
+
+    await processClaimedItem(replacement, deps);
+
+    expect(deps.syncImport).not.toHaveBeenCalled();
+    expect(deps.completeReplacement).toHaveBeenCalledTimes(1);
+    expect(deps.setStatus).toHaveBeenCalledWith(replacement.id, "failed", "completion_failed");
+    expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
+  });
 });

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useAnalysis } from "../store/analysis";
 import type { CheckpointedAnalysis, Subtitle } from "../llm/types";
 import type { AnalysisPreview } from "../llm/analyze";
-import { canEditSubtitles } from "./Player";
+import { canEditSubtitles, rollbackForegroundPreview } from "./Player";
 
 const subtitle = (index: number): Subtitle => ({
   time: index,
@@ -109,6 +109,30 @@ describe("Player committed resume state", () => {
 
     useAnalysis.getState().setAnalysisPreview(committed, preview, 100);
     useAnalysis.getState().setAnalysisPreview(committed, null, 100);
+
+    expect(useAnalysis.getState().subtitles).toEqual(committed.subtitles);
+    expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);
+  });
+
+  it("rolls an uncommitted preview back when the owning Player tears down", () => {
+    const committed: CheckpointedAnalysis = {
+      subtitles: [subtitle(1)],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: "sha256:fixture",
+        nextCueOffset: 50,
+        phase: "cues",
+        revision: 7,
+      },
+    };
+
+    useAnalysis.getState().setAnalysisPreview(committed, {
+      startCueOffset: 50,
+      endCueOffset: 100,
+      subtitles: [subtitle(51)],
+    }, 100);
+    rollbackForegroundPreview("video-1", committed, 100);
 
     expect(useAnalysis.getState().subtitles).toEqual(committed.subtitles);
     expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);

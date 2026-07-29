@@ -225,6 +225,40 @@ describe("runAnalysis", () => {
     });
   });
 
+  it("assigns a unique request identity when the SRT repeats a cue index", async () => {
+    vi.useFakeTimers();
+    const duplicateIndexes: SrtCue[] = [
+      { index: 7, time: 0, endTime: 1, text: "first source" },
+      { index: 7, time: 1, endTime: 2, text: "second source" },
+    ];
+    const provider = scriptedProvider([
+      { chunks: [cueLine(7, "first translation")] },
+      { chunks: [cueLine(8, "second translation")] },
+    ]);
+    const controller = new AbortController();
+    const commits: AnalysisCommit[] = [];
+
+    await runWithTimers(runAnalysis({
+      provider,
+      cues: duplicateIndexes,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      onCommit: async (commit) => { commits.push(commit); controller.abort(); },
+      signal: controller.signal,
+    }));
+
+    expect(provider.requests[1].userPrompt).toContain("second source");
+    expect(provider.requests[1].userPrompt).not.toContain("first source");
+    expect(commits[0]).toMatchObject({
+      kind: "cues",
+      subtitles: [
+        { text: "first source", translation: "first translation" },
+        { text: "second source", translation: "second translation" },
+      ],
+      checkpoint: { nextCueOffset: 2 },
+    });
+  });
+
   it("publishes no commit and does not mutate the original checkpoint after four failures", async () => {
     vi.useFakeTimers();
     const failure = new ProviderTransportError("offline", "send");
@@ -438,6 +472,28 @@ describe("runAnalysis", () => {
       unresolvedCueIndexes: [0],
     });
     expect(commits).toEqual([]);
+  });
+
+  it("redacts API-key-shaped content from malformed-line diagnostics", async () => {
+    vi.useFakeTimers();
+    const secret = "sk-super-secret-token-123456789";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const provider = scriptedProvider(Array.from({ length: 4 }, () => ({
+      chunks: [`{\"index\":0,\"translation\":\"${secret}\"\n`],
+    })));
+
+    await expect(runWithTimers(runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      onCommit: async () => {},
+    }))).rejects.toBeInstanceOf(ProviderProtocolError);
+
+    const diagnostic = warn.mock.calls.flat().join(" ");
+    expect(diagnostic).not.toContain(secret);
+    expect(diagnostic).toContain("[REDACTED]");
+    warn.mockRestore();
   });
 
   it("does not content-repair providers without the DeepSeek analysis profile", async () => {

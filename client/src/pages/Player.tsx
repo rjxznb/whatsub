@@ -38,7 +38,7 @@ import {
 } from "../store/backgroundAnalyses";
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
-import type { AnalysisResult, SrtCue } from "../llm/types";
+import type { AnalysisResult, CheckpointedAnalysis, SrtCue } from "../llm/types";
 import { useTutorRuntime } from "../store/tutorRuntime";
 import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
@@ -49,6 +49,16 @@ type Tab = "subtitles" | "keyPhrases";
 
 export function canEditSubtitles(phase: AnalysisPhase): boolean {
   return phase !== "analyzing";
+}
+
+export function rollbackForegroundPreview(
+  videoId: string,
+  committed: CheckpointedAnalysis,
+  totalCues: number,
+): void {
+  const state = useAnalysis.getState();
+  if (state.videoId !== videoId) return;
+  state.setAnalysisPreview(committed, null, totalCues);
 }
 
 export function Player() {
@@ -293,6 +303,7 @@ export function Player() {
         style,
         signal: localController.signal,
         onCommitted: (persisted) => {
+          if (sessionRef.current !== session) return;
           analysis.setCommittedAnalysis(persisted, cues.length);
         },
         onPreview: (committed, preview) => {
@@ -300,6 +311,7 @@ export function Player() {
           analysis.setAnalysisPreview(committed, preview, cues.length);
         },
         onRetry: (event) => {
+          if (sessionRef.current !== session) return;
           analysis.setRetryMessage(analysisRetryMessage(event));
         },
       });
@@ -581,6 +593,9 @@ export function Player() {
       abortRef.current?.abort();
       abortRef.current = null;
       const session = sessionRef.current;
+      if (session && cuesRef.current) {
+        rollbackForegroundPreview(videoId, session.analysis, cuesRef.current.length);
+      }
       sessionRef.current = null;
       void session?.close().catch(() => {});
       // If we're leaving mid-run, transition the store to "paused" so the

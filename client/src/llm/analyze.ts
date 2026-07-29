@@ -310,14 +310,15 @@ async function resolveCueBatch(
   startCueOffset: number,
   endCueOffset: number,
 ): Promise<Subtitle[]> {
+  const requestBatch = withUniqueCueIndexes(batch);
   const resolved = new Map<number, Subtitle>();
   const policy = retryPolicyFor(opts.provider);
   let lastInvalid: InvalidJsonLine | null = null;
 
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
     throwIfAborted(opts.signal);
-    const requestedCues = batch.filter((cue) => !resolved.has(cue.index));
-    if (requestedCues.length === 0) return orderedResolved(batch, resolved);
+    const requestedCues = requestBatch.filter((cue) => !resolved.has(cue.index));
+    if (requestedCues.length === 0) return orderedResolved(requestBatch, resolved);
     const requested = new Map(requestedCues.map((cue) => [cue.index, cue]));
     let streamError: unknown = null;
 
@@ -330,7 +331,7 @@ async function resolveCueBatch(
         opts.onPreview?.({
           startCueOffset,
           endCueOffset,
-          subtitles: orderedResolved(batch, resolved),
+          subtitles: orderedResolved(requestBatch, resolved),
         });
       };
       const invalid = (failure: InvalidJsonLine) => { lastInvalid = failure; };
@@ -356,10 +357,10 @@ async function resolveCueBatch(
       streamError = error;
     }
 
-    const unresolvedCueIndexes = batch
+    const unresolvedCueIndexes = requestBatch
       .filter((cue) => !resolved.has(cue.index))
       .map((cue) => cue.index);
-    if (unresolvedCueIndexes.length === 0) return orderedResolved(batch, resolved);
+    if (unresolvedCueIndexes.length === 0) return orderedResolved(requestBatch, resolved);
 
     if (streamError !== null && !isRetryableAnalysisStreamFailure(streamError)) {
       throw streamError;
@@ -385,6 +386,25 @@ async function resolveCueBatch(
   }
 
   throw new Error("unreachable cue repair state");
+}
+
+function withUniqueCueIndexes(batch: readonly SrtCue[]): SrtCue[] {
+  const reserved = new Set(batch.map((cue) => cue.index));
+  const seen = new Set<number>();
+  let next = Math.max(0, ...reserved) + 1;
+
+  return batch.map((cue) => {
+    if (!seen.has(cue.index)) {
+      seen.add(cue.index);
+      return cue;
+    }
+    while (reserved.has(next) || seen.has(next)) next += 1;
+    const unique = next;
+    reserved.add(unique);
+    seen.add(unique);
+    next += 1;
+    return { ...cue, index: unique };
+  });
 }
 
 function retryPolicyFor(provider: Provider): RetryPolicy {
@@ -423,8 +443,18 @@ function unresolvedCueError(indexes: readonly number[]): ModelContentError {
 
 function logMalformedLine(failure: InvalidJsonLine | null): void {
   if (!failure) return;
-  const excerpt = JSON.stringify(failure.line.slice(0, 240));
+  const excerpt = JSON.stringify(redactDiagnosticExcerpt(failure.line.slice(0, 240)));
   console.warn(`Ignored malformed model JSON: ${failure.error.message}; excerpt=${excerpt}`);
+}
+
+function redactDiagnosticExcerpt(value: string): string {
+  return value
+    .replace(/\bsk-[a-z0-9._-]{8,}\b/gi, "[REDACTED]")
+    .replace(/\bBearer\s+[a-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
+    .replace(
+      /((?:api[_-]?key|token|authorization)["']?\s*[:=]\s*["']?)[^"',\s}]+/gi,
+      "$1[REDACTED]",
+    );
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

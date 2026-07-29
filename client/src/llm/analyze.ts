@@ -3,6 +3,7 @@ import type { Provider } from "./providers/types";
 import {
   isAbortError,
   isRetryableProviderFailure,
+  ProviderHttpError,
   ProviderProtocolError,
 } from "./providers/errors";
 import type {
@@ -12,10 +13,17 @@ import type {
   SrtCue,
   Subtitle,
 } from "./types";
-import { JsonLineParser } from "./streamingJson";
-import { retryOperation, type RetryEvent, type RetryPolicy } from "./retry";
+import { validateCueOutput } from "./cueOutput";
+import { JsonLineParser, type InvalidJsonLine } from "./streamingJson";
+import {
+  abortableDelay,
+  retryOperation,
+  type RetryEvent,
+  type RetryPolicy,
+} from "./retry";
 import {
   buildContinuationPrompt,
+  buildRepairPrompt,
   buildSummaryPrompt,
   buildSystemPrompt,
   buildUserPrompt,
@@ -35,7 +43,16 @@ export type AnalysisCommit =
       checkpoint: AnalysisCheckpoint;
     };
 
-export type AnalysisRetryEvent = RetryEvent;
+export interface AnalysisPreview {
+  startCueOffset: number;
+  endCueOffset: number;
+  subtitles: Subtitle[];
+}
+
+export type AnalysisRetryEvent = RetryEvent & {
+  kind: "transport" | "content-repair";
+  unresolvedCueIndexes: number[];
+};
 
 export interface RunAnalysisOptions {
   provider: Provider;
@@ -43,6 +60,7 @@ export interface RunAnalysisOptions {
   previouslyAnalyzed: readonly Subtitle[];
   checkpoint: AnalysisCheckpoint;
   onCommit: (commit: AnalysisCommit) => Promise<void>;
+  onPreview?: (preview: AnalysisPreview | null) => void;
   onRetry?: (event: AnalysisRetryEvent) => void;
   batchSize?: number;
   style?: TranslationStyle;
@@ -69,6 +87,13 @@ class LegacyCallbackError extends Error {
     super(`Legacy ${callback} callback failed`);
     this.name = "LegacyCallbackError";
     this.cause = cause;
+  }
+}
+
+class ModelContentError extends ProviderProtocolError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModelContentError";
   }
 }
 
@@ -156,55 +181,36 @@ async function runTransactionalAnalysis(
       const startCueOffset = currentCheckpoint.nextCueOffset;
       const endCueOffset = Math.min(startCueOffset + batchSize, opts.cues.length);
       const batch = opts.cues.slice(startCueOffset, endCueOffset);
-      const userPrompt = startCueOffset === 0
-        ? buildUserPrompt(batch)
-        : buildContinuationPrompt(batch);
-
-      const subtitles = await withProviderRetry(opts, async () => {
-        const parser = new JsonLineParser();
-        const attemptSubtitles: Subtitle[] = [];
-        const byIndex = new Map<number, SrtCue>(batch.map((cue) => [cue.index, cue]));
-        let positionalIter = 0;
-        const handle = (obj: unknown) => {
-          const original = resolveOriginal(obj, byIndex, batch, positionalIter);
-          if (original) positionalIter = batch.indexOf(original) + 1;
-          const cue = parseCue(obj, original);
-          if (cue) attemptSubtitles.push(cue);
-        };
-        const invalid = (line: string) => {
-          throw new ProviderProtocolError(`Malformed JSON line from provider: ${line}`);
-        };
-
-        for await (const chunk of opts.provider.stream({
+      try {
+        const subtitles = await resolveCueBatch(
+          opts,
           systemPrompt,
-          userPrompt,
-          signal: opts.signal,
-        })) {
-          throwIfAborted(opts.signal);
-          parser.feed(chunk, handle, invalid);
-        }
-        throwIfAborted(opts.signal);
-        parser.flush(handle, invalid);
-        throwIfAborted(opts.signal);
-        return attemptSubtitles;
-      });
+          batch,
+          startCueOffset,
+          endCueOffset,
+        );
 
-      throwIfAborted(opts.signal);
-      const nextCheckpoint: AnalysisCheckpoint = {
-        ...currentCheckpoint,
-        nextCueOffset: endCueOffset,
-        phase: endCueOffset === opts.cues.length ? "summary" : "cues",
-        revision: currentCheckpoint.revision + 1,
-      };
-      await opts.onCommit({
-        kind: "cues",
-        startCueOffset,
-        endCueOffset,
-        subtitles,
-        checkpoint: nextCheckpoint,
-      });
-      currentCheckpoint = nextCheckpoint;
-      analyzedCues.push(...subtitles);
+        throwIfAborted(opts.signal);
+        const nextCheckpoint: AnalysisCheckpoint = {
+          ...currentCheckpoint,
+          nextCueOffset: endCueOffset,
+          phase: endCueOffset === opts.cues.length ? "summary" : "cues",
+          revision: currentCheckpoint.revision + 1,
+        };
+        await opts.onCommit({
+          kind: "cues",
+          startCueOffset,
+          endCueOffset,
+          subtitles,
+          checkpoint: nextCheckpoint,
+        });
+        currentCheckpoint = nextCheckpoint;
+        analyzedCues.push(...subtitles);
+        opts.onPreview?.(null);
+      } catch (error) {
+        opts.onPreview?.(null);
+        throw error;
+      }
     }
 
     if (
@@ -234,13 +240,12 @@ async function runTransactionalAnalysis(
     const keyPhrases = await withProviderRetry(opts, async () => {
       const parser = new JsonLineParser();
       let attemptKeyPhrases: KeyPhrase[] | null = null;
+      let invalidLine: InvalidJsonLine | null = null;
       const handle = (obj: unknown) => {
         const summary = parseSummary(obj);
         if (summary) attemptKeyPhrases = summary;
       };
-      const invalid = (line: string) => {
-        throw new ProviderProtocolError(`Malformed JSON line from provider: ${line}`);
-      };
+      const invalid = (failure: InvalidJsonLine) => { invalidLine = failure; };
 
       for await (const chunk of opts.provider.stream({
         systemPrompt,
@@ -254,7 +259,8 @@ async function runTransactionalAnalysis(
       parser.flush(handle, invalid);
       throwIfAborted(opts.signal);
       if (attemptKeyPhrases === null) {
-        throw new ProviderProtocolError("Provider response did not include a valid summary");
+        logMalformedLine(invalidLine);
+        throw new ModelContentError("Provider response did not include a valid summary");
       }
       return attemptKeyPhrases;
     });
@@ -286,57 +292,145 @@ function withProviderRetry<T>(
     policy: opts.provider.retryProfile === "deepseek-analysis"
       ? DEEPSEEK_ANALYSIS_RETRY_POLICY
       : NO_RETRY_POLICY,
-    isRetryable: isRetryableProviderFailure,
+    isRetryable: (error) =>
+      isRetryableProviderFailure(error) || error instanceof ProviderProtocolError,
     signal: opts.signal,
-    onRetry: opts.onRetry,
+    onRetry: (event) => opts.onRetry?.({
+      ...event,
+      kind: event.error instanceof ModelContentError ? "content-repair" : "transport",
+      unresolvedCueIndexes: [],
+    }),
   });
+}
+
+async function resolveCueBatch(
+  opts: RunAnalysisOptions,
+  systemPrompt: string,
+  batch: readonly SrtCue[],
+  startCueOffset: number,
+  endCueOffset: number,
+): Promise<Subtitle[]> {
+  const resolved = new Map<number, Subtitle>();
+  const policy = retryPolicyFor(opts.provider);
+  let lastInvalid: InvalidJsonLine | null = null;
+
+  for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
+    throwIfAborted(opts.signal);
+    const requestedCues = batch.filter((cue) => !resolved.has(cue.index));
+    if (requestedCues.length === 0) return orderedResolved(batch, resolved);
+    const requested = new Map(requestedCues.map((cue) => [cue.index, cue]));
+    let streamError: unknown = null;
+
+    try {
+      const parser = new JsonLineParser();
+      const handle = (value: unknown) => {
+        const result = validateCueOutput(value, requested);
+        if (result.status !== "resolved" || resolved.has(result.index)) return;
+        resolved.set(result.index, result.subtitle);
+        opts.onPreview?.({
+          startCueOffset,
+          endCueOffset,
+          subtitles: orderedResolved(batch, resolved),
+        });
+      };
+      const invalid = (failure: InvalidJsonLine) => { lastInvalid = failure; };
+      const userPrompt = attempt === 1
+        ? (startCueOffset === 0
+          ? buildUserPrompt(requestedCues)
+          : buildContinuationPrompt(requestedCues))
+        : buildRepairPrompt(requestedCues);
+
+      for await (const chunk of opts.provider.stream({
+        systemPrompt,
+        userPrompt,
+        signal: opts.signal,
+      })) {
+        throwIfAborted(opts.signal);
+        parser.feed(chunk, handle, invalid);
+      }
+      throwIfAborted(opts.signal);
+      parser.flush(handle, invalid);
+      throwIfAborted(opts.signal);
+    } catch (error) {
+      if (opts.signal?.aborted && isAbortError(error)) throw error;
+      streamError = error;
+    }
+
+    const unresolvedCueIndexes = batch
+      .filter((cue) => !resolved.has(cue.index))
+      .map((cue) => cue.index);
+    if (unresolvedCueIndexes.length === 0) return orderedResolved(batch, resolved);
+
+    if (streamError !== null && !isRetryableAnalysisStreamFailure(streamError)) {
+      throw streamError;
+    }
+    if (attempt === policy.maxAttempts) {
+      if (streamError !== null) throw streamError;
+      logMalformedLine(lastInvalid);
+      throw unresolvedCueError(unresolvedCueIndexes);
+    }
+
+    const retryError = streamError ?? unresolvedCueError(unresolvedCueIndexes);
+    const delayMs = retryDelay(policy, attempt, retryError);
+    opts.onRetry?.({
+      kind: streamError === null ? "content-repair" : "transport",
+      failedAttempt: attempt,
+      nextAttempt: attempt + 1,
+      maxAttempts: policy.maxAttempts,
+      delayMs,
+      error: retryError,
+      unresolvedCueIndexes,
+    });
+    await abortableDelay(delayMs, opts.signal);
+  }
+
+  throw new Error("unreachable cue repair state");
+}
+
+function retryPolicyFor(provider: Provider): RetryPolicy {
+  return provider.retryProfile === "deepseek-analysis"
+    ? DEEPSEEK_ANALYSIS_RETRY_POLICY
+    : NO_RETRY_POLICY;
+}
+
+function orderedResolved(
+  batch: readonly SrtCue[],
+  resolved: ReadonlyMap<number, Subtitle>,
+): Subtitle[] {
+  return batch.flatMap((cue) => {
+    const subtitle = resolved.get(cue.index);
+    return subtitle ? [subtitle] : [];
+  });
+}
+
+function isRetryableAnalysisStreamFailure(error: unknown): boolean {
+  return isRetryableProviderFailure(error) || error instanceof ProviderProtocolError;
+}
+
+function retryDelay(policy: RetryPolicy, attempt: number, error: unknown): number {
+  const base = policy.backoffMs[attempt - 1]
+    ?? policy.backoffMs[policy.backoffMs.length - 1]
+    ?? 0;
+  const retryAfter = error instanceof ProviderHttpError ? error.retryAfterMs ?? 0 : 0;
+  return Math.max(base, retryAfter);
+}
+
+function unresolvedCueError(indexes: readonly number[]): ModelContentError {
+  return new ModelContentError(
+    `模型返回格式异常，${indexes.length} 条字幕仍未完成（索引：${indexes.join("、")}）`,
+  );
+}
+
+function logMalformedLine(failure: InvalidJsonLine | null): void {
+  if (!failure) return;
+  const excerpt = JSON.stringify(failure.line.slice(0, 240));
+  console.warn(`Ignored malformed model JSON: ${failure.error.message}; excerpt=${excerpt}`);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new DOMException("The operation was aborted", "AbortError");
   }
-}
-
-/**
- * Match a model cue back to its authoritative source cue. Index is preferred;
- * positional matching preserves compatibility with models that omit indexes.
- */
-function resolveOriginal(
-  obj: unknown,
-  byIndex: Map<number, SrtCue>,
-  batch: readonly SrtCue[],
-  positional: number,
-): SrtCue | undefined {
-  if (!obj || typeof obj !== "object") return undefined;
-  const output = obj as Record<string, unknown>;
-  const index = Number(output.index);
-  if (Number.isFinite(index) && byIndex.has(index)) return byIndex.get(index);
-  if (positional < batch.length) return batch[positional];
-  return undefined;
-}
-
-function parseCue(obj: unknown, original: SrtCue | undefined): Subtitle | null {
-  if (!obj || typeof obj !== "object") return null;
-  const output = obj as Record<string, unknown>;
-  if (output.type !== "cue") return null;
-
-  return {
-    time: original?.time ?? Number(output.time),
-    endTime: original?.endTime ?? Number(output.endTime),
-    text: original?.text ?? String(output.text ?? ""),
-    translation: String(output.translation ?? ""),
-    isKeyPoint: Boolean(output.isKeyPoint),
-    highlightWords: Array.isArray(output.highlightWords)
-      ? (output.highlightWords as string[])
-      : [],
-    keyNotes: isPlainObject(output.keyNotes)
-      ? (output.keyNotes as Record<string, string>)
-      : {},
-    highlightTranslations: isPlainObject(output.highlightTranslations)
-      ? (output.highlightTranslations as Record<string, string>)
-      : {},
-  };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

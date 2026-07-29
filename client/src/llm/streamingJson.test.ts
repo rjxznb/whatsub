@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { JsonLineParser } from "./streamingJson";
+import { JsonLineParser, type InvalidJsonLine } from "./streamingJson";
 
 describe("JsonLineParser", () => {
   it("emits objects as complete lines arrive", () => {
@@ -37,7 +37,7 @@ describe("JsonLineParser", () => {
   it("reports each non-empty invalid line when a handler is provided", () => {
     const parser = new JsonLineParser();
     const out: unknown[] = [];
-    const invalid: string[] = [];
+    const invalid: InvalidJsonLine[] = [];
 
     parser.feed(
       ' not json \n\n{"ok":true}\n',
@@ -46,16 +46,37 @@ describe("JsonLineParser", () => {
     );
 
     expect(out).toEqual([{ ok: true }]);
-    expect(invalid).toEqual(["not json"]);
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0].line).toBe("not json");
+    expect(invalid[0].error).toBeInstanceOf(SyntaxError);
   });
 
   it("reports an invalid trailing line during flush", () => {
     const parser = new JsonLineParser();
-    const invalid: string[] = [];
+    const invalid: InvalidJsonLine[] = [];
 
     parser.feed("trailing prose", () => {});
     parser.flush(() => {}, (line) => invalid.push(line));
 
-    expect(invalid).toEqual(["trailing prose"]);
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0].line).toBe("trailing prose");
+    expect(invalid[0].error).toBeInstanceOf(SyntaxError);
+  });
+
+  it("reports the parse cause without swallowing later valid lines", () => {
+    const parser = new JsonLineParser();
+    const invalid: InvalidJsonLine[] = [];
+    const valid: unknown[] = [];
+
+    parser.feed(
+      '{"index":1,"translation":"broken\n{"index":2,"translation":"ok"}\n',
+      (value) => valid.push(value),
+      (failure) => invalid.push(failure),
+    );
+
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0].line).toContain('"index":1');
+    expect(invalid[0].error).toBeInstanceOf(SyntaxError);
+    expect(valid).toEqual([{ index: 2, translation: "ok" }]);
   });
 });

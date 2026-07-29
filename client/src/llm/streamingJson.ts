@@ -1,10 +1,15 @@
+export interface InvalidJsonLine {
+  line: string;
+  error: SyntaxError;
+}
+
 export class JsonLineParser {
   private buffer = "";
 
   feed(
     chunk: string,
     onObject: (obj: unknown) => void,
-    onInvalid?: (line: string) => void,
+    onInvalid?: (failure: InvalidJsonLine) => void,
   ): void {
     this.buffer += chunk;
     let newlineIdx: number;
@@ -17,7 +22,7 @@ export class JsonLineParser {
 
   flush(
     onObject: (obj: unknown) => void,
-    onInvalid?: (line: string) => void,
+    onInvalid?: (failure: InvalidJsonLine) => void,
   ): void {
     const remaining = this.buffer.trim();
     this.buffer = "";
@@ -27,14 +32,17 @@ export class JsonLineParser {
   private tryParse(
     line: string,
     onObject: (obj: unknown) => void,
-    onInvalid?: (line: string) => void,
+    onInvalid?: (failure: InvalidJsonLine) => void,
   ): void {
     if (!line) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
-    } catch {
-      onInvalid?.(line);
+    } catch (error) {
+      onInvalid?.({
+        line,
+        error: error instanceof SyntaxError ? error : new SyntaxError(String(error)),
+      });
       return;
     }
     try {

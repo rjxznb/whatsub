@@ -36,6 +36,8 @@ pub fn run() {
             commands::analysis::begin_analysis_session,
             commands::analysis::begin_analysis_session_from_transcript,
             commands::analysis::save_analysis_session,
+            commands::analysis::save_analysis_inflight,
+            commands::analysis::discard_analysis_inflight,
             commands::analysis::end_analysis_session,
             commands::analysis::load_analysis,
             commands::analysis::delete_analysis,

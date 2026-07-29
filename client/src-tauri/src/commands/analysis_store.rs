@@ -59,6 +59,7 @@ pub struct SessionSaveOutcome {
 pub struct AnalysisSessionStart {
     pub lease: String,
     pub analysis: Option<Value>,
+    pub inflight: Option<AnalysisInflightJournal>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -72,10 +73,15 @@ pub struct AnalysisTranscriptSessionStart {
 #[derive(Clone, Debug)]
 struct ActiveLease {
     token: String,
-    transcript_generation: Option<String>,
+    transcript_generation: String,
+    verify_transcript_path: bool,
+    analysis_style: String,
     fingerprint: Option<String>,
     revision: Option<u64>,
+    next_cue_offset: Option<usize>,
+    phase: Option<String>,
     analysis: Option<Value>,
+    inflight: Option<AnalysisInflightJournal>,
 }
 
 #[derive(Debug)]
@@ -99,6 +105,8 @@ impl Default for AnalysisStore {
 struct CheckpointMeta {
     fingerprint: String,
     revision: u64,
+    next_cue_offset: usize,
+    phase: String,
 }
 
 impl AnalysisStore {
@@ -106,7 +114,10 @@ impl AnalysisStore {
         &mut self,
         video_id: &str,
         analysis: Option<Value>,
-        transcript_generation: Option<String>,
+        transcript_generation: String,
+        verify_transcript_path: bool,
+        analysis_style: String,
+        inflight: Option<AnalysisInflightJournal>,
     ) -> AppResult<String> {
         self.next_lease = self
             .next_lease
@@ -123,9 +134,14 @@ impl AnalysisStore {
             ActiveLease {
                 token: token.clone(),
                 transcript_generation,
+                verify_transcript_path,
+                analysis_style,
                 fingerprint: meta.as_ref().map(|meta| meta.fingerprint.clone()),
                 revision: meta.as_ref().map(|meta| meta.revision),
+                next_cue_offset: meta.as_ref().map(|meta| meta.next_cue_offset),
+                phase: meta.as_ref().map(|meta| meta.phase.clone()),
                 analysis,
+                inflight,
             },
         );
         Ok(token)
@@ -136,7 +152,11 @@ impl AnalysisStore {
         video_id: &str,
         path: &Path,
         reset: bool,
+        transcript_generation: &str,
+        verify_transcript_path: bool,
+        analysis_style: &str,
     ) -> AppResult<AnalysisSessionStart> {
+        validate_session_identity(transcript_generation, analysis_style)?;
         if !reset && self.active.contains_key(video_id) {
             return Err(AppError::Other(format!(
                 "analysis session already active for {video_id}"
@@ -146,12 +166,34 @@ impl AnalysisStore {
         self.active.remove(video_id);
         let analysis = if reset {
             remove_snapshot_artifacts(path)?;
+            remove_inflight_artifacts(&inflight_path(path))?;
             None
         } else {
             migrate_and_load_snapshot(path)?
         };
-        let lease = self.issue_lease(video_id, analysis.clone(), None)?;
-        Ok(AnalysisSessionStart { lease, analysis })
+        let inflight = if reset {
+            None
+        } else {
+            load_matching_inflight(
+                path,
+                analysis.as_ref(),
+                transcript_generation,
+                analysis_style,
+            )?
+        };
+        let lease = self.issue_lease(
+            video_id,
+            analysis.clone(),
+            transcript_generation.to_string(),
+            verify_transcript_path,
+            analysis_style.to_string(),
+            inflight.clone(),
+        )?;
+        Ok(AnalysisSessionStart {
+            lease,
+            analysis,
+            inflight,
+        })
     }
 
     fn begin_for_transcript_at(
@@ -161,6 +203,7 @@ impl AnalysisStore {
         analysis_path: &Path,
         reset: bool,
         expected_generation: Option<&str>,
+        analysis_style: &str,
     ) -> AppResult<Option<AnalysisTranscriptSessionStart>> {
         let transcript = match fs::read_to_string(transcript_path) {
             Ok(transcript) => transcript,
@@ -168,6 +211,7 @@ impl AnalysisStore {
             Err(error) => return Err(error.into()),
         };
         let transcript_generation = transcript_generation(&transcript);
+        validate_session_identity(&transcript_generation, analysis_style)?;
         if expected_generation.is_some_and(|expected| expected != transcript_generation) {
             return Err(AppError::Other(
                 "analysis transcript changed while opening session".to_string(),
@@ -182,19 +226,37 @@ impl AnalysisStore {
         self.active.remove(video_id);
         let analysis = if reset {
             remove_snapshot_artifacts(analysis_path)?;
+            remove_inflight_artifacts(&inflight_path(analysis_path))?;
             None
         } else {
             migrate_and_load_snapshot(analysis_path)?
         };
+        let inflight = if reset {
+            None
+        } else {
+            load_matching_inflight(
+                analysis_path,
+                analysis.as_ref(),
+                &transcript_generation,
+                analysis_style,
+            )?
+        };
         let lease = self.issue_lease(
             video_id,
             analysis.clone(),
-            Some(transcript_generation.clone()),
+            transcript_generation.clone(),
+            true,
+            analysis_style.to_string(),
+            inflight.clone(),
         )?;
         Ok(Some(AnalysisTranscriptSessionStart {
             transcript,
             transcript_generation,
-            session: AnalysisSessionStart { lease, analysis },
+            session: AnalysisSessionStart {
+                lease,
+                analysis,
+                inflight,
+            },
         }))
     }
 
@@ -205,9 +267,17 @@ impl AnalysisStore {
         lease: &str,
         analysis: Value,
     ) -> AppResult<SessionSaveOutcome> {
-        self.save_at_with_replacer(video_id, path, lease, analysis, replace_analysis_file)
+        self.save_at_with_parts(
+            video_id,
+            path,
+            lease,
+            analysis,
+            replace_analysis_file,
+            |candidate| fs::remove_file(candidate),
+        )
     }
 
+    #[cfg(test)]
     fn save_at_with_replacer<F>(
         &mut self,
         video_id: &str,
@@ -218,6 +288,46 @@ impl AnalysisStore {
     ) -> AppResult<SessionSaveOutcome>
     where
         F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+    {
+        self.save_at_with_parts(video_id, path, lease, analysis, replacer, |candidate| {
+            fs::remove_file(candidate)
+        })
+    }
+
+    #[cfg(test)]
+    fn save_at_with_inflight_remover<R>(
+        &mut self,
+        video_id: &str,
+        path: &Path,
+        lease: &str,
+        analysis: Value,
+        remover: R,
+    ) -> AppResult<SessionSaveOutcome>
+    where
+        R: FnMut(&Path) -> std::io::Result<()>,
+    {
+        self.save_at_with_parts(
+            video_id,
+            path,
+            lease,
+            analysis,
+            replace_analysis_file,
+            remover,
+        )
+    }
+
+    fn save_at_with_parts<F, R>(
+        &mut self,
+        video_id: &str,
+        path: &Path,
+        lease: &str,
+        analysis: Value,
+        replacer: F,
+        mut remove_inflight: R,
+    ) -> AppResult<SessionSaveOutcome>
+    where
+        F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+        R: FnMut(&Path) -> std::io::Result<()>,
     {
         let incoming = validate_analysis(&analysis)?.ok_or_else(|| {
             AppError::InvalidInput("analysis checkpoint is required for session saves".to_string())
@@ -235,19 +345,11 @@ impl AnalysisStore {
             });
         }
 
-        if let Some(expected_generation) = active.transcript_generation.as_deref() {
-            let transcript_path = path.with_file_name("transcript.srt");
-            let current_generation = match fs::read_to_string(&transcript_path) {
-                Ok(transcript) => Some(transcript_generation(&transcript)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-            if current_generation.as_deref() != Some(expected_generation) {
-                return Ok(SessionSaveOutcome {
-                    status: SessionSaveStatus::Rejected,
-                    revision: active.revision,
-                });
-            }
+        if !active_transcript_is_current(active, path)? {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::Rejected,
+                revision: active.revision,
+            });
         }
 
         if let Some(fingerprint) = active.fingerprint.as_deref() {
@@ -290,7 +392,120 @@ impl AnalysisStore {
             .expect("lease checked before atomic save");
         active.fingerprint = Some(incoming.fingerprint);
         active.revision = Some(incoming.revision);
+        active.next_cue_offset = Some(incoming.next_cue_offset);
+        active.phase = Some(incoming.phase);
         active.analysis = Some(analysis);
+        let clear_inflight = active
+            .inflight
+            .as_ref()
+            .is_some_and(|journal| incoming.next_cue_offset >= journal.end_cue_offset);
+        if clear_inflight {
+            active.inflight = None;
+        }
+        let revision = active.revision;
+        if clear_inflight {
+            for candidate in inflight_artifacts(&inflight_path(path)) {
+                match remove_inflight(&candidate) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => eprintln!(
+                        "analysis inflight cleanup failed for {}: {error}",
+                        candidate.display()
+                    ),
+                }
+            }
+        }
+        Ok(SessionSaveOutcome {
+            status: SessionSaveStatus::Applied,
+            revision,
+        })
+    }
+
+    fn save_inflight_at(
+        &mut self,
+        video_id: &str,
+        analysis_path: &Path,
+        lease: &str,
+        journal: AnalysisInflightJournal,
+    ) -> AppResult<SessionSaveOutcome> {
+        validate_inflight(&journal)?;
+        let Some(active) = self.active.get(video_id) else {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::Rejected,
+                revision: None,
+            });
+        };
+        if active.token != lease
+            || !active_transcript_is_current(active, analysis_path)?
+            || !journal_matches_active(&journal, active)
+            || !journal_is_monotonic(active.inflight.as_ref(), &journal)
+        {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::Rejected,
+                revision: active.revision,
+            });
+        }
+        if active.inflight.as_ref() == Some(&journal) {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::AlreadyCurrent,
+                revision: active.revision,
+            });
+        }
+
+        write_inflight_at_with_replacer(
+            &inflight_path(analysis_path),
+            &journal,
+            replace_analysis_file,
+        )?;
+        let active = self
+            .active
+            .get_mut(video_id)
+            .expect("lease checked before atomic inflight save");
+        active.inflight = Some(journal);
+        Ok(SessionSaveOutcome {
+            status: SessionSaveStatus::Applied,
+            revision: active.revision,
+        })
+    }
+
+    fn discard_inflight_at(
+        &mut self,
+        video_id: &str,
+        analysis_path: &Path,
+        lease: &str,
+        journal_id: &str,
+    ) -> AppResult<SessionSaveOutcome> {
+        let Some(active) = self.active.get(video_id) else {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::Rejected,
+                revision: None,
+            });
+        };
+        if active.token != lease {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::Rejected,
+                revision: active.revision,
+            });
+        }
+        let Some(current) = active.inflight.as_ref() else {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::AlreadyCurrent,
+                revision: active.revision,
+            });
+        };
+        if current.journal_id != journal_id {
+            return Ok(SessionSaveOutcome {
+                status: SessionSaveStatus::Rejected,
+                revision: active.revision,
+            });
+        }
+
+        remove_inflight_artifacts(&inflight_path(analysis_path))?;
+        let active = self
+            .active
+            .get_mut(video_id)
+            .expect("lease checked before inflight discard");
+        active.inflight = None;
         Ok(SessionSaveOutcome {
             status: SessionSaveStatus::Applied,
             revision: active.revision,
@@ -360,18 +575,31 @@ where
     with_store_destructive_boundary(&ANALYSIS_STORE, video_id, operation)
 }
 
-pub(crate) fn begin_session(video_id: &str, reset: bool) -> AppResult<AnalysisSessionStart> {
+pub(crate) fn begin_session(
+    video_id: &str,
+    reset: bool,
+    transcript_generation: &str,
+    analysis_style: &str,
+) -> AppResult<AnalysisSessionStart> {
     let path = paths::video_dir(video_id)?.join("analysis.json");
     ANALYSIS_STORE
         .lock()
         .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
-        .begin_at(video_id, &path, reset)
+        .begin_at(
+            video_id,
+            &path,
+            reset,
+            transcript_generation,
+            false,
+            analysis_style,
+        )
 }
 
 pub(crate) fn begin_transcript_session(
     video_id: &str,
     reset: bool,
     expected_generation: Option<&str>,
+    analysis_style: &str,
 ) -> AppResult<Option<AnalysisTranscriptSessionStart>> {
     let video_dir = paths::video_dir(video_id)?;
     let transcript_path = video_dir.join("transcript.srt");
@@ -385,6 +613,7 @@ pub(crate) fn begin_transcript_session(
             &analysis_path,
             reset,
             expected_generation,
+            analysis_style,
         )
 }
 
@@ -398,6 +627,30 @@ pub(crate) fn save_session(
         .lock()
         .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
         .save_at(video_id, &path, lease, analysis)
+}
+
+pub(crate) fn save_inflight(
+    video_id: &str,
+    lease: &str,
+    journal: AnalysisInflightJournal,
+) -> AppResult<SessionSaveOutcome> {
+    let path = paths::video_dir(video_id)?.join("analysis.json");
+    ANALYSIS_STORE
+        .lock()
+        .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
+        .save_inflight_at(video_id, &path, lease, journal)
+}
+
+pub(crate) fn discard_inflight(
+    video_id: &str,
+    lease: &str,
+    journal_id: &str,
+) -> AppResult<SessionSaveOutcome> {
+    let path = paths::video_dir(video_id)?.join("analysis.json");
+    ANALYSIS_STORE
+        .lock()
+        .map_err(|_| AppError::Other("analysis lease store poisoned".to_string()))?
+        .discard_inflight_at(video_id, &path, lease, journal_id)
 }
 
 pub(crate) fn end_session(video_id: &str, lease: &str) -> AppResult<()> {
@@ -757,9 +1010,10 @@ fn validate_analysis(analysis: &Value) -> AppResult<Option<CheckpointMeta>> {
                 "analysis checkpoint transcriptFingerprint is invalid".to_string(),
             )
         })?;
-    checkpoint
+    let next_cue_offset = checkpoint
         .get("nextCueOffset")
         .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
         .ok_or_else(|| {
             AppError::InvalidInput("analysis checkpoint nextCueOffset is invalid".to_string())
         })?;
@@ -778,7 +1032,123 @@ fn validate_analysis(analysis: &Value) -> AppResult<Option<CheckpointMeta>> {
     Ok(Some(CheckpointMeta {
         fingerprint: fingerprint.to_string(),
         revision,
+        next_cue_offset,
+        phase: phase.expect("checkpoint phase validated").to_string(),
     }))
+}
+
+fn is_known_analysis_style(style: &str) -> bool {
+    matches!(
+        style,
+        "formal" | "neutral" | "colloquial" | "playful" | "cinematic" | "literary"
+    )
+}
+
+fn validate_session_identity(transcript_generation: &str, analysis_style: &str) -> AppResult<()> {
+    if transcript_generation.trim().is_empty() {
+        return Err(AppError::InvalidInput(
+            "analysis transcriptGeneration is invalid".to_string(),
+        ));
+    }
+    if !is_known_analysis_style(analysis_style) {
+        return Err(AppError::InvalidInput(
+            "analysis analysisStyle is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn active_transcript_is_current(active: &ActiveLease, analysis_path: &Path) -> AppResult<bool> {
+    if !active.verify_transcript_path {
+        return Ok(true);
+    }
+    let transcript_path = analysis_path.with_file_name("transcript.srt");
+    let current_generation = match fs::read_to_string(&transcript_path) {
+        Ok(transcript) => Some(transcript_generation(&transcript)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(current_generation.as_deref() == Some(active.transcript_generation.as_str()))
+}
+
+fn journal_matches_checkpoint(
+    journal: &AnalysisInflightJournal,
+    transcript_generation: &str,
+    analysis_style: &str,
+    checkpoint: &CheckpointMeta,
+) -> bool {
+    checkpoint.phase == "cues"
+        && journal.transcript_generation == transcript_generation
+        && journal.analysis_style == analysis_style
+        && journal.transcript_fingerprint == checkpoint.fingerprint
+        && journal.base_revision == checkpoint.revision
+        && journal.start_cue_offset == checkpoint.next_cue_offset
+        && checkpoint.next_cue_offset < journal.end_cue_offset
+}
+
+fn journal_matches_active(journal: &AnalysisInflightJournal, active: &ActiveLease) -> bool {
+    matches!(active.phase.as_deref(), Some("cues"))
+        && journal.transcript_generation == active.transcript_generation
+        && journal.analysis_style == active.analysis_style
+        && active
+            .fingerprint
+            .as_deref()
+            .is_some_and(|value| value == journal.transcript_fingerprint)
+        && active.revision == Some(journal.base_revision)
+        && active.next_cue_offset == Some(journal.start_cue_offset)
+}
+
+fn journal_is_monotonic(
+    previous: Option<&AnalysisInflightJournal>,
+    incoming: &AnalysisInflightJournal,
+) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+    if previous.version != incoming.version
+        || previous.journal_id != incoming.journal_id
+        || previous.transcript_generation != incoming.transcript_generation
+        || previous.transcript_fingerprint != incoming.transcript_fingerprint
+        || previous.analysis_style != incoming.analysis_style
+        || previous.base_revision != incoming.base_revision
+        || previous.start_cue_offset != incoming.start_cue_offset
+        || previous.end_cue_offset != incoming.end_cue_offset
+        || incoming.entries.len() < previous.entries.len()
+    {
+        return false;
+    }
+    let incoming_by_offset = incoming
+        .entries
+        .iter()
+        .map(|entry| (entry.cue_offset, &entry.subtitle))
+        .collect::<HashMap<_, _>>();
+    previous.entries.iter().all(|entry| {
+        incoming_by_offset.get(&entry.cue_offset).copied() == Some(&entry.subtitle)
+    })
+}
+
+fn load_matching_inflight(
+    analysis_path: &Path,
+    analysis: Option<&Value>,
+    transcript_generation: &str,
+    analysis_style: &str,
+) -> AppResult<Option<AnalysisInflightJournal>> {
+    let Some(journal) = load_inflight_best_effort(analysis_path) else {
+        return Ok(None);
+    };
+    let checkpoint = analysis.map(validate_analysis).transpose()?.flatten();
+    if checkpoint.as_ref().is_some_and(|checkpoint| {
+        journal_matches_checkpoint(
+            &journal,
+            transcript_generation,
+            analysis_style,
+            checkpoint,
+        )
+    }) {
+        return Ok(Some(journal));
+    }
+    remove_inflight_artifacts_best_effort(&inflight_path(analysis_path));
+    Ok(None)
 }
 
 fn inflight_path(analysis_path: &Path) -> PathBuf {
@@ -816,10 +1186,7 @@ fn validate_inflight(journal: &AnalysisInflightJournal) -> AppResult<()> {
             )));
         }
     }
-    if !matches!(
-        journal.analysis_style.as_str(),
-        "formal" | "neutral" | "colloquial" | "playful" | "cinematic" | "literary"
-    ) {
+    if !is_known_analysis_style(&journal.analysis_style) {
         return Err(AppError::InvalidInput(
             "analysis inflight analysisStyle is invalid".to_string(),
         ));
@@ -902,6 +1269,17 @@ where
     }
     let value = serde_json::to_value(journal)?;
     write_json_atomically_with_replacer(path, &value, replacer)
+}
+
+fn remove_inflight_artifacts(path: &Path) -> AppResult<()> {
+    for candidate in inflight_artifacts(path) {
+        match fs::remove_file(candidate) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn remove_inflight_artifacts_best_effort(path: &Path) {
@@ -1135,6 +1513,15 @@ mod tests {
     }
 
     fn checkpointed(fingerprint: &str, revision: u64, marker: &str) -> Value {
+        checkpointed_at(fingerprint, revision, 0, marker)
+    }
+
+    fn checkpointed_at(
+        fingerprint: &str,
+        revision: u64,
+        next_cue_offset: usize,
+        marker: &str,
+    ) -> Value {
         json!({
             "subtitles": [],
             "keyPhrases": [],
@@ -1142,7 +1529,7 @@ mod tests {
             "checkpoint": {
                 "version": 1,
                 "transcriptFingerprint": fingerprint,
-                "nextCueOffset": 0,
+                "nextCueOffset": next_cue_offset,
                 "phase": "cues",
                 "revision": revision
             }
@@ -1177,7 +1564,7 @@ mod tests {
             transcript_generation: "sha256:raw".to_string(),
             transcript_fingerprint: "sha256:semantic".to_string(),
             analysis_style: "neutral".to_string(),
-            base_revision: 2,
+            base_revision: 0,
             start_cue_offset,
             end_cue_offset: start_cue_offset + 50,
             entries,
@@ -1268,6 +1655,265 @@ mod tests {
         assert_eq!(read_inflight_strict(&path).unwrap(), old);
     }
 
+    fn seed_analysis_and_inflight(path: &Path, journal_id: &str) -> AnalysisSessionStart {
+        let mut store = AnalysisStore::default();
+        let session = store
+            .begin_at("v1", path, false, "sha256:raw", false, "neutral")
+            .unwrap();
+        store
+            .save_at(
+                "v1",
+                path,
+                &session.lease,
+                checkpointed_at("sha256:semantic", 0, 0, "base"),
+            )
+            .unwrap();
+        store
+            .save_inflight_at(
+                "v1",
+                path,
+                &session.lease,
+                inflight_journal(journal_id, 0, vec![inflight_entry(0, "first")]),
+            )
+            .unwrap();
+        session
+    }
+
+    fn seeded_store_with_inflight(path: &Path, video_id: &str, journal_id: &str) -> AnalysisStore {
+        let mut store = AnalysisStore::default();
+        let session = store
+            .begin_at(
+                video_id,
+                path,
+                false,
+                "sha256:raw",
+                false,
+                "neutral",
+            )
+            .unwrap();
+        store
+            .save_at(
+                video_id,
+                path,
+                &session.lease,
+                checkpointed_at("sha256:semantic", 0, 0, "base"),
+            )
+            .unwrap();
+        store
+            .save_inflight_at(
+                video_id,
+                path,
+                &session.lease,
+                inflight_journal(journal_id, 0, vec![inflight_entry(0, "first")]),
+            )
+            .unwrap();
+        store
+    }
+
+    #[test]
+    fn inflight_save_requires_current_lease_and_monotonic_entries() {
+        let dir = TestDir::new("inflight-lease");
+        let path = dir.analysis_path();
+        let mut store = AnalysisStore::default();
+        let session = store
+            .begin_at("v1", &path, false, "sha256:raw", false, "neutral")
+            .unwrap();
+        store
+            .save_at(
+                "v1",
+                &path,
+                &session.lease,
+                checkpointed_at("sha256:semantic", 0, 0, "base"),
+            )
+            .unwrap();
+
+        let one = inflight_journal("j1", 0, vec![inflight_entry(0, "first")]);
+        assert_eq!(
+            store
+                .save_inflight_at("v1", &path, "wrong", one.clone())
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
+        assert_eq!(
+            store
+                .save_inflight_at("v1", &path, &session.lease, one.clone())
+                .unwrap()
+                .status,
+            SessionSaveStatus::Applied
+        );
+        assert_eq!(
+            store
+                .save_inflight_at("v1", &path, &session.lease, one)
+                .unwrap()
+                .status,
+            SessionSaveStatus::AlreadyCurrent
+        );
+        assert_eq!(
+            store
+                .save_inflight_at(
+                    "v1",
+                    &path,
+                    &session.lease,
+                    inflight_journal(
+                        "j1",
+                        0,
+                        vec![inflight_entry(0, "first"), inflight_entry(1, "second")],
+                    ),
+                )
+                .unwrap()
+                .status,
+            SessionSaveStatus::Applied
+        );
+        assert_eq!(
+            store
+                .save_inflight_at(
+                    "v1",
+                    &path,
+                    &session.lease,
+                    inflight_journal(
+                        "j1",
+                        0,
+                        vec![inflight_entry(0, "changed"), inflight_entry(1, "second")],
+                    ),
+                )
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
+    }
+
+    #[test]
+    fn canonical_advance_makes_leftover_inflight_stale() {
+        let dir = TestDir::new("inflight-after-commit");
+        let path = dir.analysis_path();
+        let mut store = seeded_store_with_inflight(&path, "v1", "j1");
+        let lease = store.active["v1"].token.clone();
+        let outcome = store
+            .save_at_with_inflight_remover(
+                "v1",
+                &path,
+                &lease,
+                checkpointed_at("sha256:semantic", 1, 50, "committed"),
+                |_path| Err(std::io::Error::other("journal busy")),
+            )
+            .unwrap();
+        assert_eq!(outcome.status, SessionSaveStatus::Applied);
+        assert!(inflight_path(&path).exists());
+
+        let mut restarted = AnalysisStore::default();
+        let opened = restarted
+            .begin_at("v1", &path, false, "sha256:raw", false, "neutral")
+            .unwrap();
+        assert!(opened.inflight.is_none());
+        assert!(!inflight_path(&path).exists());
+    }
+
+    #[test]
+    fn new_store_adopts_matching_inflight_with_a_new_lease() {
+        let dir = TestDir::new("inflight-restart");
+        let path = dir.analysis_path();
+        let original = seed_analysis_and_inflight(&path, "j1");
+        let mut restarted = AnalysisStore::default();
+        let opened = restarted
+            .begin_at("v1", &path, false, "sha256:raw", false, "neutral")
+            .unwrap();
+
+        assert_ne!(opened.lease, original.lease);
+        assert_eq!(
+            opened
+                .inflight
+                .as_ref()
+                .map(|journal| journal.journal_id.as_str()),
+            Some("j1")
+        );
+    }
+
+    #[test]
+    fn reset_removes_inflight_and_rejects_the_old_lease() {
+        let dir = TestDir::new("inflight-reset");
+        let path = dir.analysis_path();
+        let mut store = seeded_store_with_inflight(&path, "v1", "j1");
+        let old_lease = store.active["v1"].token.clone();
+        let fresh = store
+            .begin_at("v1", &path, true, "sha256:new", false, "neutral")
+            .unwrap();
+
+        assert!(!inflight_path(&path).exists());
+        assert_eq!(
+            store
+                .save_inflight_at(
+                    "v1",
+                    &path,
+                    &old_lease,
+                    inflight_journal("late", 0, vec![inflight_entry(0, "late")]),
+                )
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
+        assert_ne!(fresh.lease, old_lease);
+    }
+
+    #[test]
+    fn restart_discards_inflight_for_another_generation_or_style() {
+        for (name, generation, style) in [
+            ("inflight-wrong-generation", "sha256:other", "neutral"),
+            ("inflight-wrong-style", "sha256:raw", "formal"),
+        ] {
+            let dir = TestDir::new(name);
+            let path = dir.analysis_path();
+            seed_analysis_and_inflight(&path, "j1");
+
+            let mut restarted = AnalysisStore::default();
+            let opened = restarted
+                .begin_at("v1", &path, false, generation, false, style)
+                .unwrap();
+
+            assert!(opened.inflight.is_none());
+            assert!(!inflight_path(&path).exists());
+        }
+    }
+
+    #[test]
+    fn discard_inflight_requires_the_current_lease_and_journal_id() {
+        let dir = TestDir::new("inflight-discard");
+        let path = dir.analysis_path();
+        let mut store = seeded_store_with_inflight(&path, "v1", "j1");
+        let lease = store.active["v1"].token.clone();
+
+        assert_eq!(
+            store
+                .discard_inflight_at("v1", &path, "wrong", "j1")
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
+        assert_eq!(
+            store
+                .discard_inflight_at("v1", &path, &lease, "other")
+                .unwrap()
+                .status,
+            SessionSaveStatus::Rejected
+        );
+        assert!(inflight_path(&path).exists());
+        assert_eq!(
+            store
+                .discard_inflight_at("v1", &path, &lease, "j1")
+                .unwrap()
+                .status,
+            SessionSaveStatus::Applied
+        );
+        assert!(!inflight_path(&path).exists());
+        assert_eq!(
+            store
+                .discard_inflight_at("v1", &path, &lease, "j1")
+                .unwrap()
+                .status,
+            SessionSaveStatus::AlreadyCurrent
+        );
+    }
+
     fn read(path: &Path) -> Value {
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
     }
@@ -1278,7 +1924,9 @@ mod tests {
         let path = dir.analysis_path();
         let mut store = AnalysisStore::default();
 
-        let old = store.begin_at("v1", &path, false).unwrap();
+        let old = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
         assert_eq!(
             store
                 .save_at(
@@ -1292,7 +1940,9 @@ mod tests {
             SessionSaveStatus::Applied
         );
 
-        let fresh = store.begin_at("v1", &path, true).unwrap();
+        let fresh = store
+            .begin_at("v1", &path, true, "sha256:test", false, "colloquial")
+            .unwrap();
         assert_eq!(
             store
                 .save_at(
@@ -1325,9 +1975,13 @@ mod tests {
         let dir = TestDir::new("active-conflict");
         let path = dir.analysis_path();
         let mut store = AnalysisStore::default();
-        store.begin_at("v1", &path, false).unwrap();
+        store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
 
-        let error = store.begin_at("v1", &path, false).unwrap_err();
+        let error = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap_err();
         assert!(error.to_string().contains("already active"));
     }
 
@@ -1336,7 +1990,9 @@ mod tests {
         let dir = TestDir::new("revision-order");
         let path = dir.analysis_path();
         let mut store = AnalysisStore::default();
-        let session = store.begin_at("v1", &path, false).unwrap();
+        let session = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
 
         let revision_zero = checkpointed("sha256:same", 0, "zero");
         assert_eq!(
@@ -1397,7 +2053,9 @@ mod tests {
         let dir = TestDir::new("replacement-failure");
         let path = dir.analysis_path();
         let mut store = AnalysisStore::default();
-        let session = store.begin_at("v1", &path, false).unwrap();
+        let session = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
         store
             .save_at(
                 "v1",
@@ -1425,7 +2083,9 @@ mod tests {
         let dir = TestDir::new("new-process");
         let path = dir.analysis_path();
         let mut first_process = AnalysisStore::default();
-        let first = first_process.begin_at("v1", &path, false).unwrap();
+        let first = first_process
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
         first_process
             .save_at(
                 "v1",
@@ -1444,7 +2104,9 @@ mod tests {
             .unwrap();
 
         let mut restarted_process = AnalysisStore::default();
-        let resumed = restarted_process.begin_at("v1", &path, false).unwrap();
+        let resumed = restarted_process
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
 
         assert_ne!(resumed.lease, first.lease);
         assert_eq!(resumed.analysis.unwrap()["marker"], "saved");
@@ -1471,7 +2133,9 @@ mod tests {
         .unwrap();
 
         let mut store = AnalysisStore::default();
-        let started = store.begin_at("v1", &path, false).unwrap();
+        let started = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
 
         assert_eq!(started.analysis.unwrap()["marker"], "visible");
         assert!(!path.with_extension("json.tmp").exists());
@@ -1489,7 +2153,9 @@ mod tests {
         .unwrap();
 
         let mut store = AnalysisStore::default();
-        let started = store.begin_at("v1", &path, false).unwrap();
+        let started = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
 
         assert_eq!(started.analysis.unwrap()["marker"], "temporary");
         assert_eq!(read(&path)["marker"], "temporary");
@@ -1512,7 +2178,9 @@ mod tests {
         .unwrap();
 
         let mut store = AnalysisStore::default();
-        let error = store.begin_at("v1", &path, false).unwrap_err();
+        let error = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap_err();
 
         assert!(error.to_string().contains("ambiguous"));
         assert!(!path.exists());
@@ -1523,7 +2191,9 @@ mod tests {
         let dir = TestDir::new("malformed-checkpoint");
         let path = dir.analysis_path();
         let mut store = AnalysisStore::default();
-        let session = store.begin_at("v1", &path, false).unwrap();
+        let session = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
 
         let error = store
             .save_at(
@@ -1552,6 +2222,7 @@ mod tests {
                 &analysis_path,
                 true,
                 None,
+                "colloquial",
             )
             .unwrap()
             .unwrap();
@@ -1604,6 +2275,7 @@ mod tests {
                 &analysis_path,
                 false,
                 None,
+                "colloquial",
             )
             .unwrap()
             .unwrap();
@@ -1621,6 +2293,7 @@ mod tests {
                 &analysis_path,
                 true,
                 Some(&old.transcript_generation),
+                "colloquial",
             )
             .unwrap_err();
 
@@ -1633,7 +2306,9 @@ mod tests {
         let dir = TestDir::new("delete-revokes-first");
         let path = dir.analysis_path();
         let mut store = AnalysisStore::default();
-        let old = store.begin_at("v1", &path, false).unwrap();
+        let old = store
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
         store
             .save_at(
                 "v1",
@@ -1672,7 +2347,11 @@ mod tests {
         let dir = TestDir::new("destructive-boundary");
         let path = dir.analysis_path();
         let store = Arc::new(Mutex::new(AnalysisStore::default()));
-        let old = store.lock().unwrap().begin_at("v1", &path, false).unwrap();
+        let old = store
+            .lock()
+            .unwrap()
+            .begin_at("v1", &path, false, "sha256:test", false, "colloquial")
+            .unwrap();
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         let destructive_store = Arc::clone(&store);
@@ -1693,7 +2372,14 @@ mod tests {
             let result = begin_store
                 .lock()
                 .unwrap()
-                .begin_at("v1", &begin_path, false);
+                .begin_at(
+                    "v1",
+                    &begin_path,
+                    false,
+                    "sha256:test",
+                    false,
+                    "colloquial",
+                );
             begin_tx.send(result).unwrap();
         });
 
@@ -1729,7 +2415,16 @@ mod tests {
         let transcript_path = dir.0.join("transcript.srt");
         fs::write(&transcript_path, "old transcript").unwrap();
         let mut store = AnalysisStore::default();
-        let old = store.begin_at("v1", &analysis_path, false).unwrap();
+        let old = store
+            .begin_at(
+                "v1",
+                &analysis_path,
+                false,
+                "sha256:test",
+                false,
+                "colloquial",
+            )
+            .unwrap();
         store
             .save_at(
                 "v1",
@@ -1786,7 +2481,16 @@ mod tests {
         .unwrap();
 
         let mut restarted = AnalysisStore::default();
-        let session = restarted.begin_at("v1", &analysis_path, false).unwrap();
+        let session = restarted
+            .begin_at(
+                "v1",
+                &analysis_path,
+                false,
+                "sha256:test",
+                false,
+                "colloquial",
+            )
+            .unwrap();
 
         assert!(session.analysis.is_none());
         assert_eq!(

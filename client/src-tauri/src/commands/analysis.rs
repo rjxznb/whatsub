@@ -14,8 +14,15 @@ use tauri_plugin_shell::ShellExt;
 pub fn begin_analysis_session(
     video_id: String,
     reset: bool,
+    transcript_generation: String,
+    analysis_style: String,
 ) -> AppResult<crate::commands::analysis_store::AnalysisSessionStart> {
-    crate::commands::analysis_store::begin_session(&video_id, reset)
+    crate::commands::analysis_store::begin_session(
+        &video_id,
+        reset,
+        &transcript_generation,
+        &analysis_style,
+    )
 }
 
 #[tauri::command]
@@ -23,11 +30,13 @@ pub fn begin_analysis_session_from_transcript(
     video_id: String,
     reset: bool,
     expected_generation: Option<String>,
+    analysis_style: String,
 ) -> AppResult<Option<crate::commands::analysis_store::AnalysisTranscriptSessionStart>> {
     crate::commands::analysis_store::begin_transcript_session(
         &video_id,
         reset,
         expected_generation.as_deref(),
+        &analysis_style,
     )
 }
 
@@ -38,6 +47,24 @@ pub fn save_analysis_session(
     analysis: Value,
 ) -> AppResult<crate::commands::analysis_store::SessionSaveOutcome> {
     crate::commands::analysis_store::save_session(&video_id, &lease, analysis)
+}
+
+#[tauri::command]
+pub fn save_analysis_inflight(
+    video_id: String,
+    lease: String,
+    journal: crate::commands::analysis_store::AnalysisInflightJournal,
+) -> AppResult<crate::commands::analysis_store::SessionSaveOutcome> {
+    crate::commands::analysis_store::save_inflight(&video_id, &lease, journal)
+}
+
+#[tauri::command]
+pub fn discard_analysis_inflight(
+    video_id: String,
+    lease: String,
+    journal_id: String,
+) -> AppResult<crate::commands::analysis_store::SessionSaveOutcome> {
+    crate::commands::analysis_store::discard_inflight(&video_id, &lease, &journal_id)
 }
 
 #[tauri::command]

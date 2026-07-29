@@ -33,6 +33,11 @@ export interface ImportQueueItem {
   updatedAt: number;
 }
 
+export interface ClaimResult {
+  claimed: boolean;
+  attemptToken: string | null;
+}
+
 /**
  * Enqueue a URL for import.
  * Idempotent: if the same owner+url already has a pending/processing entry
@@ -51,12 +56,11 @@ export async function listPending(): Promise<ImportQueueItem[]> {
 }
 
 /**
- * Atomically claim a pending item. Returns true if THIS desktop won the claim,
- * false if another instance already took it (or the backend doesn't yet expose
- * the route — Rust maps 404 → Ok(false) so we never double-process).
+ * Atomically claim a pending item. Replacement claims also return a generation
+ * token that must bind every later mutation from this processor attempt.
  */
-export async function claimItem(id: string): Promise<boolean> {
-  return await invoke<boolean>("import_queue_claim_http", { id });
+export async function claimItem(id: string): Promise<ClaimResult> {
+  return await invoke<ClaimResult>("import_queue_claim_http", { id });
 }
 
 /**
@@ -67,10 +71,12 @@ export async function setStatus(
   id: string,
   status: "pending" | "processing" | "done" | "failed",
   error?: string,
+  attemptToken?: string | null,
 ): Promise<void> {
   await invoke("import_queue_set_status_http", {
     id,
     status,
     error: error ?? null,
+    attemptToken: attemptToken ?? null,
   });
 }

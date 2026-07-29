@@ -16,6 +16,7 @@ const replacement: ImportQueueItem = {
   createdAt: 1,
   updatedAt: 2,
 };
+const replacementAttemptToken = "attempt-11111111-2222-3333-4444-555555555555";
 
 function dependencies() {
   const freshPayload: ReplacementPayload = {
@@ -44,17 +45,19 @@ describe("processClaimedItem", () => {
   it("stages and atomically completes a replacement without ordinary sync", async () => {
     const { deps, freshPayload } = dependencies();
 
-    await processClaimedItem(replacement, deps);
+    await processClaimedItem(replacement, replacementAttemptToken, deps);
 
     expect(deps.stageReplacement).toHaveBeenCalledWith(
       replacement.id,
       replacement.targetLibraryEntryId,
+      replacementAttemptToken,
       "dQw4w9WgXcQ",
     );
     expect(deps.syncImport).not.toHaveBeenCalled();
     expect(deps.completeReplacement).toHaveBeenCalledWith(
       replacement.id,
       replacement.targetLibraryEntryId,
+      replacementAttemptToken,
       freshPayload,
     );
     expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
@@ -69,7 +72,7 @@ describe("processClaimedItem", () => {
       targetLibraryEntryId: undefined,
     };
 
-    await processClaimedItem(ordinary, deps);
+    await processClaimedItem(ordinary, null, deps);
 
     expect(deps.syncImport).toHaveBeenCalledWith("dQw4w9WgXcQ", ordinary.url);
     expect(deps.stageReplacement).not.toHaveBeenCalled();
@@ -81,7 +84,7 @@ describe("processClaimedItem", () => {
     const { deps } = dependencies();
     vi.mocked(deps.importVideo).mockResolvedValue({ videoId: "abcdefghijk" });
 
-    await processClaimedItem(replacement, deps);
+    await processClaimedItem(replacement, replacementAttemptToken, deps);
 
     expect(deps.stageReplacement).not.toHaveBeenCalled();
     expect(deps.syncImport).not.toHaveBeenCalled();
@@ -90,6 +93,7 @@ describe("processClaimedItem", () => {
       replacement.id,
       "failed",
       "replacement_youtube_mismatch",
+      replacementAttemptToken,
     );
   });
 
@@ -97,7 +101,7 @@ describe("processClaimedItem", () => {
     const { deps } = dependencies();
     vi.mocked(deps.stageReplacement).mockRejectedValue(new Error("video_upload_failed"));
 
-    await processClaimedItem(replacement, deps);
+    await processClaimedItem(replacement, replacementAttemptToken, deps);
 
     expect(deps.syncImport).not.toHaveBeenCalled();
     expect(deps.completeReplacement).not.toHaveBeenCalled();
@@ -105,6 +109,7 @@ describe("processClaimedItem", () => {
       replacement.id,
       "failed",
       expect.stringContaining("video_upload_failed"),
+      replacementAttemptToken,
     );
   });
 
@@ -112,13 +117,18 @@ describe("processClaimedItem", () => {
     const { deps } = dependencies();
     vi.mocked(deps.importVideo).mockRejectedValue(new Error("download_failed"));
 
-    await processClaimedItem(replacement, deps);
+    await processClaimedItem(replacement, replacementAttemptToken, deps);
 
     expect(deps.analyze).not.toHaveBeenCalled();
     expect(deps.syncImport).not.toHaveBeenCalled();
     expect(deps.stageReplacement).not.toHaveBeenCalled();
     expect(deps.completeReplacement).not.toHaveBeenCalled();
-    expect(deps.setStatus).toHaveBeenCalledWith(replacement.id, "failed", "download_failed");
+    expect(deps.setStatus).toHaveBeenCalledWith(
+      replacement.id,
+      "failed",
+      "download_failed",
+      replacementAttemptToken,
+    );
     expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
   });
 
@@ -126,12 +136,17 @@ describe("processClaimedItem", () => {
     const { deps } = dependencies();
     vi.mocked(deps.analyze).mockRejectedValue(new Error("analysis_failed"));
 
-    await processClaimedItem(replacement, deps);
+    await processClaimedItem(replacement, replacementAttemptToken, deps);
 
     expect(deps.syncImport).not.toHaveBeenCalled();
     expect(deps.stageReplacement).not.toHaveBeenCalled();
     expect(deps.completeReplacement).not.toHaveBeenCalled();
-    expect(deps.setStatus).toHaveBeenCalledWith(replacement.id, "failed", "analysis_failed");
+    expect(deps.setStatus).toHaveBeenCalledWith(
+      replacement.id,
+      "failed",
+      "analysis_failed",
+      replacementAttemptToken,
+    );
     expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
   });
 
@@ -139,11 +154,16 @@ describe("processClaimedItem", () => {
     const { deps } = dependencies();
     vi.mocked(deps.completeReplacement).mockRejectedValue(new Error("completion_failed"));
 
-    await processClaimedItem(replacement, deps);
+    await processClaimedItem(replacement, replacementAttemptToken, deps);
 
     expect(deps.syncImport).not.toHaveBeenCalled();
     expect(deps.completeReplacement).toHaveBeenCalledTimes(1);
-    expect(deps.setStatus).toHaveBeenCalledWith(replacement.id, "failed", "completion_failed");
+    expect(deps.setStatus).toHaveBeenCalledWith(
+      replacement.id,
+      "failed",
+      "completion_failed",
+      replacementAttemptToken,
+    );
     expect(deps.setStatus).not.toHaveBeenCalledWith(replacement.id, "done");
   });
 });

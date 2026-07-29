@@ -37,11 +37,13 @@ export async function syncToCloud(id: string): Promise<SyncOk> {
 export async function stageReplacement(
   queueId: string,
   targetId: string,
+  attemptToken: string,
   localVideoId: string,
 ): Promise<ReplacementPayload> {
   return invoke<ReplacementPayload>("library_stage_replacement", {
     queueId,
     targetId,
+    attemptToken,
     localVideoId,
   });
 }
@@ -49,11 +51,13 @@ export async function stageReplacement(
 export async function completeReplacement(
   queueId: string,
   targetId: string,
+  attemptToken: string,
   payload: ReplacementPayload,
 ): Promise<void> {
   await invoke("library_complete_replacement_http", {
     queueId,
     targetId,
+    attemptToken,
     payload,
   });
 }

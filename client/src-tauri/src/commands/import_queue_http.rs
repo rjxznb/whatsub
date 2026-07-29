@@ -51,10 +51,12 @@ struct EnqueueResp {
     id: String,
 }
 
-#[derive(Deserialize)]
-struct ClaimResp {
+#[derive(Serialize, Deserialize)]
+pub struct ClaimResp {
     #[serde(default)]
-    claimed: bool,
+    pub claimed: bool,
+    #[serde(default, rename = "attemptToken")]
+    pub attempt_token: Option<String>,
 }
 
 fn build_client() -> Result<reqwest::Client, String> {
@@ -165,7 +167,7 @@ pub async fn import_queue_list_pending_http<R: Runtime>(
 pub async fn import_queue_claim_http<R: Runtime>(
     app: AppHandle<R>,
     id: String,
-) -> Result<bool, String> {
+) -> Result<ClaimResp, String> {
     let token = require_token(&app)?;
     let client = build_client()?;
     let resp = client
@@ -175,7 +177,10 @@ pub async fn import_queue_claim_http<R: Runtime>(
         .await
         .map_err(map_err)?;
     if resp.status().as_u16() == 404 {
-        return Ok(false);
+        return Ok(ClaimResp {
+            claimed: false,
+            attempt_token: None,
+        });
     }
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -183,7 +188,7 @@ pub async fn import_queue_claim_http<R: Runtime>(
     }
     let text = resp.text().await.map_err(|e| format!("body: {e}"))?;
     let parsed: ClaimResp = serde_json::from_str(&text).map_err(|e| format!("body: {e}"))?;
-    Ok(parsed.claimed)
+    Ok(parsed)
 }
 
 /// POST /api/library/import-queue/:id/status { status, error? } → { ok }
@@ -193,6 +198,7 @@ pub async fn import_queue_set_status_http<R: Runtime>(
     id: String,
     status: String,
     error: Option<String>,
+    attempt_token: Option<String>,
 ) -> Result<(), String> {
     let token = require_token(&app)?;
     let client = build_client()?;
@@ -200,6 +206,12 @@ pub async fn import_queue_set_status_http<R: Runtime>(
     payload.insert("status".to_string(), serde_json::Value::String(status));
     if let Some(err) = error {
         payload.insert("error".to_string(), serde_json::Value::String(err));
+    }
+    if let Some(attempt_token) = attempt_token {
+        payload.insert(
+            "attemptToken".to_string(),
+            serde_json::Value::String(attempt_token),
+        );
     }
     let body = serde_json::to_string(&serde_json::Value::Object(payload))
         .map_err(|e| format!("body: {e}"))?;
@@ -237,5 +249,22 @@ mod tests {
         for p in prefixes {
             assert!(p.ends_with(':'), "prefix {p} must end with colon");
         }
+    }
+
+    #[test]
+    fn claim_response_preserves_replacement_attempt_token() {
+        let parsed: ClaimResp =
+            serde_json::from_str(r#"{"claimed":true,"attemptToken":"attempt-generation-1"}"#)
+                .unwrap();
+
+        assert!(parsed.claimed);
+        assert_eq!(
+            parsed.attempt_token.as_deref(),
+            Some("attempt-generation-1")
+        );
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["attemptToken"],
+            "attempt-generation-1"
+        );
     }
 }

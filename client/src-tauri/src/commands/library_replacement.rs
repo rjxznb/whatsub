@@ -161,6 +161,7 @@ async fn replacement_upload_url(
     token: &str,
     queue_id: &str,
     target_id: &str,
+    attempt_token: &str,
     kind: MediaKind,
     byte_count: usize,
     duration_sec: i64,
@@ -173,6 +174,7 @@ async fn replacement_upload_url(
             serde_json::json!({
                 "id": target_id,
                 "queueId": queue_id,
+                "attemptToken": attempt_token,
                 "kind": kind.wire_name(),
                 "contentType": kind.content_type(),
                 "contentLength": byte_count as i64,
@@ -226,6 +228,7 @@ async fn stage_audio_best_effort(
     token: &str,
     queue_id: &str,
     target_id: &str,
+    attempt_token: &str,
     video_id: &str,
     mobile_path: &Path,
     audio_path: &Path,
@@ -250,6 +253,7 @@ async fn stage_audio_best_effort(
             token,
             queue_id,
             target_id,
+            attempt_token,
             MediaKind::Audio,
             bytes.len(),
             duration_sec,
@@ -289,6 +293,7 @@ pub async fn library_stage_replacement(
     app: AppHandle,
     queue_id: String,
     target_id: String,
+    attempt_token: String,
     local_video_id: String,
 ) -> Result<ReplacementPayload, String> {
     let token = auth_token(&app)?;
@@ -355,6 +360,7 @@ pub async fn library_stage_replacement(
             &token,
             &queue_id,
             &target_id,
+            &attempt_token,
             MediaKind::Video,
             video_bytes.len(),
             duration_sec,
@@ -366,6 +372,7 @@ pub async fn library_stage_replacement(
             &token,
             &queue_id,
             &target_id,
+            &attempt_token,
             &local_video_id,
             &mobile_path,
             &audio_path,
@@ -404,6 +411,7 @@ pub async fn library_complete_replacement_http(
     app: AppHandle,
     queue_id: String,
     target_id: String,
+    attempt_token: String,
     payload: ReplacementPayload,
 ) -> Result<(), String> {
     let token = auth_token(&app)?;
@@ -414,6 +422,10 @@ pub async fn library_complete_replacement_http(
     object.insert(
         "targetLibraryEntryId".to_string(),
         serde_json::Value::String(target_id),
+    );
+    object.insert(
+        "attemptToken".to_string(),
+        serde_json::Value::String(attempt_token),
     );
     let response = http_client(HTTP_TIMEOUT)?
         .post(format!(

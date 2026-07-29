@@ -111,13 +111,13 @@ async function processNextPendingItem(): Promise<void> {
   console.info(`[importQueue] processing item ${item.id} url=${item.url}`);
 
   // Atomically claim it; if another desktop already claimed it, skip this tick.
-  const won = await claimItem(item.id);
-  if (!won) {
+  const claim = await claimItem(item.id);
+  if (!claim.claimed) {
     console.info(`[importQueue] item ${item.id} already claimed elsewhere, skipping`);
     return;
   }
 
-  await processClaimedItem(item, liveProcessorDependencies);
+  await processClaimedItem(item, claim.attemptToken, liveProcessorDependencies);
 }
 
 /**
@@ -177,13 +177,14 @@ export interface QueueProcessorDependencies {
   importVideo(item: ImportQueueItem, whisperModel: string): Promise<ImportedVideo>;
   analyze(videoId: string, label: string): Promise<void>;
   syncImport(videoId: string, sourceUrl: string): Promise<void>;
-  stageReplacement(queueId: string, targetId: string, localVideoId: string): Promise<ReplacementPayload>;
-  completeReplacement(queueId: string, targetId: string, payload: ReplacementPayload): Promise<void>;
-  setStatus(id: string, status: "done" | "failed", error?: string): Promise<void>;
+  stageReplacement(queueId: string, targetId: string, attemptToken: string, localVideoId: string): Promise<ReplacementPayload>;
+  completeReplacement(queueId: string, targetId: string, attemptToken: string, payload: ReplacementPayload): Promise<void>;
+  setStatus(id: string, status: "done" | "failed", error?: string, attemptToken?: string | null): Promise<void>;
 }
 
 export async function processClaimedItem(
   item: ImportQueueItem,
+  attemptToken: string | null,
   deps: QueueProcessorDependencies,
 ): Promise<void> {
   try {
@@ -196,6 +197,9 @@ export async function processClaimedItem(
       : null;
     if (isReplacement && !replacementTarget) {
       throw new Error("replacement_target_missing");
+    }
+    if (isReplacement && !attemptToken?.trim()) {
+      throw new Error("replacement_attempt_missing");
     }
     if (
       replacementTarget
@@ -212,7 +216,7 @@ export async function processClaimedItem(
     }
     await deps.analyze(videoId, item.url);
     if (replacementTarget) {
-      const payload = await deps.stageReplacement(item.id, replacementTarget, videoId);
+      const payload = await deps.stageReplacement(item.id, replacementTarget, attemptToken!, videoId);
       if (
         !payload.videoKey
         || payload.youtubeId !== replacementYoutubeId
@@ -220,7 +224,7 @@ export async function processClaimedItem(
       ) {
         throw new Error("replacement_staging_invalid");
       }
-      await deps.completeReplacement(item.id, replacementTarget, payload);
+      await deps.completeReplacement(item.id, replacementTarget, attemptToken!, payload);
     } else {
       await deps.syncImport(videoId, item.url);
       await deps.setStatus(item.id, "done");
@@ -229,7 +233,12 @@ export async function processClaimedItem(
     const raw = err instanceof Error ? err.message : String(err);
     const msg = friendlyQueueError(raw);
     try {
-      await deps.setStatus(item.id, "failed", msg);
+      await deps.setStatus(
+        item.id,
+        "failed",
+        msg,
+        (item.mode ?? "import") === "replace" ? attemptToken : undefined,
+      );
     } catch (statusError) {
       console.warn("[importQueue] could not mark item failed:", statusError);
     }

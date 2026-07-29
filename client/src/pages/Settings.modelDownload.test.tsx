@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { Settings } from "./Settings";
 
 // Regression coverage for the stuck whisper-model dropdown: start a download,
@@ -7,9 +7,10 @@ import { Settings } from "./Settings";
 // in-flight download must still be visible, even when the selected tier and
 // the downloading tier have diverged.
 
+const routerState = vi.hoisted(() => ({ search: "" }));
 vi.mock("react-router-dom", () => ({
   Link: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
-  useSearchParams: () => [new URLSearchParams(), vi.fn()],
+  useSearchParams: () => [new URLSearchParams(routerState.search), vi.fn()],
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
 // The global test-setup mock returns undefined; this page chains .then on it.
@@ -72,6 +73,7 @@ function modelSelect(): HTMLSelectElement {
 
 describe("Settings — whisper model picker during a download", () => {
   beforeEach(() => {
+    routerState.search = "";
     downloadState = {
       phase: "downloading",
       activeSize: "small",
@@ -107,5 +109,17 @@ describe("Settings — whisper model picker during a download", () => {
     render(<Settings />);
     expect(screen.queryByText(/下载中|已暂停/)).toBeNull();
     expect(modelSelect().disabled).toBe(false);
+  });
+
+  it("highlights the translation provider section from the quota recovery link", async () => {
+    routerState.search = "highlight=llm-provider";
+
+    render(<Settings />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("llm-provider-section")).toHaveClass(
+        "ring-amber-400/70",
+      );
+    });
   });
 });

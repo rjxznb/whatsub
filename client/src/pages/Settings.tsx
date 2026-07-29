@@ -45,10 +45,13 @@ export function Settings() {
   // ?highlight=whisper-model. Scroll the 字幕识别引擎 section into view and
   // pulse an amber ring briefly so the user's eye lands on the model picker.
   const [searchParams] = useSearchParams();
+  const highlightTarget = searchParams.get("highlight");
   const modelSectionRef = useRef<HTMLElement>(null);
+  const llmSectionRef = useRef<HTMLElement>(null);
   const [highlightModel, setHighlightModel] = useState(false);
+  const [highlightLlm, setHighlightLlm] = useState(false);
   useEffect(() => {
-    if (searchParams.get("highlight") !== "whisper-model") return;
+    if (highlightTarget !== "whisper-model") return;
     const t = window.setTimeout(() => {
       modelSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       setHighlightModel(true);
@@ -58,7 +61,19 @@ export function Settings() {
       window.clearTimeout(t);
       window.clearTimeout(off);
     };
-  }, [searchParams]);
+  }, [highlightTarget]);
+  useEffect(() => {
+    if (highlightTarget !== "llm-provider") return;
+    const t = window.setTimeout(() => {
+      llmSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightLlm(true);
+    }, 150);
+    const off = window.setTimeout(() => setHighlightLlm(false), 2800);
+    return () => {
+      window.clearTimeout(t);
+      window.clearTimeout(off);
+    };
+  }, [highlightTarget]);
 
   useEffect(() => {
     load();
@@ -171,7 +186,14 @@ export function Settings() {
       </header>
 
       <div className="max-w-2xl mx-auto p-6 space-y-8">
-        <section>
+        <section
+          ref={llmSectionRef}
+          data-testid="llm-provider-section"
+          className={
+            "scroll-mt-6 rounded-lg transition-shadow duration-500 " +
+            (highlightLlm ? "ring-2 ring-amber-400/70 ring-offset-2 ring-offset-zinc-950" : "")
+          }
+        >
           <h2 className="font-semibold mb-3">翻译服务</h2>
           <VendorSection draft={draft} setDraft={setDraft} />
 

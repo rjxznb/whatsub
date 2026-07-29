@@ -2,12 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ProgressBanner } from "./ProgressBanner";
 import { useAnalysis } from "../store/analysis";
+import { SETTINGS_LLM_LINK } from "../llm/quotaRecovery";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+const navigate = vi.fn();
+vi.mock("react-router-dom", () => ({ useNavigate: () => navigate }));
 
 describe("ProgressBanner recovery actions", () => {
   beforeEach(() => {
     useAnalysis.getState().reset();
+    navigate.mockClear();
   });
 
   it("offers checkpoint continuation for an analysis error", () => {
@@ -50,5 +54,53 @@ describe("ProgressBanner recovery actions", () => {
 
     expect(screen.getByText(/网络波动，正在进行第 2\/4 次尝试/)).toBeInTheDocument();
     expect(screen.queryByText(/^失败/)).toBeNull();
+  });
+
+  it("shows quota recovery instead of asking an existing Pro user to upgrade", () => {
+    useAnalysis.setState({
+      phase: "error",
+      errorMessage: "quota exceeded",
+      errorUpsell: true,
+      errorStage: "analysis",
+      quotaError: {
+        used: 5_000_000,
+        limit: 5_000_000,
+        periodResetAt: Date.now() + 60_000,
+        committedCueOffset: 50,
+        totalCues: 100,
+      },
+    });
+
+    render(<ProgressBanner onContinue={vi.fn()} />);
+
+    expect(screen.getByText(/本月 AI 额度已用完/)).toBeInTheDocument();
+    expect(screen.getByText(/已保存到第 50 条字幕/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "升级 Pro" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "继续解析" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "切换自己的 API" }));
+    expect(navigate).toHaveBeenCalledWith(SETTINGS_LLM_LINK);
+  });
+
+  it("allows checkpoint continuation once the quota reset time has arrived", () => {
+    const onContinue = vi.fn();
+    useAnalysis.setState({
+      phase: "error",
+      errorMessage: "quota exceeded",
+      errorUpsell: true,
+      errorStage: "analysis",
+      quotaError: {
+        used: 5_000_000,
+        limit: 5_000_000,
+        periodResetAt: Date.now() - 1,
+        committedCueOffset: 50,
+        totalCues: 100,
+      },
+    });
+
+    render(<ProgressBanner onContinue={onContinue} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "继续解析" }));
+    expect(onContinue).toHaveBeenCalledOnce();
   });
 });

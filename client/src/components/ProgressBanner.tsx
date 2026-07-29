@@ -1,5 +1,11 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useNavigate } from "react-router-dom";
 import { useAnalysis } from "../store/analysis";
+import {
+  canResumeQuota,
+  quotaRecoveryMessage,
+  SETTINGS_LLM_LINK,
+} from "../llm/quotaRecovery";
 
 /** Desktop Pro subscription card (main site, not the iOS-only /mobile page). */
 const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
@@ -33,6 +39,7 @@ export function ProgressBanner({
   onRetranscribe,
   onMoveToBackground,
 }: Props) {
+  const navigate = useNavigate();
   const {
     phase,
     progressPercent,
@@ -41,6 +48,7 @@ export function ProgressBanner({
     errorStage,
     retryMessage,
     subtitles,
+    quotaError,
   } = useAnalysis();
   if (phase === "idle" || phase === "complete") return null;
 
@@ -48,7 +56,9 @@ export function ProgressBanner({
   const isAnalyzing = phase === "analyzing";
   const isPaused = phase === "paused";
 
-  const tone = isError
+  const tone = quotaError
+    ? "bg-amber-900/40 text-amber-100"
+    : isError
     ? "bg-red-900/40 text-red-200"
     : isPaused
     ? "bg-amber-900/40 text-amber-100"
@@ -63,7 +73,9 @@ export function ProgressBanner({
         {PHASE_LABELS[phase] ?? phase}
         {(isAnalyzing || isPaused) && ` · 已生成 ${subtitles.length} 行字幕`}
         {retryMessage && ` · ${retryMessage}`}
-        {errorMessage && ` — ${errorMessage}`}
+        {quotaError
+          ? ` — ${quotaRecoveryMessage(quotaError)}`
+          : errorMessage && ` — ${errorMessage}`}
       </div>
 
       {isAnalyzing && onMoveToBackground && (
@@ -91,7 +103,10 @@ export function ProgressBanner({
           继续解析
         </button>
       )}
-      {isError && errorStage === "analysis" && onContinue && (
+      {isError &&
+        errorStage === "analysis" &&
+        onContinue &&
+        (!quotaError || canResumeQuota(quotaError)) && (
         <button
           onClick={onContinue}
           className="px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-white text-xs transition-colors"
@@ -99,7 +114,15 @@ export function ProgressBanner({
           继续解析
         </button>
       )}
-      {isError && errorUpsell && (
+      {isError && quotaError && (
+        <button
+          onClick={() => navigate(SETTINGS_LLM_LINK)}
+          className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-zinc-900 font-medium text-xs transition-colors whitespace-nowrap"
+        >
+          切换自己的 API
+        </button>
+      )}
+      {isError && errorUpsell && !quotaError && (
         <button
           onClick={() => void openUrl(SUBSCRIBE_URL).catch(() => {})}
           className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-zinc-900 font-medium text-xs transition-colors whitespace-nowrap"

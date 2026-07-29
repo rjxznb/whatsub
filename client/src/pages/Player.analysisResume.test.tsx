@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAnalysis } from "../store/analysis";
+import type { PersistedAnalysisSession } from "../llm/analysisSession";
 import type { CheckpointedAnalysis, Subtitle } from "../llm/types";
 import type { AnalysisPreview } from "../llm/analyze";
-import { canEditSubtitles, rollbackForegroundPreview } from "./Player";
+import {
+  canEditSubtitles,
+  ownsForegroundAnalysis,
+  rollbackForegroundPreview,
+} from "./Player";
 
 const subtitle = (index: number): Subtitle => ({
   time: index,
@@ -136,6 +141,18 @@ describe("Player committed resume state", () => {
 
     expect(useAnalysis.getState().subtitles).toEqual(committed.subtitles);
     expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);
+  });
+
+  it("rejects stale foreground continuations after session or video ownership changes", () => {
+    const expected = {} as PersistedAnalysisSession;
+    const replacement = {} as PersistedAnalysisSession;
+
+    expect(ownsForegroundAnalysis("video-1", expected, expected)).toBe(true);
+    expect(ownsForegroundAnalysis("video-1", expected, null)).toBe(false);
+    expect(ownsForegroundAnalysis("video-1", expected, replacement)).toBe(false);
+
+    useAnalysis.getState().startFor("video-2");
+    expect(ownsForegroundAnalysis("video-1", expected, expected)).toBe(false);
   });
 
   it("locks manual subtitle edits while the analysis producer is saving", () => {

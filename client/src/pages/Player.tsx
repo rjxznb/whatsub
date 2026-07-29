@@ -61,6 +61,15 @@ export function rollbackForegroundPreview(
   state.setAnalysisPreview(committed, null, totalCues);
 }
 
+export function ownsForegroundAnalysis(
+  videoId: string,
+  expectedSession: PersistedAnalysisSession,
+  currentSession: PersistedAnalysisSession | null,
+): boolean {
+  return currentSession === expectedSession
+    && useAnalysis.getState().videoId === videoId;
+}
+
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
@@ -278,6 +287,8 @@ export function Player() {
     const cues = cuesRef.current;
     const session = sessionRef.current;
     if (!cues || !session) return;
+    const stillOwnsSession = () =>
+      ownsForegroundAnalysis(videoId, session, sessionRef.current);
     if (session.analysis.checkpoint.phase === "complete") {
       analysis.setPhase("complete");
       return;
@@ -303,18 +314,19 @@ export function Player() {
         style,
         signal: localController.signal,
         onCommitted: (persisted) => {
-          if (sessionRef.current !== session) return;
+          if (!stillOwnsSession()) return;
           analysis.setCommittedAnalysis(persisted, cues.length);
         },
         onPreview: (committed, preview) => {
-          if (sessionRef.current !== session) return;
+          if (!stillOwnsSession()) return;
           analysis.setAnalysisPreview(committed, preview, cues.length);
         },
         onRetry: (event) => {
-          if (sessionRef.current !== session) return;
+          if (!stillOwnsSession()) return;
           analysis.setRetryMessage(analysisRetryMessage(event));
         },
       });
+      if (!stillOwnsSession()) return;
       analysis.setRetryMessage(null);
       if (localController.signal.aborted || completed.checkpoint.phase !== "complete") {
         analysis.setPhase("paused");
@@ -330,6 +342,7 @@ export function Player() {
         await reload();
       }
     } catch (e: unknown) {
+      if (!stillOwnsSession()) return;
       const isAbort =
         localController.signal.aborted ||
         (e instanceof DOMException && e.name === "AbortError") ||

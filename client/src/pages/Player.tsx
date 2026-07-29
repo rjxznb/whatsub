@@ -70,6 +70,15 @@ export function ownsForegroundAnalysis(
     && useAnalysis.getState().videoId === videoId;
 }
 
+export function ownsForegroundOperation(
+  videoId: string,
+  expectedEpoch: number,
+  currentEpoch: number,
+): boolean {
+  return currentEpoch === expectedEpoch
+    && useAnalysis.getState().videoId === videoId;
+}
+
 export function Player() {
   const { videoId } = useParams<{ videoId: string }>();
   const navigate = useNavigate();
@@ -255,6 +264,7 @@ export function Player() {
   const analysisRunRef = useRef<Promise<void> | null>(null);
   const cuesRef = useRef<SrtCue[] | null>(null);
   const manualSaveTailRef = useRef<Promise<void>>(Promise.resolve());
+  const retranscribeEpochRef = useRef(0);
 
   const persistManualEdits = () => {
     if (!videoId) return;
@@ -441,6 +451,9 @@ export function Player() {
 
   const onRetranscribe = async () => {
     if (!videoId) return;
+    const operationEpoch = ++retranscribeEpochRef.current;
+    const stillOwnsOperation = () =>
+      ownsForegroundOperation(videoId, operationEpoch, retranscribeEpochRef.current);
     // Reset analysis store so phase/percent flow cleanly into the banner
     // via the existing useTauriEvent("pipeline-event") above. startFor sets
     // phase=downloading; we immediately move it to extracting since
@@ -451,14 +464,17 @@ export function Player() {
       const oldSession = sessionRef.current;
       sessionRef.current = null;
       await oldSession?.close();
+      if (!stillOwnsOperation()) return;
       await invoke("retranscribe_video", {
         videoId,
         whisperModel: settings.whisperModel,
       });
+      if (!stillOwnsOperation()) return;
       // The next loader compares transcript fingerprints and asks the backend
       // for an explicit reset lease when the new transcript differs.
       setReloadKey((k) => k + 1);
     } catch (e) {
+      if (!stillOwnsOperation()) return;
       analysis.setError(String(e), false, "transcription");
     }
   };
@@ -610,6 +626,7 @@ export function Player() {
 
     return () => {
       cancelled = true;
+      retranscribeEpochRef.current += 1;
       // Abort the current uncommitted batch, then release this producer lease.
       abortRef.current?.abort();
       abortRef.current = null;

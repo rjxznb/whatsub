@@ -6,6 +6,7 @@ import type { AnalysisPreview } from "../llm/analyze";
 import {
   canEditSubtitles,
   ownsForegroundAnalysis,
+  ownsForegroundOperation,
   rollbackForegroundPreview,
 } from "./Player";
 
@@ -153,6 +154,14 @@ describe("Player committed resume state", () => {
 
     useAnalysis.getState().startFor("video-2");
     expect(ownsForegroundAnalysis("video-1", expected, expected)).toBe(false);
+  });
+
+  it("rejects a retranscription result after its operation epoch is invalidated", () => {
+    expect(ownsForegroundOperation("video-1", 4, 4)).toBe(true);
+    expect(ownsForegroundOperation("video-1", 4, 5)).toBe(false);
+
+    useAnalysis.getState().startFor("video-2");
+    expect(ownsForegroundOperation("video-1", 4, 4)).toBe(false);
   });
 
   it("locks manual subtitle edits while the analysis producer is saving", () => {

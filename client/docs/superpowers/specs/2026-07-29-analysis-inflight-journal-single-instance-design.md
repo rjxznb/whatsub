@@ -56,7 +56,7 @@
   "entries": [
     {
       "cueOffset": 150,
-      "subtitle": { "index": 151, "...": "validated fields" }
+      "subtitle": { "time": 157.46, "endTime": 162.5, "text": "validated cue", "...": "validated fields" }
     }
   ]
 }

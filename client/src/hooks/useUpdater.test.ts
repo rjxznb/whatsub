@@ -5,7 +5,23 @@ vi.mock("@tauri-apps/plugin-process", () => ({ exit: vi.fn() }));
 vi.mock("@tauri-apps/plugin-shell", () => ({ Command: { create: vi.fn() } }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-import { isReadOnlyFsError, blockedMessage } from "./useUpdater";
+import {
+  isReadOnlyFsError,
+  blockedMessage,
+  macRestartCommand,
+} from "./useUpdater";
+
+describe("macRestartCommand", () => {
+  it("waits for the old single-instance owner to exit before reopening", () => {
+    const command = macRestartCommand();
+
+    expect(command.name).toBe("restart-whatsub");
+    expect(command.args).toEqual([
+      "-c",
+      "sleep 1; open -b com.whatsub.app",
+    ]);
+  });
+});
 
 describe("isReadOnlyFsError", () => {
   it("matches the errno Tauri actually surfaced to the user", () => {

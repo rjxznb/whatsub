@@ -43,9 +43,9 @@
         { "name": "ffprobe", "sidecar": true, "args": true },
         { "name": "whisper-cli", "sidecar": true, "args": true },
         {
-          "name": "open",
-          "cmd": "open",
-          "args": ["-b", { "validator": "^[a-zA-Z0-9.\\-]+$" }]
+          "name": "restart-whatsub",
+          "cmd": "sh",
+          "args": ["-c", "sleep 1; open -b com.whatsub.app"]
         }
       ]
     }

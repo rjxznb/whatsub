@@ -20,13 +20,20 @@ import { create } from "zustand";
 // the OLD process exits or gets stuck and the user has to ⌘Q + reopen
 // manually.
 //
-// More reliable pattern: shell out to `open -b com.whatsub.app` (which goes
-// through Launch Services, the same path Finder/Dock use), then exit our
-// own process. The 500ms delay before exit gives `open` a chance to register
-// with LS before we go away. shell-execute scope for `open` is granted in
-// capabilities/default.json.
+// More reliable pattern: spawn a tightly-scoped shell helper that waits one
+// second, exit our process immediately, then let the helper invoke
+// `open -b com.whatsub.app` through Launch Services. Waiting until the old
+// process exits is required by the single-instance plugin.
 const IS_MAC = /Mac/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "");
 const APP_BUNDLE_ID = "com.whatsub.app";
+
+/** Launch Services restart delayed until the old single-instance owner exits. */
+export function macRestartCommand(): { name: string; args: string[] } {
+  return {
+    name: "restart-whatsub",
+    args: ["-c", `sleep 1; open -b ${APP_BUNDLE_ID}`],
+  };
+}
 
 export type UpdateStatus =
   | { type: "idle" }
@@ -189,17 +196,13 @@ async function runDownloadAndInstall(): Promise<void> {
       // After this returns the platform-specific installer is running:
       //   - Windows: msiexec waits for our exe to exit, replaces files, then
       //     auto-relaunches. Tauri handles the exit. We do nothing.
-      //   - macOS:   the new .app bundle is now on disk but the OLD process
-      //     is still in memory. We launch the new bundle via Launch Services
-      //     (`open -b <bundle id>`) — the same code path Finder/Dock use,
-      //     so the new instance gets a proper Dock icon, focus, and bundle
-      //     context — then exit our own process after a short delay so the
-      //     spawned `open` command has time to register the launch request
-      //     with LS before our process disappears.
+      //   - macOS: the new .app bundle is on disk but this old process still
+      //     owns the single-instance registration. Spawn a fixed shell helper,
+      //     exit now, and let the helper reopen the bundle one second later.
       if (IS_MAC) {
         try {
-          await Command.create("open", ["-b", APP_BUNDLE_ID]).spawn();
-          await new Promise((r) => setTimeout(r, 500));
+          const restart = macRestartCommand();
+          await Command.create(restart.name, restart.args).spawn();
           await exit(0);
         } catch (e) {
           set({

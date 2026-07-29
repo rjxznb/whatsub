@@ -251,6 +251,12 @@ Critical: Win cmake passes `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=OFF -DGG
 
 `ffmpeg::ensure_web_playable_mp4` gates on **container AND codecs** (`web_playable_plan(container, vcodec, acodec)`): byte-copy only for MP4-family + H.264 + (AAC|MP3); non-MP4 containers (MKV/WebM) with web-OK codecs get a pure **remux** (`-c copy` into mp4, instant); incompatible codecs (AC-3/DTS audio, HEVC/VP9 video) transcode. History: local imports were once raw byte-copies (pre-0.1.87 MKVs still in a library are silent until re-imported); 0.1.87 added the codec check but byte-copied h264+aac MKVs — still a Matroska container renamed `.mp4`, which WebView2 plays WITHOUT sound; 0.1.98 added the container gate. Don't re-introduce a codecs-only fast path.
 
+## Single-instance process ownership
+
+`tauri-plugin-single-instance` must remain the **first** plugin registered on `tauri::Builder`. A second launch performs no business initialization; its callback only shows, unminimizes, and focuses the existing `main` window, then the second process exits. This prevents duplicate import workers, download processes, analysis leases, and local-store writers. A crash releases OS ownership naturally, so the next launch starts normally. Development and installed builds share the app identifier/data directory and must not run together.
+
+Updater restart ordering is part of this invariant. On macOS, never launch the replacement bundle while the old process still owns the single-instance registration: the new process would immediately exit and only focus the old one. `useUpdater.ts` therefore spawns the tightly-scoped `restart-whatsub` shell helper, exits the old app, and the helper waits one second before calling `open -b com.whatsub.app`. Keep the corresponding fixed-argument capability in `capabilities/default.json`; do not revert to immediate `open` or `relaunch()`.
+
 ## Build / dev
 
 ```bash

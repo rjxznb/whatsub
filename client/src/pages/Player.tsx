@@ -257,28 +257,35 @@ export function Player() {
   const manualSaveTailRef = useRef<Promise<void>>(Promise.resolve());
 
   const persistManualEdits = () => {
+    if (!videoId) return;
     if (!canEditSubtitles(useAnalysis.getState().phase)) return;
     manualSaveTailRef.current = manualSaveTailRef.current.then(async () => {
       if (!canEditSubtitles(useAnalysis.getState().phase)) return;
       const session = sessionRef.current;
       const cues = cuesRef.current;
       if (!session || !cues) return;
-      const state = useAnalysis.getState();
-      const saved = await session.save({
-        subtitles: state.subtitles,
-        keyPhrases: state.summary?.keyPhrases ?? [],
-        checkpoint: {
-          ...session.analysis.checkpoint,
-          revision: session.analysis.checkpoint.revision + 1,
-        },
-      });
-      analysis.setCommittedAnalysis(saved, cues.length);
-    }).catch((error) => {
-      analysis.setError(
-        error instanceof Error ? error.message : String(error),
-        false,
-        "analysis",
-      );
+      const stillOwnsSession = () =>
+        ownsForegroundAnalysis(videoId, session, sessionRef.current);
+      try {
+        const state = useAnalysis.getState();
+        const saved = await session.save({
+          subtitles: state.subtitles,
+          keyPhrases: state.summary?.keyPhrases ?? [],
+          checkpoint: {
+            ...session.analysis.checkpoint,
+            revision: session.analysis.checkpoint.revision + 1,
+          },
+        });
+        if (!stillOwnsSession()) return;
+        analysis.setCommittedAnalysis(saved, cues.length);
+      } catch (error) {
+        if (!stillOwnsSession()) return;
+        analysis.setError(
+          error instanceof Error ? error.message : String(error),
+          false,
+          "analysis",
+        );
+      }
     });
   };
 
@@ -338,6 +345,7 @@ export function Player() {
           status: "ready",
           error: null,
         });
+        if (!stillOwnsSession()) return;
         analysis.setPhase("complete", 100);
         await reload();
       }

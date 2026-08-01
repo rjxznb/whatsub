@@ -69,6 +69,14 @@ pub enum PipelineEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         total: Option<String>,
     },
+    /// A download that had already transferred data hit a transient failure
+    /// and is waiting before yt-dlp resumes from its partial files.
+    Retrying {
+        video_id: String,
+        attempt: u32,
+        delay_sec: u64,
+        message: String,
+    },
     ExtractingAudio {
         video_id: String,
     },
@@ -142,4 +150,26 @@ pub enum PipelineEvent {
 
 pub fn emit(app: &AppHandle, event: PipelineEvent) {
     let _ = app.emit("pipeline-event", event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PipelineEvent;
+
+    #[test]
+    fn retrying_event_serializes_for_frontend() {
+        let value = serde_json::to_value(PipelineEvent::Retrying {
+            video_id: "video-1".into(),
+            attempt: 3,
+            delay_sec: 10,
+            message: "网络波动，正在断点续传".into(),
+        })
+        .unwrap();
+
+        assert_eq!(value["stage"], "Retrying");
+        assert_eq!(value["video_id"], "video-1");
+        assert_eq!(value["attempt"], 3);
+        assert_eq!(value["delay_sec"], 10);
+        assert_eq!(value["message"], "网络波动，正在断点续传");
+    }
 }

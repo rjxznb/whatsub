@@ -287,18 +287,103 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
     expect(r.getByText("等待转录…")).toBeTruthy();
   });
 
-  it("cancels using an id learned from a later event when Started was missed", async () => {
+  it("does not bind cancellation to an unrelated pre-start progress event", async () => {
     const r = await startImport();
-    // Started never arrives (lost to the listen()/invoke race); progress does.
     pipelineHandler?.({
-      payload: { stage: "Downloading", video_id: "vid123", percent: 42 },
+      payload: { stage: "Downloading", video_id: "background-id", percent: 42 },
+    });
+    pipelineHandler?.({
+      payload: { stage: "Started", video_id: "foreground-id", background: false },
     });
     await flush();
 
     fireEvent.click(r.getByTitle("取消下载 (Esc)"));
     await flush();
 
-    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vid123" });
+    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "foreground-id" });
+    expect(invokeMock).not.toHaveBeenCalledWith("cancel_import", { videoId: "background-id" });
+  });
+
+  it("keeps progress and cancellation visible while yt-dlp is retrying", async () => {
+    const r = await startImport();
+    pipelineHandler?.({
+      payload: {
+        stage: "Downloading",
+        video_id: "vidRetry",
+        percent: 87,
+        speed: "1.2MiB/s",
+        eta: "00:42",
+      },
+    });
+    pipelineHandler?.({
+      payload: {
+        stage: "Retrying",
+        video_id: "vidRetry",
+        attempt: 2,
+        delay_sec: 5,
+        message: "网络波动，正在断点续传",
+      },
+    });
+    await flush();
+
+    expect(r.getByText("网络波动，正在断点续传")).toBeInTheDocument();
+    expect(r.getByText(/87%/)).toBeInTheDocument();
+    expect(r.queryByText(/1\.2MiB\/s/)).toBeNull();
+    expect(r.queryByText(/00:42/)).toBeNull();
+    expect(r.getByTitle("取消下载 (Esc)")).toBeInTheDocument();
+
+    pipelineHandler?.({
+      payload: {
+        stage: "Downloading",
+        video_id: "vidRetry",
+        percent: 88,
+        speed: "900KiB/s",
+      },
+    });
+    await flush();
+
+    expect(r.queryByText("网络波动，正在断点续传")).toBeNull();
+    expect(r.getByText(/88%/)).toBeInTheDocument();
+  });
+
+  it("ignores interleaved background events after binding the foreground id", async () => {
+    const r = await startImport();
+    await act(async () => {
+      pipelineHandler?.({
+        payload: {
+          stage: "Started",
+          video_id: "foreground-id",
+          source_kind: "url",
+          source_value: SAMPLE_URL,
+          background: false,
+        },
+      });
+      pipelineHandler?.({
+        payload: {
+          stage: "Downloading",
+          video_id: "foreground-id",
+          percent: 42,
+        },
+      });
+      pipelineHandler?.({
+        payload: {
+          stage: "Retrying",
+          video_id: "background-id",
+          attempt: 3,
+          delay_sec: 10,
+          message: "后台任务正在断点续传",
+        },
+      });
+    });
+
+    expect(r.getByText(/42%/)).toBeInTheDocument();
+    expect(r.queryByText("后台任务正在断点续传")).toBeNull();
+
+    fireEvent.click(r.getByTitle("取消下载 (Esc)"));
+    await flush();
+    expect(invokeMock).toHaveBeenCalledWith("cancel_import", {
+      videoId: "foreground-id",
+    });
   });
 
   it("still cancels when Started did arrive", async () => {
@@ -312,17 +397,21 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
     expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vid999" });
   });
 
-  it("learns the id even from a Log line (the earliest event yt-dlp emits)", async () => {
+  it("ignores a background Started event while waiting for the foreground one", async () => {
     const r = await startImport();
     pipelineHandler?.({
-      payload: { stage: "Log", video_id: "vidLog", source: "yt-dlp", line: "[youtube] ..." },
+      payload: { stage: "Started", video_id: "background-id", background: true },
+    });
+    pipelineHandler?.({
+      payload: { stage: "Started", video_id: "foreground-id", background: false },
     });
     await flush();
 
     fireEvent.click(r.getByTitle("取消下载 (Esc)"));
     await flush();
 
-    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "vidLog" });
+    expect(invokeMock).toHaveBeenCalledWith("cancel_import", { videoId: "foreground-id" });
+    expect(invokeMock).not.toHaveBeenCalledWith("cancel_import", { videoId: "background-id" });
   });
 
   it("does not close until the backend confirms process cleanup", async () => {
@@ -365,7 +454,9 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("cancel_import", expect.anything());
 
     await act(async () => {
-      pipelineHandler?.({ payload: { stage: "Log", video_id: "vidLate", line: "starting" } });
+      pipelineHandler?.({
+        payload: { stage: "Started", video_id: "vidLate", background: false },
+      });
     });
 
     await waitFor(() =>

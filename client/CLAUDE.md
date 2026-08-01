@@ -212,19 +212,23 @@ Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's play
 
 **macOS: the `node` sidecar needs JIT entitlements (0.1.100).** yt-dlp spawns `node` (`--js-runtimes node:<path>`) to solve YouTube's n-challenge — no JS runtime ⇒ `No video formats found`, i.e. ALL YouTube downloads fail. Notarization requires every executable in the `.app` to carry OUR signature, so Tauri re-signs each sidecar with hardened runtime + `Entitlements.plist`, **discarding the entitlements the official nodejs.org binary ships with**. Without re-granting them the kernel kills node inside V8's `SetPermissions` → `Error running node process (returncode: -5)` (−5 = SIGTRAP). `Entitlements.plist` must therefore keep BOTH `com.apple.security.cs.allow-jit` **and** `com.apple.security.cs.allow-unsigned-executable-memory` (allow-jit alone is insufficient on recent macOS). Both are allowed for Developer ID + notarization. Windows is unaffected (no hardened runtime). Don't prune these keys.
 
-## Foreground vs background yt-dlp retry budgets
+## Progress-aware yt-dlp retry policy
 
-`pipeline/ytdlp.rs::download(background: bool)`:
+`pipeline/ytdlp.rs::download(background: bool)` has two distinct phases:
 
-| flag | foreground | background |
+| before real transfer starts | foreground | background |
 |---|---|---|
 | `--socket-timeout` | 5s | 20s |
-| `--retries` (per HTTP req) | 1 | 10 |
-| `--fragment-retries` | 1 | 10 |
-| `--retry-sleep` | 2s | 5s |
-| Process-level retry attempts | 1 | 3 (only on `is_transient_yt_dlp_error()`) |
+| `--retries` / `--fragment-retries` | 1 | 10 |
+| outer process retries | 0 | 2 |
 
-Foreground goal: **fail fast (~25-50s)** so user sees actionable error dialog. Background goal: **patient (~3 min)** so transient blips recover without user supervision. ⚠️ These knobs only control TCP-connect + HTTP retries; they do NOT bound yt-dlp's player-JS sigsolver time — long YouTube videos with large DASH manifests can still take minutes in "准备中".
+Before any progress, foreground fails fast so an unreachable network, missing proxy, expired Cookie, unsupported URL, private/deleted video, or local dependency error reaches the actionable UI promptly. Background keeps the more patient three-process budget.
+
+After the first valid progress line **or merge activity**, `DownloadSession::ever_started` becomes sticky across every later yt-dlp process. Transient network errors and watchdog stalls then resume without a fixed maximum using independent network/stall counters and cancellable `3s, 5s, 10s, 20s, 30s...` backoff. Cancellation always wins immediately. The one legacy cloud-materialization caller that has no cancellation token is capped at five resumes, so it cannot create an immortal task. Deterministic errors (Cookie/login/bot/private/deleted/unsupported/format/non-retryable 4xx/certificate/extractor) and local dependency/postprocessing failures never enter the resume loop.
+
+Download-stage retries preserve `.part`, `.ytdl`, fragments, and completed format streams. Merge-stage stalls remove only `source.mp4` / `source.temp.mp4`, then re-run merge from the preserved streams; cleanup errors stop rather than starting a competing merge. Stall/cancel termination targets the yt-dlp process tree so its ffmpeg child cannot keep writing after the parent exits. `PipelineEvent::Retrying` keeps the last percentage visible, clears stale speed/ETA, shows the retry reason in both foreground and background UI, and retains the existing cancel action. The foreground modal binds only to its non-background `Started` ID and ignores interleaved queue events. Pre-start background base retries remain log-only because no resumable transfer exists yet.
+
+These knobs do not bound yt-dlp's player-JS sigsolver time; long YouTube videos with large DASH manifests can still spend minutes in "准备中".
 
 ### Import resource scheduler
 
@@ -235,7 +239,7 @@ Foreground goal: **fail fast (~25-50s)** so user sees actionable error dialog. B
 - Waiting acquisition is cancellation-aware. Do not bypass the scheduler by spawning import sidecars directly from a command.
 - Limits are automatic and intentionally have no Settings toggle.
 
-**Stall watchdog (2026-06-25).** The retry budgets above only fire when yt-dlp *exits with an error*. A long-video download that **hangs** mid-stream (downloaded half, then a fragment trickles/freezes — process alive, no exit) produced no error, so nothing retried → stuck forever in "准备中" with a half `.part`. Fix: a stall watchdog in `pipeline/spawn.rs` (`run_sidecar_env` + `run_external_with_callback`, both spawn paths). The download's stderr callback bumps a shared `StallCounter` (`Arc<AtomicU64>`) on each parsed progress line; the spawn loop runs a 15s `tokio::time::interval` and, **only once the counter has first moved** (so the legitimately-silent sigsolver/准备中 phase is never killed), kills the child if the counter doesn't advance for 8 ticks (~120s) and returns a `"stalled"` error. `download()` in `ytdlp.rs` treats `"stalled"` as its own recoverable case with a larger budget (`STALL_MAX_RETRIES = 5`, applied even in foreground since resume is cheap), re-spawning with `--continue` so each attempt resumes from the `.part` and progress accumulates. The watchdog is opt-in via the `Option<StallCounter>` param (None for ffmpeg/other sidecars, so their long quiet stretches aren't affected).
+**Phase-aware stall watchdog.** `pipeline/spawn.rs` uses progress output only to arm the download phase, then samples aggregate file bytes in the dedicated output directory; repeated identical `100%` lines cannot fake liveness. Merge watches `source.temp.mp4` growth separately. Preparation is never killed; download and merge use separate inactivity thresholds. A download stall feeds the resumable retry lane while preserving every partial artifact. A merge stall feeds its own counter and removes only incomplete merge outputs before retrying. The watchdog remains opt-in for yt-dlp/Whisper spawn paths, so unrelated quiet sidecars are unaffected.
 
 **Whisper reuses the same watchdog + auto-restart (2026-06-25).** A laptop that sleeps mid-transcription leaves whisper-cli wedged on wake (suspended process / lost Vulkan context) — the import hung forever at "转录中". `transcribe()` now passes a `StallCounter` (bumped per progress line) so the spawn loop kills a no-progress whisper after ~120s. whisper.cpp has no mid-file resume, so the single attempt is factored into `run_whisper_once()` and `transcribe()` wraps it in a retry loop: a `"stalled"` error re-runs from scratch on the same `audio.wav` (no re-download / re-extract; the GPU is healthy again after wake), up to `WHISPER_STALL_RETRIES = 2`, logging "自动重新转录 (N/2)" and resetting the bar to 0 each restart, then surfacing a real error (→ the Player's 重新转录 backstop). Cancellation + the GPU device-pinning/inventory logic are preserved across retries.
 

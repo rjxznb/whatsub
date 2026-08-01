@@ -20,7 +20,7 @@ pub enum OutputStream {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StallPhase {
+pub(crate) enum StallPhase {
     Preparing,
     Downloading,
     Merging,
@@ -38,6 +38,7 @@ struct StallSnapshot {
 #[derive(Clone)]
 pub struct StallWatch {
     progress: StallCounter,
+    download_dir: Option<PathBuf>,
     merge_output: Option<PathBuf>,
     merging: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -46,6 +47,7 @@ impl StallWatch {
     pub fn progress_only(progress: StallCounter) -> Self {
         Self {
             progress,
+            download_dir: None,
             merge_output: None,
             merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -54,6 +56,20 @@ impl StallWatch {
     pub fn with_merge_output(progress: StallCounter, merge_output: PathBuf) -> Self {
         Self {
             progress,
+            download_dir: None,
+            merge_output: Some(merge_output),
+            merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn with_download_and_merge_output(
+        progress: StallCounter,
+        download_dir: PathBuf,
+        merge_output: PathBuf,
+    ) -> Self {
+        Self {
+            progress,
+            download_dir: Some(download_dir),
             merge_output: Some(merge_output),
             merging: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -62,6 +78,10 @@ impl StallWatch {
     pub fn mark_merging(&self) {
         self.merging
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn phase(&self) -> StallPhase {
+        self.snapshot().phase
     }
 
     fn snapshot(&self) -> StallSnapshot {
@@ -77,9 +97,14 @@ impl StallWatch {
                 activity,
             }
         } else {
-            let activity = self.progress.load(std::sync::atomic::Ordering::Relaxed);
+            let progress = self.progress.load(std::sync::atomic::Ordering::Relaxed);
+            let activity = self
+                .download_dir
+                .as_deref()
+                .map(downloaded_file_bytes)
+                .unwrap_or(progress);
             StallSnapshot {
-                phase: if activity == 0 {
+                phase: if progress == 0 {
                     StallPhase::Preparing
                 } else {
                     StallPhase::Downloading
@@ -88,6 +113,18 @@ impl StallWatch {
             }
         }
     }
+}
+
+fn downloaded_file_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.len())
+        .sum()
 }
 
 #[derive(Default)]
@@ -132,6 +169,32 @@ impl StallTracker {
 // and resume from the .part (yt-dlp --continue).
 const STALL_TICK_SECS: u64 = 15;
 const STALL_MAX_TICKS: u32 = 8; // 8 × 15s = 120s of zero progress → stalled
+
+#[cfg(windows)]
+fn process_tree_kill_command(pid: u32) -> (&'static str, Vec<String>) {
+    (
+        "taskkill",
+        vec!["/PID".into(), pid.to_string(), "/T".into(), "/F".into()],
+    )
+}
+
+#[cfg(unix)]
+fn process_tree_kill_command(pid: u32) -> (&'static str, Vec<String>) {
+    ("pkill", vec!["-KILL".into(), "-P".into(), pid.to_string()])
+}
+
+async fn terminate_process_tree(pid: u32) {
+    let (program, args) = process_tree_kill_command(pid);
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let _ = command.status().await;
+}
 
 pub(crate) fn is_sidecar_shutdown_unconfirmed(error: &AppError) -> bool {
     matches!(error, AppError::SidecarShutdownUnconfirmed(_))
@@ -250,6 +313,7 @@ where
                 // `CommandChild::kill` only sends the termination request.
                 // Keep the job registered until this exact sidecar confirms
                 // that it has actually exited.
+                terminate_process_tree(child.pid()).await;
                 let _ = child.kill();
                 wait_for_sidecar_shutdown(&mut rx).await?;
                 cancelled = true;
@@ -257,6 +321,7 @@ where
             }
             _ = ticker.tick(), if stall_enabled => {
                 if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
+                    terminate_process_tree(child.pid()).await;
                     let _ = child.kill();
                     wait_for_sidecar_shutdown(&mut rx).await?;
                     stalled = true;
@@ -469,11 +534,17 @@ where
         tokio::select! {
             biased;
             _ = cancel_fut => {
+                if let Some(pid) = child.id() {
+                    terminate_process_tree(pid).await;
+                }
                 let _ = child.kill().await;
                 return Err(AppError::Cancelled);
             }
             _ = ticker.tick(), if stall_enabled => {
                 if stall_tracker.observe(stall.as_ref().unwrap().snapshot()) {
+                    if let Some(pid) = child.id() {
+                        terminate_process_tree(pid).await;
+                    }
                     let _ = child.kill().await;
                     return Err(AppError::Subprocess(format!(
                         "{} stalled — no progress for ~{}s",
@@ -673,6 +744,52 @@ mod tests {
         assert_eq!(watch.snapshot().activity, 5);
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn download_watch_uses_file_growth_not_repeated_progress_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "whatsub-download-watch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let part = dir.join("source.f137.mp4.part");
+        std::fs::write(&part, b"12345").unwrap();
+
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let watch = StallWatch::with_download_and_merge_output(
+            counter.clone(),
+            dir.clone(),
+            dir.join("source.temp.mp4"),
+        );
+
+        assert_eq!(watch.snapshot().phase, StallPhase::Downloading);
+        assert_eq!(watch.snapshot().activity, 5);
+        counter.store(100, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(watch.snapshot().activity, 5);
+
+        std::fs::write(&part, b"123456789").unwrap();
+        assert_eq!(watch.snapshot().activity, 9);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tree_kill_command_targets_descendants() {
+        let (program, args) = process_tree_kill_command(4242);
+        #[cfg(windows)]
+        {
+            assert_eq!(program, "taskkill");
+            assert_eq!(args, ["/PID", "4242", "/T", "/F"]);
+        }
+        #[cfg(unix)]
+        {
+            assert_eq!(program, "pkill");
+            assert_eq!(args, ["-KILL", "-P", "4242"]);
+        }
     }
 
     #[test]

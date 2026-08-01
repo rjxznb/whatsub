@@ -51,6 +51,66 @@ describe("applyPipelineEvent — Waiting", () => {
   });
 });
 
+describe("applyPipelineEvent — Retrying", () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    useDownloadQueue.setState({ entries: {} });
+    useDownloadQueue.getState().upsert("v1", {
+      videoId: "v1",
+      sourceKind: "url",
+      sourceValue: "https://youtube.com/watch?v=x",
+      label: "Video",
+      phase: "downloading",
+      percent: 87,
+      speed: "1.2MiB/s",
+      eta: "00:42",
+      startedAt: 1,
+    });
+  });
+
+  it("preserves progress, clears stale metrics, and exposes retry copy", () => {
+    applyPipelineEvent({
+      stage: "Retrying",
+      video_id: "v1",
+      attempt: 2,
+      delay_sec: 5,
+      message: "网络波动，正在断点续传",
+    });
+
+    expect(useDownloadQueue.getState().entries.v1).toMatchObject({
+      phase: "downloading",
+      percent: 87,
+      speed: null,
+      eta: null,
+      retryMessage: "网络波动，正在断点续传",
+    });
+  });
+
+  it("clears retry copy when download progress resumes", () => {
+    applyPipelineEvent({
+      stage: "Retrying",
+      video_id: "v1",
+      attempt: 2,
+      delay_sec: 5,
+      message: "网络波动，正在断点续传",
+    });
+    applyPipelineEvent({
+      stage: "Downloading",
+      video_id: "v1",
+      percent: 88,
+      speed: "900KiB/s",
+      eta: "00:30",
+    });
+
+    expect(useDownloadQueue.getState().entries.v1).toMatchObject({
+      percent: 88,
+      speed: "900KiB/s",
+      eta: "00:30",
+      retryMessage: null,
+    });
+  });
+});
+
 describe("download queue cancellation persistence", () => {
   beforeEach(() => {
     mockInvoke.mockReset();

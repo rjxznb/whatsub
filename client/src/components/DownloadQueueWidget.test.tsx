@@ -201,3 +201,31 @@ describe("background import scheduler waits", () => {
     expect(screen.getByText(label)).toBeInTheDocument();
   });
 });
+
+describe("background import retry state", () => {
+  beforeEach(() => {
+    useBgAnalyses.setState({ jobs: {} });
+    useDownloadQueue.setState({
+      entries: {
+        "video-1": {
+          videoId: "video-1",
+          sourceKind: "url",
+          sourceValue: "https://youtube.com/watch?v=x",
+          label: "Video",
+          phase: "downloading",
+          percent: 87,
+          retryMessage: "网络波动，正在断点续传",
+          startedAt: 1,
+        },
+      },
+    });
+  });
+
+  it("shows the retry reason while retaining the cancel action", () => {
+    render(<DownloadQueueWidget />);
+    fireEvent.click(screen.getByTitle(/后台任务/));
+
+    expect(screen.getByText("网络波动，正在断点续传")).toBeInTheDocument();
+    expect(screen.getByTitle("取消")).toBeInTheDocument();
+  });
+});

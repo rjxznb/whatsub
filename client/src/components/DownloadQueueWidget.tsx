@@ -99,6 +99,7 @@ type UnifiedItem =
       sourceValue: string;
       speed?: string | null;
       eta?: string | null;
+      retryMessage?: string | null;
       error?: string | null;
       /** Optional Rust-side phase note (e.g. "正在上传视频 · 8 MB",
        *  "正在提取音频", "正在上传音频 · 0.3 MB"). When set, overrides the
@@ -142,6 +143,7 @@ export function DownloadQueueWidget() {
       sourceValue: d.sourceValue,
       speed: d.speed,
       eta: d.eta,
+      retryMessage: d.retryMessage,
       error: d.error,
       note: d.note,
       startedAt: d.startedAt,
@@ -413,7 +415,7 @@ function phaseText(item: UnifiedItem): string {
       case "waiting_compute":
         return "等待转录…";
       case "downloading":
-        return "下载中";
+        return item.retryMessage ?? "下载中";
       case "extracting":
         return "提取音频";
       case "transcribing":

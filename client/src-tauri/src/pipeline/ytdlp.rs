@@ -1,12 +1,356 @@
 use crate::commands::yt_dlp::resolve_appdata_yt_dlp;
 use crate::core::progress::{emit, PipelineEvent};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::pipeline::spawn::{
-    run_external_with_callback, run_sidecar_env, OutputStream, StallWatch,
+    run_external_with_callback, run_sidecar_env, OutputStream, StallPhase, StallWatch,
 };
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadMode {
+    Foreground,
+    Background,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadErrorKind {
+    Stall,
+    TransientNetwork,
+    Deterministic,
+    LocalDependency,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryLane {
+    Base,
+    NetworkResume,
+    StallResume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryCleanup {
+    PreserveAll,
+    RemoveMergeOutputs,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RetryCounters {
+    base_retries: u32,
+    network_resumes: u32,
+    stall_resumes: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RetryDecisionInput {
+    mode: DownloadMode,
+    ever_started: bool,
+    stage: StallPhase,
+    error: DownloadErrorKind,
+    cancellation_requested: bool,
+    can_cancel: bool,
+    counters: RetryCounters,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryDecision {
+    Stop,
+    Retry {
+        lane: RetryLane,
+        retry_number: u32,
+        delay: Duration,
+        cleanup: RetryCleanup,
+    },
+}
+
+fn classify_yt_dlp_error(error: &AppError) -> DownloadErrorKind {
+    if matches!(error, AppError::Cancelled) {
+        return DownloadErrorKind::Deterministic;
+    }
+
+    let message = error.to_string().to_lowercase();
+    if message.contains("stalled") {
+        return DownloadErrorKind::Stall;
+    }
+
+    if contains_non_retryable_http_4xx(&message) {
+        return DownloadErrorKind::Deterministic;
+    }
+
+    const DETERMINISTIC: &[&str] = &[
+        "unsupported url",
+        "sign in to confirm you're not a bot",
+        "sign in to confirm you’re not a bot",
+        "cookies are no longer valid",
+        "account cookies are no longer valid",
+        "cookies have been invalidated",
+        "cookie file has expired",
+        "please refresh your cookies",
+        "login required",
+        "login is required",
+        "this video is private",
+        "private video",
+        "this video has been removed",
+        "removed by the user",
+        "video unavailable",
+        "members-only",
+        "join this channel",
+        "sign in to confirm your age",
+        "age-restricted",
+        "not available in your country",
+        "geo restriction",
+        "requested format is not available",
+        "no video formats found",
+        "only images are available",
+        "unable to extract",
+        "nsig extraction failed",
+        "player response not found",
+        "certificate verify failed",
+        "http error 403",
+    ];
+    if DETERMINISTIC
+        .iter()
+        .any(|fragment| message.contains(fragment))
+    {
+        return DownloadErrorKind::Deterministic;
+    }
+
+    const LOCAL_DEPENDENCY: &[&str] = &[
+        "ffmpeg not found",
+        "ffprobe not found",
+        "postprocessing:",
+        "ffmpeg failed",
+        "conversion failed",
+        "error opening output",
+        "no space left on device",
+        "disk quota exceeded",
+        "permission denied",
+        "unable to rename file",
+        "failed to spawn",
+        "unable to spawn",
+        "no such file or directory",
+        "is not recognized as an internal or external command",
+    ];
+    if LOCAL_DEPENDENCY
+        .iter()
+        .any(|fragment| message.contains(fragment))
+    {
+        return DownloadErrorKind::LocalDependency;
+    }
+
+    const TRANSIENT: &[&str] = &[
+        "eof occurred in violation of protocol",
+        "ssl: ",
+        "ssl error",
+        "ssl_error",
+        "connection reset",
+        "connection aborted",
+        "connection timed out",
+        "remote end closed connection",
+        "read operation timed out",
+        "unable to download webpage",
+        "giving up after",
+        "getaddrinfo failed",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "connection refused",
+        "network is unreachable",
+        "no route to host",
+        "tunnel connection failed",
+        "proxy connection failed",
+        "proxyconnect tcp",
+        "winerror 10060",
+        "winerror 10061",
+        "winerror 10065",
+        "http error 408",
+        "http error 429",
+        "http error 500",
+        "http error 502",
+        "http error 503",
+        "http error 504",
+        "fragment retries exhausted",
+        "incomplete read",
+        "broken pipe",
+    ];
+    if TRANSIENT.iter().any(|fragment| message.contains(fragment)) {
+        DownloadErrorKind::TransientNetwork
+    } else {
+        DownloadErrorKind::Unknown
+    }
+}
+
+fn contains_non_retryable_http_4xx(message: &str) -> bool {
+    (400..500)
+        .filter(|status| !matches!(status, 408 | 429))
+        .any(|status| {
+            message.contains(&format!("http error {status}"))
+                || message.contains(&format!("http error: {status}"))
+        })
+}
+
+fn resume_delay(retry_number: u32) -> Duration {
+    let seconds = match retry_number {
+        1 => 3,
+        2 => 5,
+        3 => 10,
+        4 => 20,
+        _ => 30,
+    };
+    Duration::from_secs(seconds)
+}
+
+fn decide_retry(input: RetryDecisionInput) -> RetryDecision {
+    if input.cancellation_requested {
+        return RetryDecision::Stop;
+    }
+
+    if matches!(
+        input.error,
+        DownloadErrorKind::Deterministic
+            | DownloadErrorKind::LocalDependency
+            | DownloadErrorKind::Unknown
+    ) {
+        return RetryDecision::Stop;
+    }
+
+    if !input.ever_started {
+        if input.mode == DownloadMode::Background
+            && input.error == DownloadErrorKind::TransientNetwork
+            && input.counters.base_retries < 2
+        {
+            let retry_number = input.counters.base_retries + 1;
+            return RetryDecision::Retry {
+                lane: RetryLane::Base,
+                retry_number,
+                delay: Duration::from_secs(5 * retry_number as u64),
+                cleanup: RetryCleanup::PreserveAll,
+            };
+        }
+        return RetryDecision::Stop;
+    }
+
+    // Indefinite resume is only safe when the owning operation exposes a
+    // cancellation token. Legacy cloud materialization currently has no
+    // cancel UI, so bound that path instead of creating an immortal task.
+    const UNCANCELLABLE_RESUME_LIMIT: u32 = 5;
+    if !input.can_cancel {
+        let completed = match input.error {
+            DownloadErrorKind::TransientNetwork => input.counters.network_resumes,
+            DownloadErrorKind::Stall => input.counters.stall_resumes,
+            _ => 0,
+        };
+        if completed >= UNCANCELLABLE_RESUME_LIMIT {
+            return RetryDecision::Stop;
+        }
+    }
+
+    match input.error {
+        DownloadErrorKind::TransientNetwork => {
+            let retry_number = input.counters.network_resumes + 1;
+            RetryDecision::Retry {
+                lane: RetryLane::NetworkResume,
+                retry_number,
+                delay: resume_delay(retry_number),
+                cleanup: RetryCleanup::PreserveAll,
+            }
+        }
+        DownloadErrorKind::Stall => {
+            let retry_number = input.counters.stall_resumes + 1;
+            RetryDecision::Retry {
+                lane: RetryLane::StallResume,
+                retry_number,
+                delay: resume_delay(retry_number),
+                cleanup: if input.stage == StallPhase::Merging {
+                    RetryCleanup::RemoveMergeOutputs
+                } else {
+                    RetryCleanup::PreserveAll
+                },
+            }
+        }
+        DownloadErrorKind::Deterministic
+        | DownloadErrorKind::LocalDependency
+        | DownloadErrorKind::Unknown => RetryDecision::Stop,
+    }
+}
+
+#[derive(Debug)]
+struct DownloadSession {
+    ever_started: bool,
+    last_stage: StallPhase,
+    retries: RetryCounters,
+    process_attempt: u32,
+}
+
+impl Default for DownloadSession {
+    fn default() -> Self {
+        Self {
+            ever_started: false,
+            last_stage: StallPhase::Preparing,
+            retries: RetryCounters::default(),
+            process_attempt: 0,
+        }
+    }
+}
+
+impl DownloadSession {
+    fn observe_attempt(&mut self, stage: StallPhase) {
+        self.last_stage = stage;
+        if stage != StallPhase::Preparing {
+            self.ever_started = true;
+        }
+    }
+
+    fn record_retry(&mut self, lane: RetryLane) {
+        match lane {
+            RetryLane::Base => self.retries.base_retries += 1,
+            RetryLane::NetworkResume => self.retries.network_resumes += 1,
+            RetryLane::StallResume => self.retries.stall_resumes += 1,
+        }
+    }
+}
+
+fn apply_retry_cleanup(cleanup: RetryCleanup, output: &Path) -> AppResult<()> {
+    if cleanup == RetryCleanup::RemoveMergeOutputs {
+        for path in [merge_temp_path(output), output.to_path_buf()] {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::Other(format!(
+                        "retry cleanup {}: {error}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_not_cancelled(cancel: Option<&CancellationToken>) -> AppResult<()> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        Err(AppError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+async fn wait_retry_delay(delay: Duration, cancel: Option<&CancellationToken>) -> AppResult<()> {
+    match cancel {
+        Some(token) => tokio::select! {
+            biased;
+            _ = token.cancelled() => Err(AppError::Cancelled),
+            _ = tokio::time::sleep(delay) => Ok(()),
+        },
+        None => {
+            tokio::time::sleep(delay).await;
+            Ok(())
+        }
+    }
+}
 
 /// Compile-time target triple — Tauri renames sidecars at build time to
 /// `<name>-<target_triple><exe_suffix>` and drops them next to the main
@@ -58,8 +402,8 @@ fn js_runtime_arg() -> Option<String> {
     }
     let candidates: &[&str] = &[
         // macOS / Linux
-        "/opt/homebrew/bin/node",  // Apple Silicon Homebrew
-        "/usr/local/bin/node",      // Intel Homebrew / system
+        "/opt/homebrew/bin/node", // Apple Silicon Homebrew
+        "/usr/local/bin/node",    // Intel Homebrew / system
         "/usr/bin/node",
         "/opt/homebrew/bin/deno",
         "/usr/local/bin/deno",
@@ -71,7 +415,11 @@ fn js_runtime_arg() -> Option<String> {
         if std::path::Path::new(path).exists() {
             // yt-dlp accepts "node:<path>" or "deno:<path>". Pick the right
             // runtime name based on the executable basename.
-            let runtime = if path.contains("deno") { "deno" } else { "node" };
+            let runtime = if path.contains("deno") {
+                "deno"
+            } else {
+                "node"
+            };
             return Some(format!("{runtime}:{path}"));
         }
     }
@@ -155,40 +503,44 @@ pub struct DownloadResult {
 /// 4K can re-encode externally.
 fn yt_dlp_format(quality: &str) -> &'static str {
     match quality {
-        "low" => "bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]\
+        "low" => {
+            "bv*[ext=mp4][vcodec^=avc1][height<=480]+ba[ext=m4a]\
                   /bv*[ext=mp4][height<=480]+ba[ext=m4a]\
                   /bv*[height<=480]+ba[acodec^=mp4a]\
-                  /best[height<=480]/best",
-        "high" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
+                  /best[height<=480]/best"
+        }
+        "high" => {
+            "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
                    /bv*[height<=1080]+ba[acodec^=mp4a]\
-                   /best[height<=1080]/best",
-        "best" => "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
+                   /best[height<=1080]/best"
+        }
+        "best" => {
+            "bv*[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]\
                    /bv*[ext=mp4][height<=1080]+ba[ext=m4a]\
                    /bv*[height<=1080]+ba[acodec^=mp4a]\
-                   /best[height<=1080]/best",
+                   /best[height<=1080]/best"
+        }
         // "standard" (720p) is the default — chosen because subtitle learning
         // doesn't need 1080p+ and 720p downloads are 2-4× faster on most
         // connections. Anything unrecognized also lands here.
-        _ => "bv*[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]\
+        _ => {
+            "bv*[ext=mp4][vcodec^=avc1][height<=720]+ba[ext=m4a]\
               /bv*[ext=mp4][height<=720]+ba[ext=m4a]\
               /bv*[height<=720]+ba[acodec^=mp4a]\
-              /best[height<=720]/best",
+              /best[height<=720]/best"
+        }
     }
 }
 
 /// Download a video to `out_dir/source.mp4` and `out_dir/thumb.jpg`, plus info.json.
 ///
-/// `background`: changes the retry strategy.
-///   - false (foreground, user is watching the modal): tight budget,
-///     fail fast. ~25-50s on a hard-unreachable network (no VPN) so
-///     the user sees the actionable error dialog without staring at a
-///     frozen-looking modal. Knobs: 5s socket-timeout, 1 retry per
-///     request, 1 process attempt. See the inline comments around the
-///     args block for the per-knob rationale.
-///   - true (background, queued): patient budget. ~3 min total so
-///     transient blips actually recover. 20s socket-timeout, 10
-///     retries per request, 3 process attempts.
+/// `background` changes only the pre-transfer retry budget. Foreground
+/// imports fail fast while no bytes have moved; background imports get two
+/// extra process attempts. Once any real progress or merge activity has
+/// occurred, both modes preserve partial files and keep resuming transient
+/// network/stall failures until success, cancellation, or a deterministic
+/// failure (Cookie/login/private/unsupported/etc.).
 pub async fn download(
     app: &AppHandle,
     url: &str,
@@ -346,35 +698,23 @@ pub async fn download(
     ]);
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
-    // Process-level retry around yt-dlp. The in-process --retries above
-    // handles HTTP retries inside ONE yt-dlp run; this outer loop spawns
-    // a fresh process when the FIRST one gives up, which is a different
-    // recovery axis: new DNS resolution can land on a different IP /
-    // POP, new TLS session can dodge a stuck handshake state, and the
-    // n-challenge player JS gets re-fetched from scratch. Only retry
-    // when stderr matches a known transient pattern (network / SSL /
-    // CDN) — deterministic errors like cookies/banned/private are
-    // bubbled immediately so the user isn't waiting for the
-    // friendly-error dialog they already needed to see.
-    //
-    // Foreground: 1 attempt (no process retry). The in-process retries
-    // already used ~10s. Punching through with 2 more process attempts
-    // would just push total time to ~30s with no real recovery axis
-    // beyond what yt-dlp itself tried. Better to fail fast and let the
-    // user fix cookies / VPN.
-    //
-    // Background: 3 attempts × ~50s + 5s/10s backoff = ~3 min total.
-    // Base process-level retries for hard errors (no-VPN etc.). Stalls get a
-    // SEPARATE, larger budget (STALL_MAX_RETRIES): a stalled download resumes
-    // from the .part each time (--continue) so progress accumulates — cheap to
-    // retry, and the long-video hang is exactly this case. Applies even in
-    // foreground (which otherwise fails fast) because resuming is the right call.
-    let base_attempts: u32 = if background { 3 } else { 1 };
-    const STALL_MAX_RETRIES: u32 = 5;
-    let mut attempt: u32 = 0;
-    let mut stall_retries: u32 = 0;
+    // Process-level retry around yt-dlp. Before real transfer starts,
+    // foreground gets no outer retry and background gets two. After progress
+    // starts, `DownloadSession::ever_started` is sticky across respawns:
+    // transient network failures and watchdog stalls use independent counters,
+    // preserve yt-dlp resume artifacts, and back off 3/5/10/20/30... seconds
+    // without a fixed retry maximum. Deterministic and local-dependency errors
+    // always stop. Merge stalls remove only incomplete merge outputs so the
+    // already-downloaded format streams can be merged again.
+    let mode = if background {
+        DownloadMode::Background
+    } else {
+        DownloadMode::Foreground
+    };
+    let mut session = DownloadSession::default();
     loop {
-        attempt += 1;
+        ensure_not_cancelled(cancel)?;
+        session.process_attempt += 1;
 
         let id_cb = video_id.to_string();
         let app_cb = app.clone();
@@ -444,8 +784,9 @@ pub async fn download(
         // growing source.temp.mp4 once yt-dlp announces its ffmpeg merge phase.
         let progress_count = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let progress_count_cb = progress_count.clone();
-        let stall_watch = StallWatch::with_merge_output(
+        let stall_watch = StallWatch::with_download_and_merge_output(
             progress_count.clone(),
+            out_dir.to_path_buf(),
             merge_temp_path(Path::new(&video_path)),
         );
         let stall_watch_cb = stall_watch.clone();
@@ -510,16 +851,17 @@ pub async fn download(
                 source: "whatsub".into(),
                 line: format!(
                     "启动 yt-dlp ({source_label}) — 后台={}, attempt={}",
-                    background, attempt
+                    background, session.process_attempt
                 ),
             },
         );
 
+        let runner_watch = stall_watch.clone();
         let result = if let Some(appdata_path) = appdata {
             run_external_with_callback(
                 &appdata_path,
                 &arg_refs,
-                Some(stall_watch),
+                Some(runner_watch),
                 true,
                 callback,
                 cancel,
@@ -531,7 +873,7 @@ pub async fn download(
                 "yt-dlp",
                 &arg_refs,
                 &[],
-                Some(stall_watch),
+                Some(runner_watch),
                 true,
                 callback,
                 cancel,
@@ -539,77 +881,75 @@ pub async fn download(
             .await
         };
 
+        session.observe_attempt(stall_watch.phase());
         match result {
             Ok(_) => break,
-            Err(crate::error::AppError::Cancelled) => {
+            Err(AppError::Cancelled) => {
                 // Cancellation propagates immediately — no retry, no
                 // friendly-error mapping. The caller (import_video)
                 // handles cleanup of partial files.
-                return Err(crate::error::AppError::Cancelled);
+                return Err(AppError::Cancelled);
             }
             Err(e) => {
-                let msg = e.to_string();
-                // A stall = the watchdog killed a hung yt-dlp. Two scenarios:
-                //
-                // 1. yt-dlp stuck downloading → .part file tracks progress,
-                //    --continue resumes the HTTP download. All good.
-                //
-                // 2. yt-dlp stuck during ffmpeg MERGE (bv+ba→source.mp4).
-                //    Merge produces NO [progress] lines, so the watchdog
-                //    fires after 120s of silence → yt-dlp+ffmpeg killed →
-                //    source.mp4 is PARTIALLY MERGED (e.g. 10min of a 30min
-                //    video, but playable). The fragment files are fully
-                //    downloaded. On retry yt-dlp sees source.mp4 exists and
-                //    skips the merge → exit 0 with a truncated file.
-                //
-                // Fix: delete source.mp4 before the stall retry. Fragment
-                // downloads are cached in yt-dlp's temp files and don't need
-                // re-downloading; only the merge step must re-run. If the
-                // stall was during download (case 1), the .part file is
-                // intact and --continue resumes normally.
-                if prepare_stall_retry(
-                    &msg,
-                    stall_retries,
-                    STALL_MAX_RETRIES,
-                    Path::new(&video_path),
-                ) {
-                    stall_retries += 1;
+                let decision = decide_retry(RetryDecisionInput {
+                    mode,
+                    ever_started: session.ever_started,
+                    stage: session.last_stage,
+                    error: classify_yt_dlp_error(&e),
+                    cancellation_requested: cancel.is_some_and(CancellationToken::is_cancelled),
+                    can_cancel: cancel.is_some(),
+                    counters: session.retries,
+                });
+                let RetryDecision::Retry {
+                    lane,
+                    retry_number,
+                    delay,
+                    cleanup,
+                } = decision
+                else {
+                    return Err(e);
+                };
+
+                session.record_retry(lane);
+                apply_retry_cleanup(cleanup, Path::new(&video_path))?;
+                let line = match lane {
+                    RetryLane::Base => format!(
+                        "[whatsub] 网络暂时不可用 — 后台重试 {retry_number}/2，{} 秒后重试",
+                        delay.as_secs()
+                    ),
+                    RetryLane::NetworkResume => format!(
+                        "[whatsub] 网络波动，正在断点续传（第 {retry_number} 次，{} 秒后重试）",
+                        delay.as_secs()
+                    ),
+                    RetryLane::StallResume if session.last_stage == StallPhase::Merging => format!(
+                        "[whatsub] 音视频合并卡住，正在重新合并（第 {retry_number} 次，{} 秒后重试）",
+                        delay.as_secs()
+                    ),
+                    RetryLane::StallResume => format!(
+                        "[whatsub] 下载卡住，正在断点续传（第 {retry_number} 次，{} 秒后重试）",
+                        delay.as_secs()
+                    ),
+                };
+                emit(
+                    app,
+                    PipelineEvent::Log {
+                        video_id: video_id.to_string(),
+                        source: "whatsub".into(),
+                        line: line.clone(),
+                    },
+                );
+                if lane != RetryLane::Base {
                     emit(
                         app,
-                        PipelineEvent::Log {
+                        PipelineEvent::Retrying {
                             video_id: video_id.to_string(),
-                            source: "whatsub".into(),
-                            line: format!(
-                                "[whatsub] 下载卡住 — 从断点继续 (重试 {}/{})",
-                                stall_retries, STALL_MAX_RETRIES
-                            ),
+                            attempt: retry_number,
+                            delay_sec: delay.as_secs(),
+                            message: line.strip_prefix("[whatsub] ").unwrap_or(&line).to_string(),
                         },
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    continue;
                 }
-                if attempt < base_attempts && is_transient_yt_dlp_error(&msg) {
-                    // Backoff between fresh-process attempts: 5s → 10s.
-                    // Shorter than yt-dlp's own retry cycle so we don't
-                    // double-wait, but long enough to give DNS / GFW
-                    // state a chance to flip before re-running.
-                    emit(
-                        app,
-                        PipelineEvent::Log {
-                            video_id: video_id.to_string(),
-                            source: "yt-dlp".into(),
-                            line: format!(
-                                "[whatsub] network hiccup — retry {}/{}",
-                                attempt + 1,
-                                base_attempts
-                            ),
-                        },
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(5 * attempt as u64))
-                        .await;
-                    continue;
-                }
-                return Err(e);
+                wait_retry_delay(delay, cancel).await?;
             }
         }
     }
@@ -641,7 +981,8 @@ pub async fn download(
     // gracefully fall back to a stub if missing.
     let (title, duration) = match std::fs::read_to_string(&info_path_actual) {
         Ok(raw) => {
-            let info: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+            let info: serde_json::Value =
+                serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
             let t = info
                 .get("title")
                 .and_then(|v| v.as_str())
@@ -722,64 +1063,6 @@ fn observe_merge_chunk(
     stream == OutputStream::Stdout && detector.push(chunk)
 }
 
-/// Prepare a retry after the spawn watchdog kills a stalled process.
-/// Both the temporary and final merge outputs are removed; yt-dlp's `.part`
-/// and fragment cache remain available for `--continue` on the next attempt.
-fn prepare_stall_retry(
-    message: &str,
-    retries: u32,
-    max_retries: u32,
-    output: &Path,
-) -> bool {
-    if !message.contains("stalled") || retries >= max_retries {
-        return false;
-    }
-    let _ = std::fs::remove_file(merge_temp_path(output));
-    let _ = std::fs::remove_file(output);
-    true
-}
-
-/// Stderr-substring match for yt-dlp errors that are likely to succeed
-/// on a fresh-process retry. Patterns target network / TLS / CDN
-/// flakiness (the "works on 2nd try" cases). Deterministic failures
-/// (cookies expired, video private/removed/age-gated, members-only,
-/// bot-check) deliberately do NOT match — retrying those just wastes
-/// the user's time before they see the actionable error dialog.
-fn is_transient_yt_dlp_error(msg: &str) -> bool {
-    let lower = msg.to_lowercase();
-    const TRANSIENT_FRAGMENTS: &[&str] = &[
-        // Common GFW signature on TLS handshake to youtube.com / googlevideo:
-        "eof occurred in violation of protocol",
-        // Generic TLS / SSL errors:
-        "ssl: ",
-        "ssl error",
-        "ssl_error",
-        "certificate verify failed",
-        // TCP-level resets / timeouts:
-        "connection reset",
-        "connection aborted",
-        "connection timed out",
-        "remote end closed connection",
-        "read operation timed out",
-        // yt-dlp's "couldn't grab the webpage" — matches both the
-        // page-fetch failure ("Unable to download webpage") and the
-        // final exit message ("Giving up after N retries").
-        "unable to download webpage",
-        "giving up after",
-        // DNS hiccups:
-        "getaddrinfo failed",
-        "name or service not known",
-        "temporary failure in name resolution",
-        // yt-dlp's player-JS / n-challenge cache going stale —
-        // a fresh process refetches the player, often resolves itself.
-        "requested format is not available",
-        "unable to extract",
-        "nsig extraction failed",
-        "player response not found",
-    ];
-    TRANSIENT_FRAGMENTS.iter().any(|p| lower.contains(p))
-}
-
 pub(crate) struct DownloadProgress {
     pub percent: u8,
     pub total: Option<String>,
@@ -848,6 +1131,397 @@ fn parse_progress(line: &str) -> Option<DownloadProgress> {
 mod tests {
     use super::*;
 
+    fn retry_input(
+        mode: DownloadMode,
+        ever_started: bool,
+        stage: StallPhase,
+        error: DownloadErrorKind,
+        counters: RetryCounters,
+    ) -> RetryDecisionInput {
+        RetryDecisionInput {
+            mode,
+            ever_started,
+            stage,
+            error,
+            cancellation_requested: false,
+            can_cancel: true,
+            counters,
+        }
+    }
+
+    #[test]
+    fn foreground_zero_progress_transient_stops() {
+        assert_eq!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                false,
+                StallPhase::Preparing,
+                DownloadErrorKind::TransientNetwork,
+                RetryCounters::default(),
+            )),
+            RetryDecision::Stop,
+        );
+    }
+
+    #[test]
+    fn background_zero_progress_uses_two_base_retries() {
+        for completed in 0..2 {
+            assert!(matches!(
+                decide_retry(retry_input(
+                    DownloadMode::Background,
+                    false,
+                    StallPhase::Preparing,
+                    DownloadErrorKind::TransientNetwork,
+                    RetryCounters {
+                        base_retries: completed,
+                        ..RetryCounters::default()
+                    },
+                )),
+                RetryDecision::Retry {
+                    lane: RetryLane::Base,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            decide_retry(retry_input(
+                DownloadMode::Background,
+                false,
+                StallPhase::Preparing,
+                DownloadErrorKind::TransientNetwork,
+                RetryCounters {
+                    base_retries: 2,
+                    ..RetryCounters::default()
+                },
+            )),
+            RetryDecision::Stop,
+        );
+    }
+
+    #[test]
+    fn cookie_error_stops_even_after_download_started() {
+        let error = crate::error::AppError::Subprocess(
+            "Sign in to confirm you're not a bot; unable to download webpage".into(),
+        );
+        assert_eq!(
+            classify_yt_dlp_error(&error),
+            DownloadErrorKind::Deterministic
+        );
+        assert_eq!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Downloading,
+                classify_yt_dlp_error(&error),
+                RetryCounters::default(),
+            )),
+            RetryDecision::Stop,
+        );
+    }
+
+    #[test]
+    fn removed_video_stops_even_after_download_started() {
+        let error = crate::error::AppError::Subprocess("This video has been removed".into());
+        assert_eq!(
+            classify_yt_dlp_error(&error),
+            DownloadErrorKind::Deterministic
+        );
+    }
+
+    #[test]
+    fn requested_format_is_deterministic() {
+        let error =
+            crate::error::AppError::Subprocess("ERROR: Requested format is not available".into());
+        assert_eq!(
+            classify_yt_dlp_error(&error),
+            DownloadErrorKind::Deterministic
+        );
+    }
+
+    #[test]
+    fn local_postprocessing_error_wins_over_broken_pipe_text() {
+        let error = crate::error::AppError::Subprocess(
+            "ERROR: Postprocessing: ffmpeg failed while writing output: Broken pipe".into(),
+        );
+        assert_eq!(
+            classify_yt_dlp_error(&error),
+            DownloadErrorKind::LocalDependency
+        );
+        assert_eq!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Merging,
+                classify_yt_dlp_error(&error),
+                RetryCounters::default(),
+            )),
+            RetryDecision::Stop,
+        );
+    }
+
+    #[test]
+    fn started_connection_reset_uses_network_resume() {
+        let error = crate::error::AppError::Subprocess("connection reset by peer".into());
+        assert_eq!(
+            classify_yt_dlp_error(&error),
+            DownloadErrorKind::TransientNetwork
+        );
+        assert!(matches!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Downloading,
+                classify_yt_dlp_error(&error),
+                RetryCounters::default(),
+            )),
+            RetryDecision::Retry {
+                lane: RetryLane::NetworkResume,
+                retry_number: 1,
+                cleanup: RetryCleanup::PreserveAll,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn common_proxy_and_socket_failures_are_transient() {
+        for message in [
+            "Connection refused",
+            "Network is unreachable",
+            "No route to host",
+            "Tunnel connection failed: 502 Bad Gateway",
+            "WinError 10061",
+        ] {
+            let error = crate::error::AppError::Subprocess(message.into());
+            assert_eq!(
+                classify_yt_dlp_error(&error),
+                DownloadErrorKind::TransientNetwork,
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_extractor_and_non_retryable_http_errors_stop() {
+        for message in [
+            "certificate verify failed",
+            "nsig extraction failed",
+            "player response not found",
+            "HTTP Error 404: Not Found; unable to download webpage",
+        ] {
+            let error = crate::error::AppError::Subprocess(message.into());
+            assert!(
+                matches!(
+                    classify_yt_dlp_error(&error),
+                    DownloadErrorKind::Deterministic | DownloadErrorKind::LocalDependency
+                ),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn uncancellable_started_download_has_a_finite_resume_budget() {
+        let mut input = retry_input(
+            DownloadMode::Background,
+            true,
+            StallPhase::Downloading,
+            DownloadErrorKind::TransientNetwork,
+            RetryCounters {
+                network_resumes: 5,
+                ..RetryCounters::default()
+            },
+        );
+        input.can_cancel = false;
+        assert_eq!(decide_retry(input), RetryDecision::Stop);
+    }
+
+    #[test]
+    fn started_stall_uses_stall_resume() {
+        let error = crate::error::AppError::Subprocess("yt-dlp stalled".into());
+        assert_eq!(classify_yt_dlp_error(&error), DownloadErrorKind::Stall);
+        assert!(matches!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Merging,
+                classify_yt_dlp_error(&error),
+                RetryCounters::default(),
+            )),
+            RetryDecision::Retry {
+                lane: RetryLane::StallResume,
+                cleanup: RetryCleanup::RemoveMergeOutputs,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn network_and_stall_counters_are_independent() {
+        let counters = RetryCounters {
+            network_resumes: 4,
+            stall_resumes: 7,
+            ..RetryCounters::default()
+        };
+        assert!(matches!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Downloading,
+                DownloadErrorKind::TransientNetwork,
+                counters,
+            )),
+            RetryDecision::Retry {
+                retry_number: 5,
+                ..
+            }
+        ));
+        assert!(matches!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Downloading,
+                DownloadErrorKind::Stall,
+                counters,
+            )),
+            RetryDecision::Retry {
+                retry_number: 8,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn resume_backoff_is_3_5_10_20_then_30() {
+        let expected = [3, 5, 10, 20, 30, 30];
+        for (completed, seconds) in expected.into_iter().enumerate() {
+            assert!(matches!(
+                decide_retry(retry_input(
+                    DownloadMode::Foreground,
+                    true,
+                    StallPhase::Downloading,
+                    DownloadErrorKind::TransientNetwork,
+                    RetryCounters {
+                        network_resumes: completed as u32,
+                        ..RetryCounters::default()
+                    },
+                )),
+                RetryDecision::Retry { delay, .. }
+                    if delay == std::time::Duration::from_secs(seconds)
+            ));
+        }
+    }
+
+    #[test]
+    fn resume_has_no_fixed_retry_limit() {
+        assert!(matches!(
+            decide_retry(retry_input(
+                DownloadMode::Foreground,
+                true,
+                StallPhase::Downloading,
+                DownloadErrorKind::TransientNetwork,
+                RetryCounters {
+                    network_resumes: 50_000,
+                    ..RetryCounters::default()
+                },
+            )),
+            RetryDecision::Retry {
+                retry_number: 50_001,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn cancellation_precedes_every_other_decision() {
+        let mut input = retry_input(
+            DownloadMode::Background,
+            true,
+            StallPhase::Merging,
+            DownloadErrorKind::TransientNetwork,
+            RetryCounters::default(),
+        );
+        input.cancellation_requested = true;
+        assert_eq!(decide_retry(input), RetryDecision::Stop);
+    }
+
+    #[test]
+    fn progress_makes_ever_started_sticky() {
+        let mut session = DownloadSession::default();
+        session.observe_attempt(StallPhase::Downloading);
+        assert!(session.ever_started);
+        assert_eq!(session.last_stage, StallPhase::Downloading);
+    }
+
+    #[test]
+    fn merging_makes_ever_started_sticky() {
+        let mut session = DownloadSession::default();
+        session.observe_attempt(StallPhase::Merging);
+        assert!(session.ever_started);
+        assert_eq!(session.last_stage, StallPhase::Merging);
+    }
+
+    #[test]
+    fn later_preparing_attempt_does_not_clear_ever_started() {
+        let mut session = DownloadSession::default();
+        session.observe_attempt(StallPhase::Downloading);
+        session.observe_attempt(StallPhase::Preparing);
+        assert!(session.ever_started);
+        assert_eq!(session.last_stage, StallPhase::Preparing);
+    }
+
+    fn retry_cleanup_fixture(name: &str) -> (PathBuf, Vec<PathBuf>) {
+        let dir = unique_temp_dir(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = [
+            "source.mp4",
+            "source.temp.mp4",
+            "source.f137.mp4",
+            "source.f140.m4a",
+            "source.f137.mp4.part",
+            "source.ytdl",
+            "fragment.part-Frag42",
+        ]
+        .into_iter()
+        .map(|name| dir.join(name))
+        .collect::<Vec<_>>();
+        for path in &paths {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        (dir, paths)
+    }
+
+    #[test]
+    fn download_retry_preserves_all_partial_files() {
+        let (dir, paths) = retry_cleanup_fixture("preserve-all");
+        apply_retry_cleanup(RetryCleanup::PreserveAll, &dir.join("source.mp4")).unwrap();
+        assert!(paths.iter().all(|path| path.exists()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn merge_retry_removes_only_merge_outputs() {
+        let (dir, paths) = retry_cleanup_fixture("merge-only");
+        apply_retry_cleanup(RetryCleanup::RemoveMergeOutputs, &dir.join("source.mp4")).unwrap();
+        assert!(!paths[0].exists());
+        assert!(!paths[1].exists());
+        assert!(paths[2..].iter().all(|path| path.exists()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_thirty_second_backoff() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_retry_delay(Duration::from_secs(30), Some(&token)),
+        )
+        .await
+        .expect("cancelled backoff must return immediately");
+        assert!(matches!(result, Err(AppError::Cancelled)));
+    }
+
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -898,25 +1572,6 @@ mod tests {
     }
 
     #[test]
-    fn stall_retry_removes_merge_outputs_but_preserves_fragments() {
-        let dir = unique_temp_dir("stall-cleanup");
-        std::fs::create_dir_all(&dir).unwrap();
-        let output = dir.join("source.mp4");
-        let merge_temp = dir.join("source.temp.mp4");
-        let part = dir.join("source.f137.mp4.part");
-        std::fs::write(&output, b"partial merge").unwrap();
-        std::fs::write(&merge_temp, b"ffmpeg partial merge").unwrap();
-        std::fs::write(&part, b"download cache").unwrap();
-
-        assert!(prepare_stall_retry("yt-dlp stalled", 0, 5, &output));
-        assert!(!output.exists());
-        assert!(!merge_temp.exists());
-        assert!(part.exists());
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn merge_temp_path_matches_yt_dlp_prepend_extension() {
         assert_eq!(
             merge_temp_path(Path::new("downloads/source.mp4")),
@@ -926,21 +1581,6 @@ mod tests {
             merge_temp_path(Path::new("downloads/source")),
             PathBuf::from("downloads/source.temp")
         );
-    }
-
-    #[test]
-    fn non_stall_does_not_remove_output() {
-        let dir = unique_temp_dir("non-stall-cleanup");
-        std::fs::create_dir_all(&dir).unwrap();
-        let output = dir.join("source.mp4");
-        std::fs::write(&output, b"keep me").unwrap();
-
-        assert!(!prepare_stall_retry("connection reset", 0, 5, &output));
-        assert!(output.exists());
-        assert!(!prepare_stall_retry("yt-dlp stalled", 5, 5, &output));
-        assert!(output.exists());
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -954,8 +1594,7 @@ mod tests {
             for term in format.split('/') {
                 if term.contains("+ba") {
                     assert!(
-                        term.contains("ba[ext=m4a]")
-                            || term.contains("ba[acodec^=mp4a]"),
+                        term.contains("ba[ext=m4a]") || term.contains("ba[acodec^=mp4a]"),
                         "{quality} has an unconstrained separate-audio term: {term}"
                     );
                 }

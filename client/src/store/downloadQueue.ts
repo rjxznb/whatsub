@@ -38,6 +38,7 @@ export interface QueueItem {
   speed?: string | null;
   eta?: string | null;
   total?: string | null;
+  retryMessage?: string | null;
   error?: string | null;
   /** Optional human-readable phase note set by the Rust pipeline. Currently
    *  used during the post-transcode upload phase to break the previously
@@ -114,6 +115,13 @@ type Downloading = {
   eta?: string;
   total?: string;
 };
+type Retrying = {
+  stage: "Retrying";
+  video_id: string;
+  attempt: number;
+  delay_sec: number;
+  message: string;
+};
 type Extracting = { stage: "ExtractingAudio"; video_id: string };
 type Transcribing = { stage: "Transcribing"; video_id: string; percent: number };
 type Transcribed = {
@@ -128,6 +136,7 @@ type PipelineEvent =
   | Started
   | Waiting
   | Downloading
+  | Retrying
   | Extracting
   | Transcribing
   | Transcribed
@@ -188,6 +197,17 @@ export function applyPipelineEvent(ev: PipelineEvent): void {
         speed: d.speed ?? null,
         eta: d.eta ?? null,
         total: d.total ?? null,
+        retryMessage: null,
+      });
+      break;
+    }
+    case "Retrying": {
+      const r = ev as Retrying;
+      store.update(r.video_id, {
+        phase: "downloading",
+        speed: null,
+        eta: null,
+        retryMessage: r.message,
       });
       break;
     }

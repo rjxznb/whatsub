@@ -65,6 +65,7 @@ type PipelineEventPayload =
   | { stage: "Waiting"; video_id: string; resource: "download" | "compute" }
   | { stage: "Preparing"; video_id: string; step: string }
   | { stage: "Downloading"; video_id: string; percent: number; total?: string; speed?: string; eta?: string }
+  | { stage: "Retrying"; video_id: string; attempt: number; delay_sec: number; message: string }
   | { stage: "ExtractingAudio"; video_id: string }
   | { stage: "Transcribing"; video_id: string; percent: number }
   | { stage: "Transcribed"; video_id: string; srt_path: string; duration_sec: number }
@@ -378,6 +379,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   const [dlSpeed, setDlSpeed] = useState<string | null>(null);
   const [dlEta, setDlEta] = useState<string | null>(null);
   const [dlTotal, setDlTotal] = useState<string | null>(null);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<LogLine[]>([]);
   // video_id of the in-flight import. Captured from the Started event so
   // we can call cancel_import on Esc / ✕ / 取消 — Rust computes the id
@@ -454,25 +456,30 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     void listen<PipelineEventPayload>("pipeline-event", (e) => {
       if (!foregroundImportActiveRef.current) return;
       const ev = e.payload;
-      // Learn the video_id from EVERY event that carries one, not just
-      // `Started`. ✕ / Esc can only cancel an import whose id we know, and
-      // `Started` is routinely missed: submit() reaches invoke("import_video")
-      // synchronously while this listen() is still registering, so the very
-      // first event can land before the handler exists. When that happened the
-      // id stayed null, cancelInFlight() early-returned, and yt-dlp kept
-      // downloading in the background after the user closed the dialog — the
-      // exact opposite of what ✕ promises. Every later stage (Log / Preparing /
-      // Downloading / …) carries the same id, so picking it up here makes
-      // cancellation robust no matter which event arrives first.
-      if ("video_id" in ev && ev.video_id) {
+      // submit() awaits listener readiness before invoking Rust, so the
+      // foreground Started event is the authoritative task binding. Once
+      // bound, ignore events from concurrent background imports; otherwise a
+      // background retry could overwrite this modal and make ✕ cancel the
+      // wrong task. Pre-bind events may still update visual state for backward
+      // compatibility, but never claim the cancellation id.
+      if (ev.stage === "Started") {
+        if (ev.background) return;
+        if (currentVideoIdRef.current && currentVideoIdRef.current !== ev.video_id) return;
         currentVideoIdRef.current = ev.video_id;
         videoIdWaiterRef.current?.(ev.video_id);
+      } else if (
+        "video_id" in ev &&
+        currentVideoIdRef.current &&
+        ev.video_id !== currentVideoIdRef.current
+      ) {
+        return;
       }
       switch (ev.stage) {
         case "Started":
           setPhase("started");
           setPercent(0);
           setPreparingStep(null);
+          setRetryMessage(null);
           break;
         case "Waiting":
           setPhase(ev.resource === "download" ? "waiting_download" : "waiting_compute");
@@ -487,25 +494,37 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           setDlSpeed(ev.speed ?? null);
           setDlEta(ev.eta ?? null);
           setDlTotal(ev.total ?? null);
+          setRetryMessage(null);
           // Clear sub-step now that we've moved on.
           setPreparingStep(null);
+          break;
+        case "Retrying":
+          setPhase("downloading");
+          setDlSpeed(null);
+          setDlEta(null);
+          setPreparingStep(null);
+          setRetryMessage(ev.message);
           break;
         case "ExtractingAudio":
           setPhase("extracting");
           setPercent(0);
           setPreparingStep(null);
+          setRetryMessage(null);
           break;
         case "Transcribing":
           setPhase("transcribing");
           setPercent(ev.percent);
+          setRetryMessage(null);
           break;
         case "Transcribed":
           setPhase("done");
           setPercent(100);
+          setRetryMessage(null);
           break;
         case "Failed":
           setPhase("error");
           setError(ev.error);
+          setRetryMessage(null);
           break;
         case "Log":
           setLogLines((prev) => {
@@ -1108,6 +1127,12 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
             })}
           </div>
 
+          {retryMessage && (
+            <div role="status" className="mt-3 text-xs text-amber-300">
+              {retryMessage}
+            </div>
+          )}
+
           {showBar && (
             <div className="mt-4 w-full h-1.5 bg-zinc-800 rounded overflow-hidden">
               <div
@@ -1465,10 +1490,9 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 取消
               </button>
               {/* 后台下载 — fire-and-forget. Modal closes immediately; Rust
-                  keeps running with a more patient retry budget (~3 min vs.
-                  foreground's ~10s). The user trades real-time progress for
-                  not being blocked, which is the right trade-off when the
-                  network is flaky enough that 前台 fails fast. */}
+                  uses a more patient pre-transfer budget. Once bytes have
+                  started moving, foreground and background both keep
+                  cancellably resuming transient failures from partial files. */}
               <button
                 onClick={() => void submit({ background: true })}
                 className={

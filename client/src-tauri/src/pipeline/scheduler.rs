@@ -496,6 +496,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_job_releases_download_before_waiting_for_compute() {
+        let scheduler = PipelineScheduler::default();
+        let cancel = CancellationToken::new();
+        let compute = scheduler
+            .acquire(
+                ScheduledResource::Compute,
+                JobPriority::Background,
+                &cancel,
+                || {},
+            )
+            .await
+            .unwrap();
+
+        let first_download = scheduler
+            .acquire(
+                ScheduledResource::Download,
+                JobPriority::Background,
+                &cancel,
+                || {},
+            )
+            .await
+            .unwrap();
+        drop(first_download);
+
+        let waiting_compute = scheduler.acquire(
+            ScheduledResource::Compute,
+            JobPriority::Background,
+            &cancel,
+            || {},
+        );
+        tokio::pin!(waiting_compute);
+        assert!(tokio::time::timeout(SHORT_WAIT, &mut waiting_compute)
+            .await
+            .is_err());
+
+        let d1 = scheduler
+            .acquire(
+                ScheduledResource::Download,
+                JobPriority::Background,
+                &cancel,
+                || {},
+            )
+            .await
+            .unwrap();
+        let d2 = scheduler
+            .acquire(
+                ScheduledResource::Download,
+                JobPriority::Background,
+                &cancel,
+                || {},
+            )
+            .await
+            .unwrap();
+        let d3 = scheduler
+            .acquire(
+                ScheduledResource::Download,
+                JobPriority::Background,
+                &cancel,
+                || {},
+            )
+            .await
+            .unwrap();
+
+        drop((d1, d2, d3, compute));
+        assert!(tokio::time::timeout(MUST_FINISH, &mut waiting_compute)
+            .await
+            .unwrap()
+            .is_ok());
+    }
+
+    #[tokio::test]
     async fn wait_hook_runs_only_when_capacity_is_unavailable() {
         let scheduler = PipelineScheduler::default();
         let cancel = CancellationToken::new();

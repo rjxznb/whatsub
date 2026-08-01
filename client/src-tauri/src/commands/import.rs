@@ -4,8 +4,11 @@ use crate::commands::library::{
 };
 use crate::core::ids;
 use crate::core::paths;
-use crate::core::progress::{emit, PipelineEvent};
+use crate::core::progress::{emit, PipelineEvent, WaitingResource};
 use crate::error::{AppError, AppResult};
+use crate::pipeline::scheduler::{
+    JobPriority, PipelineScheduler, ScheduledResource,
+};
 use crate::pipeline::{ffmpeg, spawn, whisper, ytdlp};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -233,10 +236,22 @@ pub struct ImportResult {
     pub duration_sec: f64,
 }
 
+fn import_priority(background: bool) -> JobPriority {
+    JobPriority::from_background(background)
+}
+
+fn waiting_resource(resource: ScheduledResource) -> WaitingResource {
+    match resource {
+        ScheduledResource::Download => WaitingResource::Download,
+        ScheduledResource::Compute => WaitingResource::Compute,
+    }
+}
+
 #[tauri::command]
 pub async fn import_video(
     app: AppHandle,
     state: State<'_, ImportState>,
+    scheduler: State<'_, PipelineScheduler>,
     req: ImportRequest,
 ) -> AppResult<ImportResult> {
     let video_id = match req.source_kind.as_str() {
@@ -265,6 +280,7 @@ pub async fn import_video(
         &out_dir,
         &req,
         &registration.token,
+        scheduler.inner(),
     )
     .await;
 
@@ -298,6 +314,7 @@ async fn run_import(
     out_dir: &std::path::Path,
     req: &ImportRequest,
     cancel: &CancellationToken,
+    scheduler: &PipelineScheduler,
 ) -> AppResult<ImportResult> {
     emit(
         app,
@@ -309,8 +326,22 @@ async fn run_import(
         },
     );
 
+    let priority = import_priority(req.background);
+    let compute_permit;
     let (video_path, thumb_path, title, duration_sec) = match req.source_kind.as_str() {
         "url" => {
+            let resource = ScheduledResource::Download;
+            let download_permit = scheduler
+                .acquire(resource, priority, cancel, || {
+                    emit(
+                        app,
+                        PipelineEvent::Waiting {
+                            video_id: video_id.to_string(),
+                            resource: waiting_resource(resource),
+                        },
+                    );
+                })
+                .await?;
             let r = ytdlp::download(
                 app,
                 &req.source_value,
@@ -321,6 +352,20 @@ async fn run_import(
                 Some(cancel),
             )
             .await?;
+            drop(download_permit);
+
+            let resource = ScheduledResource::Compute;
+            compute_permit = scheduler
+                .acquire(resource, priority, cancel, || {
+                    emit(
+                        app,
+                        PipelineEvent::Waiting {
+                            video_id: video_id.to_string(),
+                            resource: waiting_resource(resource),
+                        },
+                    );
+                })
+                .await?;
             (
                 PathBuf::from(r.video_path),
                 PathBuf::from(r.thumb_path),
@@ -329,6 +374,18 @@ async fn run_import(
             )
         }
         "local" => {
+            let resource = ScheduledResource::Compute;
+            compute_permit = scheduler
+                .acquire(resource, priority, cancel, || {
+                    emit(
+                        app,
+                        PipelineEvent::Waiting {
+                            video_id: video_id.to_string(),
+                            resource: waiting_resource(resource),
+                        },
+                    );
+                })
+                .await?;
             let dest = out_dir.join("source.mp4");
             // Copy as-is when already web-playable (H.264 + AAC/MP3); otherwise
             // transcode — WebView2 can't decode AC-3/DTS audio (common in MKV →
@@ -395,6 +452,8 @@ async fn run_import(
     let dur_sec = std::fs::metadata(&audio_path)
         .map(|m| m.len() as f64 / (16000.0 * 2.0))
         .unwrap_or(0.0);
+
+    drop(compute_permit);
 
     emit(
         app,
@@ -636,6 +695,24 @@ async fn run_retranscribe(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn foreground_and_background_imports_map_to_scheduler_priority() {
+        assert_eq!(import_priority(false), JobPriority::Foreground);
+        assert_eq!(import_priority(true), JobPriority::Background);
+    }
+
+    #[test]
+    fn scheduler_resources_map_to_stable_waiting_events() {
+        assert!(matches!(
+            waiting_resource(ScheduledResource::Download),
+            WaitingResource::Download
+        ));
+        assert!(matches!(
+            waiting_resource(ScheduledResource::Compute),
+            WaitingResource::Compute
+        ));
+    }
 
     #[tokio::test]
     async fn same_video_registration_is_rejected_until_the_old_job_finishes() {

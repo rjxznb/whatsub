@@ -23,6 +23,7 @@ pub fn run() {
         .manage(commands::models::ModelDownloadState::default())
         .manage(commands::youtube_auth::LoginState::default())
         .manage(commands::import::ImportState::default())
+        .manage(pipeline::scheduler::PipelineScheduler::default())
         .setup(|_app| Ok(()))
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,

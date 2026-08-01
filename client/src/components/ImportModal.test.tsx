@@ -47,8 +47,22 @@ let resolveDeferredSiteLoginCancel: (() => void) | null = null;
 let deferImportCancel = false;
 let rejectImportCancel: Error | null = null;
 let resolveDeferredImportCancel: (() => void) | null = null;
+let rejectNextImportVideo: Error | null = null;
+let importPreflightResult: {
+  videoId: string;
+  state: "missing" | "existing" | "running";
+  title?: string;
+} = { videoId: "jNQXAC9IVRw", state: "missing" };
 const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
-  if (cmd === "import_video") return new Promise(() => {});
+  if (cmd === "import_preflight") return Promise.resolve(importPreflightResult);
+  if (cmd === "import_video") {
+    if (rejectNextImportVideo) {
+      const error = rejectNextImportVideo;
+      rejectNextImportVideo = null;
+      return Promise.reject(error);
+    }
+    return new Promise(() => {});
+  }
   if (cmd === "cancel_import") {
     if (rejectImportCancel) return Promise.reject(rejectImportCancel);
     if (deferImportCancel) {
@@ -69,7 +83,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: unknown) =>
     args === undefined ? invokeMock(cmd) : invokeMock(cmd, args),
 }));
-vi.mock("../store/appDialog", () => ({ notify: vi.fn() }));
+const appDialogMocks = vi.hoisted(() => ({
+  notify: vi.fn(),
+  confirmDialog: vi.fn(),
+}));
+vi.mock("../store/appDialog", () => appDialogMocks);
 vi.mock("../lib/cookieStatus", () => ({
   cookieStatusFor: vi.fn().mockResolvedValue(null),
 }));
@@ -124,6 +142,124 @@ beforeEach(() => {
   deferImportCancel = false;
   rejectImportCancel = null;
   resolveDeferredImportCancel = null;
+  rejectNextImportVideo = null;
+  importPreflightResult = { videoId: "jNQXAC9IVRw", state: "missing" };
+  appDialogMocks.confirmDialog.mockReset();
+  appDialogMocks.confirmDialog.mockResolvedValue(false);
+});
+
+describe("ImportModal — existing video confirmation", () => {
+  beforeEach(() => invokeMock.mockClear());
+
+  function renderWithUrl(onClose: () => void = () => {}) {
+    const r = render(<ImportModal onClose={onClose} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+    return r;
+  }
+
+  it("starts a missing video with overwrite disabled", async () => {
+    const r = renderWithUrl();
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_video", {
+        req: expect.objectContaining({ overwrite: false }),
+      }),
+    );
+    expect(appDialogMocks.confirmDialog).not.toHaveBeenCalled();
+  });
+
+  it("keeps the form open when replacement is cancelled", async () => {
+    importPreflightResult = {
+      videoId: "jNQXAC9IVRw",
+      state: "existing",
+      title: "Me at the zoo",
+    };
+    appDialogMocks.confirmDialog.mockResolvedValue(false);
+    const r = renderWithUrl();
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await waitFor(() =>
+      expect(appDialogMocks.confirmDialog).toHaveBeenCalledWith(
+        expect.stringContaining("Me at the zoo"),
+        expect.objectContaining({
+          title: "视频已存在",
+          okText: "覆盖并重新解析",
+          danger: true,
+        }),
+      ),
+    );
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(false);
+    expect(urlInput().value).toBe(SAMPLE_URL);
+  });
+
+  it("starts a confirmed replacement with overwrite enabled", async () => {
+    importPreflightResult = {
+      videoId: "jNQXAC9IVRw",
+      state: "existing",
+      title: "Me at the zoo",
+    };
+    appDialogMocks.confirmDialog.mockResolvedValue(true);
+    const r = renderWithUrl();
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_video", {
+        req: expect.objectContaining({ overwrite: true, background: false }),
+      }),
+    );
+  });
+
+  it("keeps confirmed overwrite authorization for a background import", async () => {
+    importPreflightResult = {
+      videoId: "jNQXAC9IVRw",
+      state: "existing",
+      title: "Me at the zoo",
+    };
+    appDialogMocks.confirmDialog.mockResolvedValue(true);
+    const onClose = vi.fn();
+    const r = renderWithUrl(onClose);
+    fireEvent.click(r.getByRole("button", { name: "后台下载" }));
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_video", {
+        req: expect.objectContaining({ overwrite: true, background: true }),
+      }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer overwrite while the same video is running", async () => {
+    importPreflightResult = {
+      videoId: "jNQXAC9IVRw",
+      state: "running",
+      title: "Me at the zoo",
+    };
+    const r = renderWithUrl();
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    expect(
+      await r.findByText("该视频正在下载或解析，请等待当前任务完成。"),
+    ).toBeInTheDocument();
+    expect(appDialogMocks.confirmDialog).not.toHaveBeenCalled();
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(false);
+  });
+
+  it("turns a backend duplicate race into the same confirmation flow", async () => {
+    rejectNextImportVideo = new Error("video_exists:jNQXAC9IVRw");
+    appDialogMocks.confirmDialog.mockResolvedValue(true);
+    const r = renderWithUrl();
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await waitFor(() => {
+      const calls = invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]?.[1]).toEqual({
+        req: expect.objectContaining({ overwrite: true }),
+      });
+    });
+    expect(appDialogMocks.confirmDialog).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("ImportModal — managed AI quota preflight", () => {

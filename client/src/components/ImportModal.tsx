@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { notify } from "../store/appDialog";
+import { confirmDialog, notify } from "../store/appDialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
 import { useSettings } from "../store/settings";
@@ -72,6 +72,12 @@ type PipelineEventPayload =
   | { stage: "Failed"; video_id: string; error: string }
   | { stage: "ModelDownload"; progress: number; total_mb: number; downloaded_mb: number }
   | { stage: "Log"; video_id: string; source: string; line: string };
+
+interface ImportPreflight {
+  videoId: string;
+  state: "missing" | "existing" | "running";
+  title?: string;
+}
 
 /**
  * Sub-step labels for the "准备中" phase. Keys must match the
@@ -285,6 +291,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // [] deps) always invokes the LATEST version, not a stale snapshot
   // from the first render.
   const submitRef = useRef<() => Promise<void>>(async () => {});
+  const retryImportOptionsRef = useRef<{
+    background?: boolean;
+    overwriteAuthorized?: boolean;
+  }>({});
 
   function restoreDiagnosisAfterLoginCancel() {
     retryAfterLoginRef.current = false;
@@ -565,7 +575,22 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     }
   }
 
-  async function submit(opts: { background?: boolean } = {}) {
+  async function confirmExistingVideo(title?: string): Promise<boolean> {
+    const label = title?.trim() ? `“${title.trim()}”` : "这个视频";
+    return confirmDialog(
+      `${label}已经在语料库中。是否覆盖并重新下载、转录和解析？`,
+      {
+        title: "视频已存在",
+        okText: "覆盖并重新解析",
+        cancelText: "取消",
+        danger: true,
+      },
+    );
+  }
+
+  async function submit(
+    opts: { background?: boolean; overwriteAuthorized?: boolean } = {},
+  ) {
     const background = opts.background ?? false;
     setError(null);
     setQuotaBlock(null);
@@ -596,6 +621,28 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       return;
     }
 
+    let overwrite = opts.overwriteAuthorized ?? false;
+    if (!overwrite) {
+      let preflight: ImportPreflight;
+      try {
+        preflight = await invoke<ImportPreflight>("import_preflight", {
+          sourceKind,
+          sourceValue,
+        });
+      } catch (e) {
+        setValidationError(`检查视频是否已存在失败：${String(e)}`);
+        return;
+      }
+      if (preflight.state === "running") {
+        setValidationError("该视频正在下载或解析，请等待当前任务完成。");
+        return;
+      }
+      if (preflight.state === "existing") {
+        overwrite = await confirmExistingVideo(preflight.title);
+        if (!overwrite) return;
+      }
+    }
+
     const req = {
       sourceKind,
       sourceValue,
@@ -603,6 +650,11 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       quality,
       analysisStyle,
       background,
+      overwrite,
+    };
+    retryImportOptionsRef.current = {
+      background,
+      overwriteAuthorized: overwrite,
     };
 
     if (background) {
@@ -658,6 +710,16 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         foregroundImportActiveRef.current = false;
         return;
       }
+      if (msg.includes("video_exists:") && !overwrite) {
+        setSubmitting(false);
+        setPhase("idle");
+        currentVideoIdRef.current = null;
+        foregroundImportActiveRef.current = false;
+        if (await confirmExistingVideo()) {
+          void submit({ background, overwriteAuthorized: true });
+        }
+        return;
+      }
       console.error("import_video failed", e);
       setPhase("error");
       setError(msg);
@@ -668,7 +730,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // Keep submitRef pointed at the latest submit() so the in-modal
   // site-login flow's auto-retry (triggered from a `[]`-deps effect)
   // doesn't fire a stale closure with outdated form state.
-  submitRef.current = () => submit();
+  submitRef.current = () => submit(retryImportOptionsRef.current);
 
   function reset() {
     setSubmitting(false);

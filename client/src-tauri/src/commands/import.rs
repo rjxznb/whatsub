@@ -43,9 +43,10 @@ struct ImportRegistration {
     done_tx: watch::Sender<Option<Result<(), ImportCompletionFailure>>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ImportCleanupKind {
     PartialImport,
+    StagedReplacement(PathBuf),
     Retranscription,
 }
 
@@ -119,7 +120,7 @@ impl ImportState {
             ActiveImport {
                 job_id,
                 token: token.clone(),
-                cleanup_kind,
+                cleanup_kind: cleanup_kind.clone(),
                 done,
             },
         );
@@ -136,9 +137,27 @@ impl ImportState {
         job.token.cancel();
         Some(CancellationWaiter {
             job_id: job.job_id,
-            cleanup_kind: job.cleanup_kind,
+            cleanup_kind: job.cleanup_kind.clone(),
             done: job.done.clone(),
         })
+    }
+
+    fn set_cleanup_kind(
+        &self,
+        video_id: &str,
+        job_id: u64,
+        cleanup_kind: ImportCleanupKind,
+    ) -> AppResult<()> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| AppError::Other("import registry poisoned".to_string()))?;
+        let job = active
+            .get_mut(video_id)
+            .filter(|job| job.job_id == job_id)
+            .ok_or_else(|| AppError::Other("import registration disappeared".to_string()))?;
+        job.cleanup_kind = cleanup_kind;
+        Ok(())
     }
 
     fn unregister_if_same(&self, video_id: &str, job_id: u64) -> bool {
@@ -228,6 +247,11 @@ pub struct ImportRequest {
     /// for back-compat with callers that don't set the field.
     #[serde(default)]
     pub background: bool,
+    /// Explicit authorization from the interactive import UI to replace an
+    /// existing local-library video. Older and unattended callers default to
+    /// false and can never overwrite silently.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -296,12 +320,130 @@ fn default_quality() -> String {
     "standard".into()
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum ImportWorkMode {
+    Normal(PathBuf),
+    Replacement { staging: PathBuf, backup: PathBuf },
+}
+
+impl ImportWorkMode {
+    fn work_dir(&self) -> &std::path::Path {
+        match self {
+            Self::Normal(path) => path,
+            Self::Replacement { staging, .. } => staging,
+        }
+    }
+
+    fn cleanup_kind(&self) -> ImportCleanupKind {
+        match self {
+            Self::Normal(_) => ImportCleanupKind::PartialImport,
+            Self::Replacement { staging, .. } => {
+                ImportCleanupKind::StagedReplacement(staging.clone())
+            }
+        }
+    }
+}
+
+fn sibling_artifact(canonical: &std::path::Path, suffix: &str) -> PathBuf {
+    let parent = canonical
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("video");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".{name}.{suffix}-{}-{nonce}", std::process::id()))
+}
+
+fn decide_import_mode(
+    existing: bool,
+    overwrite: bool,
+    canonical: PathBuf,
+) -> AppResult<ImportWorkMode> {
+    if existing && !overwrite {
+        let video_id = canonical
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown");
+        return Err(AppError::Other(format!("video_exists:{video_id}")));
+    }
+    if existing {
+        Ok(ImportWorkMode::Replacement {
+            staging: sibling_artifact(&canonical, "replacement"),
+            backup: sibling_artifact(&canonical, "backup"),
+        })
+    } else {
+        Ok(ImportWorkMode::Normal(canonical))
+    }
+}
+
+fn promote_staged_directory_with<F>(
+    canonical: &std::path::Path,
+    staging: &std::path::Path,
+    backup: &std::path::Path,
+    commit: F,
+) -> AppResult<()>
+where
+    F: FnOnce() -> AppResult<()>,
+{
+    let had_canonical = canonical.exists();
+    if backup.exists() {
+        std::fs::remove_dir_all(backup)?;
+    }
+    if had_canonical {
+        std::fs::rename(canonical, backup)
+            .map_err(|error| AppError::Other(format!("replacement backup failed: {error}")))?;
+    }
+    if let Err(error) = std::fs::rename(staging, canonical) {
+        if had_canonical {
+            let _ = std::fs::rename(backup, canonical);
+        }
+        return Err(AppError::Other(format!(
+            "replacement promotion failed: {error}"
+        )));
+    }
+
+    if let Err(commit_error) = commit() {
+        let mut rollback_errors = Vec::new();
+        if let Err(error) = std::fs::rename(canonical, staging) {
+            rollback_errors.push(format!("new result recovery failed: {error}"));
+        }
+        if had_canonical {
+            if let Err(error) = std::fs::rename(backup, canonical) {
+                rollback_errors.push(format!("old result restore failed: {error}"));
+            }
+        }
+        let suffix = if rollback_errors.is_empty() {
+            String::new()
+        } else {
+            format!("; {}", rollback_errors.join("; "))
+        };
+        return Err(AppError::Other(format!(
+            "replacement metadata commit failed: {commit_error}{suffix}"
+        )));
+    }
+
+    if backup.exists() {
+        let _ = std::fs::remove_dir_all(backup);
+    }
+    Ok(())
+}
+
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub video_id: String,
     pub srt_path: String,
     pub duration_sec: f64,
+}
+
+struct PreparedImport {
+    result: ImportResult,
+    entry: LibraryEntry,
 }
 
 fn import_priority(background: bool) -> JobPriority {
@@ -324,12 +466,37 @@ pub async fn import_video(
 ) -> AppResult<ImportResult> {
     let video_id = derive_video_id(&req.source_kind, &req.source_value)?;
 
-    let out_dir = paths::video_dir(&video_id)?;
-    std::fs::create_dir_all(&out_dir)?;
+    let canonical_dir = paths::video_dir(&video_id)?;
 
     // Register cancellation token BEFORE emitting Started so a fast ✕
     // click can land immediately.
     let registration = state.register(&video_id, ImportCleanupKind::PartialImport)?;
+    let existing = match library_get(video_id.clone()) {
+        Ok(existing) => existing,
+        Err(error) => {
+            state.finish(&video_id, registration, Ok(()));
+            return Err(error);
+        }
+    };
+    let work_mode =
+        match decide_import_mode(existing.is_some(), req.overwrite, canonical_dir.clone()) {
+            Ok(mode) => mode,
+            Err(error) => {
+                state.finish(&video_id, registration, Ok(()));
+                return Err(error);
+            }
+        };
+    if let Err(error) =
+        state.set_cleanup_kind(&video_id, registration.job_id, work_mode.cleanup_kind())
+    {
+        state.finish(&video_id, registration, Ok(()));
+        return Err(error);
+    }
+    let out_dir = work_mode.work_dir().to_path_buf();
+    if let Err(error) = std::fs::create_dir_all(&out_dir) {
+        state.finish(&video_id, registration, Ok(()));
+        return Err(error.into());
+    }
 
     let result = run_import(
         &app,
@@ -338,20 +505,48 @@ pub async fn import_video(
         &req,
         &registration.token,
         scheduler.inner(),
+        !matches!(&work_mode, ImportWorkMode::Replacement { .. }),
     )
     .await;
 
+    let result = match (result, &work_mode) {
+        (Ok(mut prepared), ImportWorkMode::Replacement { staging, backup }) => {
+            prepared.entry.video_dir = Some(canonical_dir.to_string_lossy().to_string());
+            prepared.entry.synced_at = None;
+            prepared.entry.sync_error = None;
+            let promoted = analysis_store::with_destructive_boundary(&video_id, || {
+                promote_staged_directory_with(&canonical_dir, staging, backup, || {
+                    library_upsert(prepared.entry.clone())
+                })
+            });
+            match promoted {
+                Ok(()) => {
+                    prepared.result.srt_path = canonical_dir
+                        .join("transcript.srt")
+                        .to_string_lossy()
+                        .to_string();
+                    Ok(prepared)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        (other, _) => other,
+    };
+
     let cancellation_requested =
         registration.token.is_cancelled() || matches!(result, Err(AppError::Cancelled));
-    let cleanup_result = if cancellation_requested {
-        cleanup_partial(&video_id)
+    let replacement_failed =
+        matches!(&work_mode, ImportWorkMode::Replacement { .. }) && result.is_err();
+    let cleanup_required = cancellation_requested || replacement_failed;
+    let cleanup_result = if cleanup_required {
+        retry_cancel_cleanup(work_mode.cleanup_kind(), &video_id)
     } else {
         Ok(())
     };
 
     // Signal completion only after the exact child has exited and every
     // cleanup operation has either succeeded or produced an honest error.
-    let completion = cancellation_completion(&result, cancellation_requested, &cleanup_result);
+    let completion = cancellation_completion(&result, cleanup_required, &cleanup_result);
     state.finish(&video_id, registration, completion.clone());
     if let Err(failure) = completion {
         return Err(AppError::Other(failure.message()));
@@ -359,7 +554,16 @@ pub async fn import_video(
     if cancellation_requested {
         Err(AppError::Cancelled)
     } else {
-        result
+        let prepared = result?;
+        emit(
+            &app,
+            PipelineEvent::Transcribed {
+                video_id: video_id.to_string(),
+                srt_path: prepared.result.srt_path.clone(),
+                duration_sec: prepared.result.duration_sec,
+            },
+        );
+        Ok(prepared.result)
     }
 }
 
@@ -372,7 +576,8 @@ async fn run_import(
     req: &ImportRequest,
     cancel: &CancellationToken,
     scheduler: &PipelineScheduler,
-) -> AppResult<ImportResult> {
+    publish_library_entry: bool,
+) -> AppResult<PreparedImport> {
     emit(
         app,
         PipelineEvent::Started {
@@ -492,7 +697,9 @@ async fn run_import(
         synced_at: None,
         sync_error: None,
     };
-    library_upsert(entry)?;
+    if publish_library_entry {
+        library_upsert(entry.clone())?;
+    }
 
     emit(
         app,
@@ -518,19 +725,13 @@ async fn run_import(
 
     drop(compute_permit);
 
-    emit(
-        app,
-        PipelineEvent::Transcribed {
+    Ok(PreparedImport {
+        result: ImportResult {
             video_id: video_id.to_string(),
             srt_path: srt_path.to_string_lossy().to_string(),
             duration_sec: dur_sec,
         },
-    );
-
-    Ok(ImportResult {
-        video_id: video_id.to_string(),
-        srt_path: srt_path.to_string_lossy().to_string(),
-        duration_sec: dur_sec,
+        entry,
     })
 }
 
@@ -548,6 +749,17 @@ fn cleanup_partial(video_id: &str) -> AppResult<()> {
 fn retry_cancel_cleanup(kind: ImportCleanupKind, video_id: &str) -> AppResult<()> {
     match kind {
         ImportCleanupKind::PartialImport => cleanup_partial(video_id),
+        ImportCleanupKind::StagedReplacement(path) => {
+            if path.exists() {
+                std::fs::remove_dir_all(&path).map_err(|error| {
+                    AppError::Other(format!(
+                        "replacement cleanup failed ({}): {error}",
+                        path.display()
+                    ))
+                })?;
+            }
+            Ok(())
+        }
         ImportCleanupKind::Retranscription => analysis_store::revoke_analysis_sessions(video_id),
     }
 }
@@ -559,7 +771,7 @@ fn recover_failed_cleanup(
     failure: ImportCompletionFailure,
 ) -> AppResult<()> {
     recover_failed_cleanup_with(state, video_id, waiter, failure, || {
-        retry_cancel_cleanup(waiter.cleanup_kind, video_id)
+        retry_cancel_cleanup(waiter.cleanup_kind.clone(), video_id)
     })
 }
 
@@ -810,16 +1022,11 @@ mod tests {
     #[test]
     fn source_identity_is_shared_for_supported_urls() {
         assert_eq!(
-            derive_video_id(
-                "url",
-                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10"
-            )
-            .unwrap(),
+            derive_video_id("url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10").unwrap(),
             "dQw4w9WgXcQ"
         );
         assert_eq!(
-            derive_video_id("url", "https://www.bilibili.com/video/BV1xx411c7mu")
-                .unwrap(),
+            derive_video_id("url", "https://www.bilibili.com/video/BV1xx411c7mu").unwrap(),
             "BV1xx411c7mu"
         );
     }
@@ -828,16 +1035,115 @@ mod tests {
     fn preflight_classification_prefers_running_over_existing() {
         assert_eq!(
             classify_preflight(true, Some("Existing title")),
-            (ImportPreflightState::Running, Some("Existing title".to_string()))
+            (
+                ImportPreflightState::Running,
+                Some("Existing title".to_string())
+            )
         );
         assert_eq!(
             classify_preflight(false, Some("Existing title")),
-            (ImportPreflightState::Existing, Some("Existing title".to_string()))
+            (
+                ImportPreflightState::Existing,
+                Some("Existing title".to_string())
+            )
         );
         assert_eq!(
             classify_preflight(false, None),
             (ImportPreflightState::Missing, None)
         );
+    }
+
+    #[test]
+    fn existing_import_requires_explicit_overwrite() {
+        assert!(matches!(
+            decide_import_mode(false, false, PathBuf::from("canonical")),
+            Ok(ImportWorkMode::Normal(path)) if path == PathBuf::from("canonical")
+        ));
+        let error = decide_import_mode(true, false, PathBuf::from("canonical"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("video_exists:"));
+
+        let mode = decide_import_mode(true, true, PathBuf::from("canonical")).unwrap();
+        assert!(matches!(mode, ImportWorkMode::Replacement { .. }));
+        assert_ne!(mode.work_dir(), std::path::Path::new("canonical"));
+    }
+
+    fn overwrite_test_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "whatsub-overwrite-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn staged_promotion_replaces_directory_only_after_commit_succeeds() {
+        let root = overwrite_test_root("success");
+        let canonical = root.join("video");
+        let staging = root.join("staging");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(canonical.join("old.txt"), "old").unwrap();
+        std::fs::write(staging.join("new.txt"), "new").unwrap();
+
+        promote_staged_directory_with(&canonical, &staging, &backup, || Ok(())).unwrap();
+
+        assert!(canonical.join("new.txt").exists());
+        assert!(!canonical.join("old.txt").exists());
+        assert!(!staging.exists());
+        assert!(!backup.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_promotion_restores_old_directory_when_commit_fails() {
+        let root = overwrite_test_root("rollback");
+        let canonical = root.join("video");
+        let staging = root.join("staging");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(canonical.join("old.txt"), "old").unwrap();
+        std::fs::write(staging.join("new.txt"), "new").unwrap();
+
+        let error = promote_staged_directory_with(&canonical, &staging, &backup, || {
+            Err(AppError::Other("index write failed".to_string()))
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("index write failed"));
+        assert!(canonical.join("old.txt").exists());
+        assert!(staging.join("new.txt").exists());
+        assert!(!backup.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_replacement_cleanup_never_deletes_the_canonical_video() {
+        let root = overwrite_test_root("cleanup");
+        let canonical = root.join("video");
+        let staging = root.join("staging");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(canonical.join("old.txt"), "old").unwrap();
+        std::fs::write(staging.join("partial.txt"), "partial").unwrap();
+
+        retry_cancel_cleanup(
+            ImportCleanupKind::StagedReplacement(staging.clone()),
+            "ignored-video-id",
+        )
+        .unwrap();
+
+        assert!(canonical.join("old.txt").exists());
+        assert!(!staging.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

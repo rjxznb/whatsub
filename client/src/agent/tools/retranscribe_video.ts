@@ -48,6 +48,7 @@ export const retranscribeVideoTool: ToolDef<
     invoke<void>("retranscribe_video", {
       videoId,
       whisperModel: settings.whisperModel,
+      background: true,
     }).catch((e) =>
       console.warn("[retranscribe_video] background invoke error:", e)
     );

@@ -171,6 +171,7 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
     await invoke("retranscribe_video", {
       videoId: runtime.videoId,
       whisperModel: runtime.whisperModel,
+      background: true,
     });
     if (runtime.controller.signal.aborted) return;
 

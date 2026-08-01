@@ -62,6 +62,7 @@ describe("retranscribe_video tool", () => {
     expect(mockInvoke).toHaveBeenCalledWith("retranscribe_video", {
       videoId: "test-video-2",
       whisperModel: "base",
+      background: true,
     });
   });
 

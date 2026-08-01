@@ -492,6 +492,7 @@ export function Player() {
       await invoke("retranscribe_video", {
         videoId,
         whisperModel: settings.whisperModel,
+        background: false,
       });
       if (!stillOwnsOperation()) return;
       // The next loader compares transcript fingerprints and asks the backend

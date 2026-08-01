@@ -3,6 +3,7 @@ import { waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   cancelBackground,
+  retranscribeAndAnalyzeInBackground,
   resumeBackgroundAnalysis,
   runInBackground,
   takeOverBackground,
@@ -109,6 +110,27 @@ describe("background analysis lease handoff", () => {
     mocks.reload.mockClear();
     mocks.openStoredAnalysisSession.mockReset();
     vi.mocked(invoke).mockReset();
+  });
+
+  it("marks explicit retranscription as background scheduler work", async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    mocks.openStoredAnalysisSession.mockResolvedValue(null);
+
+    retranscribeAndAnalyzeInBackground({
+      videoId: "video-1",
+      label: "Video",
+      style: "colloquial",
+      whisperModel: "small",
+    });
+
+    await waitFor(() =>
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("retranscribe_video", {
+        videoId: "video-1",
+        whisperModel: "small",
+        background: true,
+      }),
+    );
+    await cancelBackground("video-1");
   });
 
   it("resumes offset 50 even when only 47 output subtitles exist", async () => {

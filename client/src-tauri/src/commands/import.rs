@@ -6,9 +6,7 @@ use crate::core::ids;
 use crate::core::paths;
 use crate::core::progress::{emit, PipelineEvent, WaitingResource};
 use crate::error::{AppError, AppResult};
-use crate::pipeline::scheduler::{
-    JobPriority, PipelineScheduler, ScheduledResource,
-};
+use crate::pipeline::scheduler::{JobPriority, PipelineScheduler, ScheduledResource};
 use crate::pipeline::{ffmpeg, spawn, whisper, ytdlp};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -446,9 +444,15 @@ async fn run_import(
     let audio_path = out_dir.join("audio.wav");
     ffmpeg::extract_audio_wav(app, &video_path, &audio_path, video_id, Some(cancel)).await?;
 
-    let srt_path =
-        whisper::transcribe(app, &audio_path, out_dir, &req.whisper_model, video_id, Some(cancel))
-            .await?;
+    let srt_path = whisper::transcribe(
+        app,
+        &audio_path,
+        out_dir,
+        &req.whisper_model,
+        video_id,
+        Some(cancel),
+    )
+    .await?;
     let dur_sec = std::fs::metadata(&audio_path)
         .map(|m| m.len() as f64 / (16000.0 * 2.0))
         .unwrap_or(0.0);
@@ -583,8 +587,10 @@ pub async fn cancel_import(state: State<'_, ImportState>, video_id: String) -> A
 pub async fn retranscribe_video(
     app: AppHandle,
     state: State<'_, ImportState>,
+    scheduler: State<'_, PipelineScheduler>,
     video_id: String,
     whisper_model: String,
+    background: bool,
 ) -> AppResult<ImportResult> {
     let out_dir = paths::video_dir(&video_id)?;
     let video_path = out_dir.join("source.mp4");
@@ -599,14 +605,36 @@ pub async fn retranscribe_video(
     // import_video) so the foreground 「前台解析」 can kill the ffmpeg /
     // whisper child process if the user leaves the Player page mid-run.
     let registration = state.register(&video_id, ImportCleanupKind::Retranscription)?;
-    let result = run_retranscribe(
-        &app,
-        &video_id,
-        &out_dir,
-        &video_path,
-        &whisper_model,
-        &registration.token,
-    )
+    let result = async {
+        let resource = ScheduledResource::Compute;
+        let compute_permit = scheduler
+            .acquire(
+                resource,
+                import_priority(background),
+                &registration.token,
+                || {
+                    emit(
+                        &app,
+                        PipelineEvent::Waiting {
+                            video_id: video_id.clone(),
+                            resource: waiting_resource(resource),
+                        },
+                    );
+                },
+            )
+            .await?;
+        let result = run_retranscribe(
+            &app,
+            &video_id,
+            &out_dir,
+            &video_path,
+            &whisper_model,
+            &registration.token,
+        )
+        .await;
+        drop(compute_permit);
+        result
+    }
     .await;
     let cancellation_requested =
         registration.token.is_cancelled() || matches!(result, Err(AppError::Cancelled));
@@ -668,9 +696,15 @@ async fn run_retranscribe(
     let audio_path = out_dir.join("audio.wav");
     ffmpeg::extract_audio_wav(app, video_path, &audio_path, video_id, Some(cancel)).await?;
 
-    let srt_path =
-        whisper::transcribe(app, &audio_path, out_dir, whisper_model, video_id, Some(cancel))
-            .await?;
+    let srt_path = whisper::transcribe(
+        app,
+        &audio_path,
+        out_dir,
+        whisper_model,
+        video_id,
+        Some(cancel),
+    )
+    .await?;
     let dur_sec = std::fs::metadata(&audio_path)
         .map(|m| m.len() as f64 / (16000.0 * 2.0))
         .unwrap_or(0.0);
@@ -852,7 +886,10 @@ mod tests {
         assert!(state
             .register("v1", ImportCleanupKind::PartialImport)
             .is_err());
-        assert_eq!(state.cancel_and_waiter("v1").unwrap().job_id, replacement.job_id);
+        assert_eq!(
+            state.cancel_and_waiter("v1").unwrap().job_id,
+            replacement.job_id
+        );
     }
 
     #[test]

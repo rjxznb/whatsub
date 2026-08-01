@@ -226,6 +226,15 @@ Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's play
 
 Foreground goal: **fail fast (~25-50s)** so user sees actionable error dialog. Background goal: **patient (~3 min)** so transient blips recover without user supervision. ⚠️ These knobs only control TCP-connect + HTTP retries; they do NOT bound yt-dlp's player-JS sigsolver time — long YouTube videos with large DASH manifests can still take minutes in "准备中".
 
+### Import resource scheduler
+
+- Backend-enforced across every import and retranscription entry point.
+- At most 3 URL yt-dlp stages and 1 ffmpeg/Whisper compute stage run at once.
+- Foreground waiters outrank queued background waiters; running jobs are never preempted.
+- URL jobs release download capacity before waiting for compute.
+- Waiting acquisition is cancellation-aware. Do not bypass the scheduler by spawning import sidecars directly from a command.
+- Limits are automatic and intentionally have no Settings toggle.
+
 **Stall watchdog (2026-06-25).** The retry budgets above only fire when yt-dlp *exits with an error*. A long-video download that **hangs** mid-stream (downloaded half, then a fragment trickles/freezes — process alive, no exit) produced no error, so nothing retried → stuck forever in "准备中" with a half `.part`. Fix: a stall watchdog in `pipeline/spawn.rs` (`run_sidecar_env` + `run_external_with_callback`, both spawn paths). The download's stderr callback bumps a shared `StallCounter` (`Arc<AtomicU64>`) on each parsed progress line; the spawn loop runs a 15s `tokio::time::interval` and, **only once the counter has first moved** (so the legitimately-silent sigsolver/准备中 phase is never killed), kills the child if the counter doesn't advance for 8 ticks (~120s) and returns a `"stalled"` error. `download()` in `ytdlp.rs` treats `"stalled"` as its own recoverable case with a larger budget (`STALL_MAX_RETRIES = 5`, applied even in foreground since resume is cheap), re-spawning with `--continue` so each attempt resumes from the `.part` and progress accumulates. The watchdog is opt-in via the `Option<StallCounter>` param (None for ffmpeg/other sidecars, so their long quiet stretches aren't affected).
 
 **Whisper reuses the same watchdog + auto-restart (2026-06-25).** A laptop that sleeps mid-transcription leaves whisper-cli wedged on wake (suspended process / lost Vulkan context) — the import hung forever at "转录中". `transcribe()` now passes a `StallCounter` (bumped per progress line) so the spawn loop kills a no-progress whisper after ~120s. whisper.cpp has no mid-file resume, so the single attempt is factored into `run_whisper_once()` and `transcribe()` wraps it in a retry loop: a `"stalled"` error re-runs from scratch on the same `audio.wav` (no re-download / re-extract; the GPU is healthy again after wake), up to `WHISPER_STALL_RETRIES = 2`, logging "自动重新转录 (N/2)" and resetting the bar to 0 each restart, then surfacing a real error (→ the Player's 重新转录 backstop). Cancellation + the GPU device-pinning/inventory logic are preserved across retries.

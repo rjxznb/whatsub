@@ -433,6 +433,14 @@ where
     Ok(())
 }
 
+fn canonicalize_replacement_entry(entry: &mut LibraryEntry, canonical: &std::path::Path) {
+    entry.video_dir = Some(canonical.to_string_lossy().to_string());
+    entry.thumbnail_path = canonical.join("thumb.jpg").to_string_lossy().to_string();
+    // The replacement bytes no longer match the previously uploaded copy.
+    entry.synced_at = None;
+    entry.sync_error = None;
+}
+
 #[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportResult {
@@ -511,9 +519,7 @@ pub async fn import_video(
 
     let result = match (result, &work_mode) {
         (Ok(mut prepared), ImportWorkMode::Replacement { staging, backup }) => {
-            prepared.entry.video_dir = Some(canonical_dir.to_string_lossy().to_string());
-            prepared.entry.synced_at = None;
-            prepared.entry.sync_error = None;
+            canonicalize_replacement_entry(&mut prepared.entry, &canonical_dir);
             let promoted = analysis_store::with_destructive_boundary(&video_id, || {
                 promote_staged_directory_with(&canonical_dir, staging, backup, || {
                     library_upsert(prepared.entry.clone())
@@ -1144,6 +1150,39 @@ mod tests {
         assert!(canonical.join("old.txt").exists());
         assert!(!staging.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn replacement_entry_never_persists_staging_paths() {
+        let mut entry = LibraryEntry {
+            id: "v1".to_string(),
+            title: "Replacement".to_string(),
+            source: LibrarySource::Url {
+                url: "https://example.com/video".to_string(),
+            },
+            duration_sec: 1.0,
+            thumbnail_path: "C:/library/.v1.replacement/thumb.jpg".to_string(),
+            created_at: "2026-08-01T00:00:00Z".to_string(),
+            status: LibraryStatus::Analyzing,
+            last_error: None,
+            video_dir: Some("C:/library/.v1.replacement".to_string()),
+            analysis_style: None,
+            synced_at: Some(123),
+            sync_error: Some("old".to_string()),
+        };
+
+        canonicalize_replacement_entry(&mut entry, std::path::Path::new("C:/library/v1"));
+
+        assert_eq!(
+            entry.video_dir.as_deref().map(std::path::Path::new),
+            Some(std::path::Path::new("C:/library/v1"))
+        );
+        assert_eq!(
+            PathBuf::from(&entry.thumbnail_path),
+            std::path::Path::new("C:/library/v1").join("thumb.jpg")
+        );
+        assert_eq!(entry.synced_at, None);
+        assert_eq!(entry.sync_error, None);
     }
 
     #[tokio::test]

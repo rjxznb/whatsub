@@ -465,6 +465,63 @@ fn handle_event<F: FnMut(OutputStream, &str)>(
     }
 }
 
+struct OutputLineTail {
+    pending: String,
+    lines: std::collections::VecDeque<String>,
+    limit: usize,
+}
+
+impl OutputLineTail {
+    fn new(limit: usize) -> Self {
+        Self {
+            pending: String::new(),
+            lines: std::collections::VecDeque::new(),
+            limit,
+        }
+    }
+
+    fn push_line(&mut self, line: &str) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if self.lines.len() >= self.limit {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(trimmed.to_string());
+    }
+
+    fn push(&mut self, chunk: &str) {
+        self.pending.push_str(chunk);
+        while let Some(newline) = self.pending.find('\n') {
+            let line = self.pending[..newline].trim_end_matches('\r').to_string();
+            self.pending.drain(..=newline);
+            self.push_line(&line);
+        }
+
+        const MAX_PENDING_BYTES: usize = 256 * 1024;
+        if self.pending.len() > MAX_PENDING_BYTES {
+            let oversized = std::mem::take(&mut self.pending);
+            self.push_line(&oversized);
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.pending.is_empty() {
+            let final_line = std::mem::take(&mut self.pending);
+            self.push_line(&final_line);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    fn join(&self, separator: &str) -> String {
+        self.lines.iter().cloned().collect::<Vec<_>>().join(separator)
+    }
+}
+
 /// Same contract as `run_sidecar` but spawns an arbitrary path on disk
 /// instead of going through Tauri's shell plugin. Used by yt-dlp when
 /// the user has updated it via Settings → 更新 yt-dlp (lives in AppData,
@@ -503,8 +560,7 @@ where
     let mut stderr = child.stderr.take().expect("piped stderr");
 
     let mut stdout_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
-    let mut stderr_tail: std::collections::VecDeque<String> =
-        std::collections::VecDeque::new();
+    let mut stderr_tail = OutputLineTail::new(TAIL_LINES);
     const TAIL_LINES: usize = 20;
 
     let mut buf_out = vec![0u8; 4096];
@@ -572,12 +628,7 @@ where
                     Ok(n) => {
                         let chunk = String::from_utf8_lossy(&buf_err[..n]).to_string();
                         on_output(OutputStream::Stderr, &chunk);
-                        for line in chunk.lines() {
-                            let t = line.trim();
-                            if t.is_empty() { continue; }
-                            if stderr_tail.len() >= TAIL_LINES { stderr_tail.pop_front(); }
-                            stderr_tail.push_back(t.to_string());
-                        }
+                        stderr_tail.push(&chunk);
                     }
                     Err(_) => stderr_done = true,
                 }
@@ -590,15 +641,12 @@ where
         .await
         .map_err(|e| AppError::Subprocess(format!("wait: {e}")))?;
     let stdout_str = String::from_utf8_lossy(&stdout_buf).to_string();
+    stderr_tail.finish();
 
     match status.code() {
         Some(0) => Ok(stdout_str),
         Some(c) => {
-            let tail = stderr_tail
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n");
+            let tail = stderr_tail.join("\n");
             let detail = if tail.is_empty() {
                 String::new()
             } else {
@@ -790,6 +838,20 @@ mod tests {
             assert_eq!(program, "pkill");
             assert_eq!(args, ["-KILL", "-P", "4242"]);
         }
+    }
+
+    #[test]
+    fn stderr_tail_reassembles_lines_split_across_pipe_reads() {
+        let mut tail = OutputLineTail::new(20);
+
+        tail.push("ERROR: connection re");
+        tail.push("set by peer\nnext line\n");
+        tail.finish();
+
+        assert_eq!(
+            tail.join("\n"),
+            "ERROR: connection reset by peer\nnext line"
+        );
     }
 
     #[test]

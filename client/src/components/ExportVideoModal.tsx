@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Subtitle } from "../llm/types";
-import { subtitlesToAss, type AssCaptionPosition } from "../utils/ass";
+import { normalizeCaptionOffset, subtitlesToAss } from "../utils/ass";
 import { sanitizeFilename } from "../utils/srt";
 
 interface Props {
@@ -11,7 +11,8 @@ interface Props {
   videoTitle: string;
   subtitles: Subtitle[];
   durationSec: number;
-  captionPosition: AssCaptionPosition;
+  captionOffset: { x: number; y: number };
+  captionViewport: { width: number; height: number };
   onClose: () => void;
 }
 
@@ -27,7 +28,8 @@ export function ExportVideoModal({
   videoTitle,
   subtitles,
   durationSec,
-  captionPosition,
+  captionOffset,
+  captionViewport,
   onClose,
 }: Props) {
   const [includeEnglish, setIncludeEnglish] = useState(true);
@@ -92,6 +94,12 @@ export function ExportVideoModal({
     if (!target) return;
 
     // Empty ASS string → Rust skips -vf subtitles= and stream-copies.
+    const captionPosition = normalizeCaptionOffset(
+      captionOffset.x,
+      captionOffset.y,
+      captionViewport.width,
+      captionViewport.height,
+    );
     const ass = hasSubtitleSelected
       ? subtitlesToAss(subtitles, {
           includeEnglish,

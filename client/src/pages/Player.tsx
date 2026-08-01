@@ -7,7 +7,6 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { ContextMenu } from "../components/ContextMenu";
 import { ExportVideoModal } from "../components/ExportVideoModal";
-import { normalizeCaptionOffset } from "../utils/ass";
 import { subtitlesToSrt, sanitizeFilename } from "../utils/srt";
 import { useAnalysis, type AnalysisPhase } from "../store/analysis";
 import { useSettings } from "../store/settings";
@@ -52,6 +51,19 @@ type Tab = "subtitles" | "keyPhrases";
 
 export function canEditSubtitles(phase: AnalysisPhase): boolean {
   return phase !== "analyzing";
+}
+
+export function captionExportGeometry(
+  captionOffset: { x: number; y: number },
+  video: Pick<HTMLVideoElement, "clientWidth" | "clientHeight"> | null,
+) {
+  return {
+    captionOffset,
+    captionViewport: {
+      width: video?.clientWidth ?? 0,
+      height: video?.clientHeight ?? 0,
+    },
+  };
 }
 
 export function restoreForegroundDurablePreview(
@@ -1185,12 +1197,7 @@ export function Player() {
               ? analysis.subtitles[analysis.subtitles.length - 1].endTime
               : 0
           }
-          captionPosition={normalizeCaptionOffset(
-            captionOffset.x,
-            captionOffset.y,
-            videoRef.current?.clientWidth ?? 0,
-            videoRef.current?.clientHeight ?? 0,
-          )}
+          {...captionExportGeometry(captionOffset, videoRef.current)}
           onClose={() => setShowExportVideo(false)}
         />
       )}

@@ -115,6 +115,21 @@ describe("subtitlesToAss", () => {
     expect(out).toContain("hello {\\c&H00FFFF&}big{\\r} world");
   });
 
+  it("keeps an explicit position when highlighted text resets its style", () => {
+    const out = subtitlesToAss(
+      [cue({ text: "hello big world", highlightWords: ["big"] })],
+      {
+        includeEnglish: true,
+        includeChinese: false,
+        highlightKeyPhrases: true,
+        captionPosition: { xRatio: 0.1, yRatio: -0.2 },
+      },
+    );
+    expect(out).toContain(
+      "{\\pos(768,486)}hello {\\c&H00FFFF&}big{\\r} world",
+    );
+  });
+
   it("skips highlights when highlightKeyPhrases is false", () => {
     const out = subtitlesToAss(
       [

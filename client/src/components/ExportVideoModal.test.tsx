@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 
 describe("ExportVideoModal", () => {
-  it("passes the current normalized caption position into burned ASS", async () => {
+  it("normalizes current player geometry into burned ASS position", async () => {
     render(
       <ExportVideoModal
         videoId="video-1"
@@ -34,7 +34,8 @@ describe("ExportVideoModal", () => {
           },
         ]}
         durationSec={1}
-        captionPosition={{ xRatio: 0.1, yRatio: -0.2 }}
+        captionOffset={{ x: 128, y: -144 }}
+        captionViewport={{ width: 1280, height: 720 }}
         onClose={() => {}}
       />,
     );
@@ -47,6 +48,31 @@ describe("ExportVideoModal", () => {
         expect.objectContaining({
           assContent: expect.stringContaining("{\\pos(768,486)}hello world"),
         }),
+      ),
+    );
+  });
+
+  it("keeps stream-copy export free of ASS content", async () => {
+    render(
+      <ExportVideoModal
+        videoId="video-1"
+        videoTitle="Example"
+        subtitles={[]}
+        durationSec={1}
+        captionOffset={{ x: 128, y: -144 }}
+        captionViewport={{ width: 1280, height: 720 }}
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("烧录英文字幕"));
+    fireEvent.click(screen.getByLabelText("烧录中文字幕"));
+    fireEvent.click(screen.getByRole("button", { name: "导出原视频" }));
+
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "export_burned_video",
+        expect.objectContaining({ assContent: "" }),
       ),
     );
   });

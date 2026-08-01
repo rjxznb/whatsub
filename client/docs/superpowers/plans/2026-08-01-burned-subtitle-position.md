@@ -4,7 +4,7 @@
 
 **Goal:** Make burned-in subtitle export inherit the bilingual caption block's current session-only drag displacement.
 
-**Architecture:** Keep `Player` as the owner of temporary pixel offsets, normalize those offsets against the current video element viewport, and pass the normalized value through `ExportVideoModal` into the ASS builder. The ASS builder converts the normalized displacement to PlayRes units and adds the same delta to the existing English and Chinese bottom-center anchors.
+**Architecture:** Keep `Player` as the owner of temporary pixel offsets and pass those offsets plus the current video element viewport to `ExportVideoModal`. The modal normalizes the geometry before calling the ASS builder, which converts the normalized displacement to PlayRes units and adds the same delta to the existing English and Chinese bottom-center anchors.
 
 **Tech Stack:** React 19, TypeScript 5.8, Vitest, Testing Library, ASS/libass, Tauri 2.
 
@@ -24,9 +24,10 @@
 
 - Modify `src/utils/ass.ts`: own normalized caption position types, viewport normalization, and ASS position-tag generation.
 - Modify `src/utils/ass.test.ts`: verify normalization, fallback behavior, PlayRes scaling, and bilingual spacing.
-- Modify `src/components/ExportVideoModal.tsx`: accept a normalized session position and supply it to `subtitlesToAss`.
+- Modify `src/components/ExportVideoModal.tsx`: accept the session pixel offset plus player viewport, normalize them, and supply the result to `subtitlesToAss`.
 - Create `src/components/ExportVideoModal.test.tsx`: verify the modal sends position-aware ASS content to the existing Rust command.
-- Modify `src/pages/Player.tsx`: normalize the current temporary drag offset against the current video element dimensions and pass it to the modal.
+- Modify `src/pages/Player.tsx`: pass the current temporary drag offset and current video element dimensions to the modal.
+- Create `src/pages/Player.captionExport.test.ts`: verify the Player export adapter preserves the session offset and reads the current video viewport.
 
 ---
 
@@ -249,10 +250,11 @@ git commit -m "feat(export): position burned subtitles from player offset"
 - Modify: `src/components/ExportVideoModal.tsx`
 - Create: `src/components/ExportVideoModal.test.tsx`
 - Modify: `src/pages/Player.tsx`
+- Create: `src/pages/Player.captionExport.test.ts`
 
 **Interfaces:**
-- Consumes: `AssCaptionPosition` and `normalizeCaptionOffset` from `src/utils/ass.ts`.
-- Extends: `ExportVideoModal` props with `captionPosition: AssCaptionPosition`.
+- Consumes: `normalizeCaptionOffset` from `src/utils/ass.ts`.
+- Extends: `ExportVideoModal` props with `captionOffset: { x: number; y: number }` and `captionViewport: { width: number; height: number }`.
 - Preserves: existing `export_burned_video` invoke payload; only `assContent` changes.
 
 - [ ] **Step 1: Write a failing modal handoff test**
@@ -294,7 +296,8 @@ describe("ExportVideoModal", () => {
           highlightTranslations: {},
         }]}
         durationSec={1}
-        captionPosition={{ xRatio: 0.1, yRatio: -0.2 }}
+        captionOffset={{ x: 128, y: -144 }}
+        captionViewport={{ width: 1280, height: 720 }}
         onClose={() => {}}
       />,
     );
@@ -321,28 +324,36 @@ Run:
 pnpm test -- src/components/ExportVideoModal.test.tsx
 ```
 
-Expected: FAIL because `captionPosition` is not accepted or forwarded.
+Expected: FAIL because the raw offset and viewport are not accepted or normalized.
 
 - [ ] **Step 3: Thread the normalized position through `ExportVideoModal`**
 
 In `src/components/ExportVideoModal.tsx`:
 
 ```ts
-import { subtitlesToAss, type AssCaptionPosition } from "../utils/ass";
+import { normalizeCaptionOffset, subtitlesToAss } from "../utils/ass";
 
 interface Props {
   videoId: string;
   videoTitle: string;
   subtitles: Subtitle[];
   durationSec: number;
-  captionPosition: AssCaptionPosition;
+  captionOffset: { x: number; y: number };
+  captionViewport: { width: number; height: number };
   onClose: () => void;
 }
 ```
 
-Pass it into the ASS options:
+Normalize the player geometry before building ASS, then pass the result into the ASS options:
 
 ```ts
+const captionPosition = normalizeCaptionOffset(
+  captionOffset.x,
+  captionOffset.y,
+  captionViewport.width,
+  captionViewport.height,
+);
+
 subtitlesToAss(subtitles, {
   includeEnglish,
   includeChinese,
@@ -363,18 +374,29 @@ Expected: both test files pass.
 
 - [ ] **Step 5: Pass the current session offset from `Player`**
 
-Import `normalizeCaptionOffset` in `src/pages/Player.tsx`. Before rendering `ExportVideoModal`, normalize the current temporary offset against the current `<video>` element's CSS viewport:
+Pass the current temporary offset and the current `<video>` element's CSS viewport to `ExportVideoModal`:
 
 ```tsx
-captionPosition={normalizeCaptionOffset(
-  captionOffset.x,
-  captionOffset.y,
-  videoRef.current?.clientWidth ?? 0,
-  videoRef.current?.clientHeight ?? 0,
-)}
+export function captionExportGeometry(
+  captionOffset: { x: number; y: number },
+  video: Pick<HTMLVideoElement, "clientWidth" | "clientHeight"> | null,
+) {
+  return {
+    captionOffset,
+    captionViewport: {
+      width: video?.clientWidth ?? 0,
+      height: video?.clientHeight ?? 0,
+    },
+  };
+}
+
+// ExportVideoModal props:
+{...captionExportGeometry(captionOffset, videoRef.current)}
 ```
 
 This uses the current display geometry at the moment the modal renders and does not write the result into settings or library storage.
+
+Add focused tests in `src/pages/Player.captionExport.test.ts` for a non-zero `1280x720` viewport and for the pre-mount `null` video fallback.
 
 - [ ] **Step 6: Run full frontend verification**
 
@@ -392,7 +414,7 @@ Expected: all frontend tests, typecheck, build, and whitespace checks pass.
 - [ ] **Step 7: Commit Task 2**
 
 ```powershell
-git add -- src/components/ExportVideoModal.tsx src/components/ExportVideoModal.test.tsx src/pages/Player.tsx
+git add -- src/components/ExportVideoModal.tsx src/components/ExportVideoModal.test.tsx src/pages/Player.tsx src/pages/Player.captionExport.test.ts
 git commit -m "feat(player): carry dragged caption position into export"
 ```
 

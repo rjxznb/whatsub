@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Subtitle } from "../llm/types";
-import { subtitlesToAss } from "../utils/ass";
+import { subtitlesToAss, type AssCaptionPosition } from "../utils/ass";
 import { sanitizeFilename } from "../utils/srt";
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
   videoTitle: string;
   subtitles: Subtitle[];
   durationSec: number;
+  captionPosition: AssCaptionPosition;
   onClose: () => void;
 }
 
@@ -26,6 +27,7 @@ export function ExportVideoModal({
   videoTitle,
   subtitles,
   durationSec,
+  captionPosition,
   onClose,
 }: Props) {
   const [includeEnglish, setIncludeEnglish] = useState(true);
@@ -95,6 +97,7 @@ export function ExportVideoModal({
           includeEnglish,
           includeChinese,
           highlightKeyPhrases: highlight,
+          captionPosition,
         })
       : "";
 

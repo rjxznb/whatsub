@@ -88,6 +88,14 @@ impl Default for ImportState {
 }
 
 impl ImportState {
+    fn is_active(&self, video_id: &str) -> AppResult<bool> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| AppError::Other("import registry poisoned".to_string()))?;
+        Ok(active.contains_key(video_id))
+    }
+
     fn register(
         &self,
         video_id: &str,
@@ -222,6 +230,68 @@ pub struct ImportRequest {
     pub background: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportPreflightState {
+    Missing,
+    Existing,
+    Running,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreflight {
+    pub video_id: String,
+    pub state: ImportPreflightState,
+    pub title: Option<String>,
+}
+
+fn derive_video_id(source_kind: &str, source_value: &str) -> AppResult<String> {
+    match source_kind {
+        "url" => Ok(ids::id_from_youtube_url(source_value)
+            .or_else(|| ids::id_from_bilibili_url(source_value))
+            .unwrap_or_else(|| ids::id_from_url_fallback(source_value))),
+        "local" => ids::id_from_file_hash(std::path::Path::new(source_value))
+            .map_err(AppError::InvalidInput),
+        _ => Err(AppError::InvalidInput(format!(
+            "source_kind: {source_kind}"
+        ))),
+    }
+}
+
+fn classify_preflight(
+    running: bool,
+    existing_title: Option<&str>,
+) -> (ImportPreflightState, Option<String>) {
+    let title = existing_title.map(str::to_string);
+    if running {
+        (ImportPreflightState::Running, title)
+    } else if title.is_some() {
+        (ImportPreflightState::Existing, title)
+    } else {
+        (ImportPreflightState::Missing, None)
+    }
+}
+
+#[tauri::command]
+pub fn import_preflight(
+    state: State<'_, ImportState>,
+    source_kind: String,
+    source_value: String,
+) -> AppResult<ImportPreflight> {
+    let video_id = derive_video_id(&source_kind, &source_value)?;
+    let existing = library_get(video_id.clone())?;
+    let (state_kind, title) = classify_preflight(
+        state.is_active(&video_id)?,
+        existing.as_ref().map(|entry| entry.title.as_str()),
+    );
+    Ok(ImportPreflight {
+        video_id,
+        state: state_kind,
+        title,
+    })
+}
+
 fn default_quality() -> String {
     "standard".into()
 }
@@ -252,18 +322,7 @@ pub async fn import_video(
     scheduler: State<'_, PipelineScheduler>,
     req: ImportRequest,
 ) -> AppResult<ImportResult> {
-    let video_id = match req.source_kind.as_str() {
-        "url" => ids::id_from_youtube_url(&req.source_value)
-            .or_else(|| ids::id_from_bilibili_url(&req.source_value))
-            .unwrap_or_else(|| ids::id_from_url_fallback(&req.source_value)),
-        "local" => ids::id_from_file_hash(std::path::Path::new(&req.source_value))?,
-        _ => {
-            return Err(AppError::InvalidInput(format!(
-                "source_kind: {}",
-                req.source_kind
-            )))
-        }
-    };
+    let video_id = derive_video_id(&req.source_kind, &req.source_value)?;
 
     let out_dir = paths::video_dir(&video_id)?;
     std::fs::create_dir_all(&out_dir)?;
@@ -746,6 +805,39 @@ mod tests {
             waiting_resource(ScheduledResource::Compute),
             WaitingResource::Compute
         ));
+    }
+
+    #[test]
+    fn source_identity_is_shared_for_supported_urls() {
+        assert_eq!(
+            derive_video_id(
+                "url",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10"
+            )
+            .unwrap(),
+            "dQw4w9WgXcQ"
+        );
+        assert_eq!(
+            derive_video_id("url", "https://www.bilibili.com/video/BV1xx411c7mu")
+                .unwrap(),
+            "BV1xx411c7mu"
+        );
+    }
+
+    #[test]
+    fn preflight_classification_prefers_running_over_existing() {
+        assert_eq!(
+            classify_preflight(true, Some("Existing title")),
+            (ImportPreflightState::Running, Some("Existing title".to_string()))
+        );
+        assert_eq!(
+            classify_preflight(false, Some("Existing title")),
+            (ImportPreflightState::Existing, Some("Existing title".to_string()))
+        );
+        assert_eq!(
+            classify_preflight(false, None),
+            (ImportPreflightState::Missing, None)
+        );
     }
 
     #[tokio::test]

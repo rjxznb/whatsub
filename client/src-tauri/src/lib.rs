@@ -57,6 +57,7 @@ pub fn run() {
             commands::models::whisper_model_partial_size,
             commands::models::whisper_model_download,
             commands::models::whisper_model_download_cancel,
+            commands::import::import_preflight,
             commands::import::import_video,
             commands::import::cancel_import,
             commands::import::retranscribe_video,

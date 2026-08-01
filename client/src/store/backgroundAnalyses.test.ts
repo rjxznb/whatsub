@@ -16,6 +16,14 @@ import { StaleAnalysisSessionError } from "../llm/analysisSession";
 import { RelayError } from "../llm/providers/relayErrors";
 import type { AnalysisInflightJournal } from "../llm/analysisJournal";
 
+let retranscribePipelineHandler: ((event: { payload: unknown }) => void) | null = null;
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((_name: string, handler: (event: { payload: unknown }) => void) => {
+    retranscribePipelineHandler = handler;
+    return Promise.resolve(() => {});
+  }),
+}));
+
 const mocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
   reload: vi.fn(async () => undefined),
@@ -110,6 +118,7 @@ describe("background analysis lease handoff", () => {
     mocks.reload.mockClear();
     mocks.openStoredAnalysisSession.mockReset();
     vi.mocked(invoke).mockReset();
+    retranscribePipelineHandler = null;
   });
 
   it("marks explicit retranscription as background scheduler work", async () => {
@@ -129,6 +138,43 @@ describe("background analysis lease handoff", () => {
         whisperModel: "small",
         background: true,
       }),
+    );
+    await cancelBackground("video-1");
+  });
+
+  it("shows compute waiting until background retranscription starts", async () => {
+    let finishRetranscribe!: () => void;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "retranscribe_video") {
+        return new Promise<void>((resolve) => {
+          finishRetranscribe = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    mocks.openStoredAnalysisSession.mockResolvedValue(null);
+
+    retranscribeAndAnalyzeInBackground({
+      videoId: "video-1",
+      label: "Video",
+      style: "colloquial",
+      whisperModel: "small",
+    });
+    await waitFor(() => expect(retranscribePipelineHandler).not.toBeNull());
+
+    retranscribePipelineHandler?.({
+      payload: { stage: "Waiting", video_id: "video-1", resource: "compute" },
+    });
+    expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("waiting_compute");
+
+    retranscribePipelineHandler?.({
+      payload: { stage: "Transcribing", video_id: "video-1", percent: 1 },
+    });
+    expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("transcribing");
+
+    finishRetranscribe();
+    await waitFor(() =>
+      expect(useBgAnalyses.getState().jobs["video-1"]?.phase).toBe("error"),
     );
     await cancelBackground("video-1");
   });

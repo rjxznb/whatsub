@@ -11,11 +11,22 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 // Capture the pipeline-event handler so tests can drive real events.
 let pipelineHandler: ((e: { payload: unknown }) => void) | null = null;
 const eventHandlers = new Map<string, (e: { payload: unknown }) => void>();
+let deferPipelineListenerRegistration = false;
+let resolveDeferredPipelineListener: (() => void) | null = null;
 let deferSiteLoginListenerRegistrations = false;
 const deferredSiteLoginUnlistenResolvers: Array<() => void> = [];
 const lateSiteLoginUnlistenMock = vi.fn();
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((name: string, cb: (e: { payload: unknown }) => void) => {
+    if (name === "pipeline-event" && deferPipelineListenerRegistration) {
+      return new Promise<() => void>((resolve) => {
+        resolveDeferredPipelineListener = () => {
+          eventHandlers.set(name, cb);
+          pipelineHandler = cb;
+          resolve(() => {});
+        };
+      });
+    }
     eventHandlers.set(name, cb);
     if (name === "pipeline-event") pipelineHandler = cb;
     if (
@@ -231,7 +242,31 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
   beforeEach(() => {
     invokeMock.mockClear();
     pipelineHandler = null;
+    deferPipelineListenerRegistration = false;
+    resolveDeferredPipelineListener = null;
     eventHandlers.clear();
+  });
+
+  it("does not invoke Rust until the pipeline listener is ready", async () => {
+    deferPipelineListenerRegistration = true;
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await act(async () => {});
+    expect(invokeMock).not.toHaveBeenCalledWith("import_video", expect.anything());
+
+    await act(async () => resolveDeferredPipelineListener?.());
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("import_video", expect.anything()),
+    );
+
+    await act(async () => {
+      pipelineHandler?.({
+        payload: { stage: "Waiting", video_id: "vidReady", resource: "download" },
+      });
+    });
+    expect(r.getByText("等待下载…")).toBeTruthy();
   });
 
   it("shows which scheduler resource the foreground import is waiting for", async () => {

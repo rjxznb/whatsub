@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   executeAnalysisSession,
   openStoredAnalysisSession,
@@ -22,7 +23,7 @@ import {
 export interface BgAnalysisJob {
   videoId: string;
   label: string;
-  phase: "transcribing" | "analyzing" | "done" | "error";
+  phase: "waiting_compute" | "transcribing" | "analyzing" | "done" | "error";
   /** Visible model outputs, including the current durable inflight preview. */
   subtitleCount: number;
   /** Authoritative count of transcript inputs committed to analysis.json. */
@@ -167,7 +168,30 @@ export function retranscribeAndAnalyzeInBackground(opts: RetranscribeBgOptions):
 }
 
 async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
+  let unlisten: UnlistenFn | undefined;
   try {
+    unlisten = await listen<{
+      stage: string;
+      video_id?: string;
+      resource?: "download" | "compute";
+    }>("pipeline-event", (event) => {
+      const payload = event.payload;
+      if (payload.video_id !== runtime.videoId || runtimes.get(runtime.videoId) !== runtime) {
+        return;
+      }
+      if (payload.stage === "Waiting" && payload.resource === "compute") {
+        updateJob(runtime.videoId, (job) => ({ ...job, phase: "waiting_compute" }));
+      } else if (
+        payload.stage === "Started" ||
+        payload.stage === "ExtractingAudio" ||
+        payload.stage === "Transcribing"
+      ) {
+        updateJob(runtime.videoId, (job) => ({ ...job, phase: "transcribing" }));
+      }
+    }).catch((error) => {
+      console.warn("background retranscription progress listener failed", error);
+      return undefined;
+    });
     await invoke("retranscribe_video", {
       videoId: runtime.videoId,
       whisperModel: runtime.whisperModel,
@@ -201,6 +225,7 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
   } catch (error) {
     failRuntime(runtime, error);
   } finally {
+    unlisten?.();
     if (runtime.controller.signal.aborted && runtime.disposition === "cancel") {
       await runtime.session?.close().catch(() => {});
     }

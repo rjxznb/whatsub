@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { notify } from "../store/appDialog";
@@ -384,6 +384,8 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // (sha256/youtube id/url hash) and we don't replicate that logic JS-side.
   const currentVideoIdRef = useRef<string | null>(null);
   const videoIdWaiterRef = useRef<((id: string) => void) | null>(null);
+  const pipelineListenerReadyRef = useRef<Promise<void> | null>(null);
+  const foregroundImportActiveRef = useRef(false);
   const cancelPromiseRef = useRef<Promise<boolean> | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -417,6 +419,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         }
         await cancelImportAndInvalidateAnalysis(id);
         currentVideoIdRef.current = null;
+        foregroundImportActiveRef.current = false;
         return true;
       } catch (e) {
         console.warn("cancel_import failed", e);
@@ -438,12 +441,18 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // The trade-off: a bit more vertical real estate during normal imports.
   const [showLog, setShowLog] = useState(true);
 
-  // Subscribe to pipeline events while submitting so we can render live progress.
-  useEffect(() => {
-    if (!submitting) return;
+  // Register once on mount, before any import can be invoked. submit() awaits
+  // this readiness promise so one-shot Started/Waiting events cannot land in
+  // the gap between setSubmitting(true) and React running an effect.
+  useLayoutEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
-    listen<PipelineEventPayload>("pipeline-event", (e) => {
+    let markReady!: () => void;
+    pipelineListenerReadyRef.current = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    void listen<PipelineEventPayload>("pipeline-event", (e) => {
+      if (!foregroundImportActiveRef.current) return;
       const ev = e.payload;
       // Learn the video_id from EVERY event that carries one, not just
       // `Started`. ✕ / Esc can only cancel an import whose id we know, and
@@ -511,15 +520,20 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           });
           break;
       }
-    }).then((u) => {
-      if (cancelled) u();
-      else unlisten = u;
-    });
+    })
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      })
+      .catch((error) => {
+        console.warn("pipeline-event listener failed", error);
+      })
+      .finally(markReady);
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [submitting]);
+  }, []);
 
   async function pickFile() {
     const result = await open({
@@ -590,12 +604,15 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     }
 
     setSubmitting(true);
+    foregroundImportActiveRef.current = true;
     setPhase("started");
     setPercent(0);
     setDlSpeed(null);
     setDlEta(null);
     setDlTotal(null);
     setLogLines([]);
+
+    await pipelineListenerReadyRef.current;
 
     try {
       const result = await invoke<{
@@ -606,6 +623,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       // Cleared early so a subsequent close doesn't try to cancel an
       // already-completed import.
       currentVideoIdRef.current = null;
+      foregroundImportActiveRef.current = false;
       startFor(result.videoId);
       await reload();
       onClose();
@@ -618,12 +636,14 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       if (msg.includes("cancelled")) {
         setSubmitting(false);
         currentVideoIdRef.current = null;
+        foregroundImportActiveRef.current = false;
         return;
       }
       console.error("import_video failed", e);
       setPhase("error");
       setError(msg);
       setSubmitting(false);
+      foregroundImportActiveRef.current = false;
     }
   }
   // Keep submitRef pointed at the latest submit() so the in-modal
@@ -633,6 +653,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
 
   function reset() {
     setSubmitting(false);
+    foregroundImportActiveRef.current = false;
     setPhase("idle");
     setPercent(0);
     setDlSpeed(null);

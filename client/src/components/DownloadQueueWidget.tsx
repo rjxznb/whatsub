@@ -433,6 +433,8 @@ function phaseText(item: UnifiedItem): string {
     }
   }
   switch (item.phase) {
+    case "waiting_compute":
+      return "等待转录…";
     case "transcribing":
       return "重新转写中";
     case "analyzing":

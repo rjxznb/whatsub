@@ -1,5 +1,34 @@
 import type { Subtitle } from "../llm/types";
 
+export interface AssCaptionPosition {
+  xRatio: number;
+  yRatio: number;
+}
+
+const ZERO_CAPTION_POSITION: AssCaptionPosition = { xRatio: 0, yRatio: 0 };
+
+export function normalizeCaptionOffset(
+  offsetX: number,
+  offsetY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): AssCaptionPosition {
+  if (
+    !Number.isFinite(offsetX) ||
+    !Number.isFinite(offsetY) ||
+    !Number.isFinite(viewportWidth) ||
+    !Number.isFinite(viewportHeight) ||
+    viewportWidth <= 0 ||
+    viewportHeight <= 0
+  ) {
+    return ZERO_CAPTION_POSITION;
+  }
+  return {
+    xRatio: offsetX / viewportWidth,
+    yRatio: offsetY / viewportHeight,
+  };
+}
+
 /** ffmpeg/libass uses centiseconds (1/100 sec) in event times. Round once to
  *  total cs before splitting so floating-point error in `seconds` (e.g.
  *  67.91 stored as 67.9099…) doesn't drop a centisecond. */
@@ -39,6 +68,27 @@ export interface AssBuildOptions {
   /** Source video resolution; libass scales the styles relative to PlayResY. */
   playResX?: number;
   playResY?: number;
+  /** Session-only displacement from the player's default caption position. */
+  captionPosition?: AssCaptionPosition;
+}
+
+function positionOverride(
+  position: AssCaptionPosition | undefined,
+  playResX: number,
+  playResY: number,
+  marginV: number,
+): string {
+  if (
+    !position ||
+    !Number.isFinite(position.xRatio) ||
+    !Number.isFinite(position.yRatio) ||
+    (position.xRatio === 0 && position.yRatio === 0)
+  ) {
+    return "";
+  }
+  const x = Math.round(playResX / 2 + position.xRatio * playResX);
+  const y = Math.round(playResY - marginV + position.yRatio * playResY);
+  return `{\\pos(${x},${y})}`;
 }
 
 /**
@@ -53,6 +103,18 @@ export function subtitlesToAss(
 ): string {
   const playResX = opts.playResX ?? 1280;
   const playResY = opts.playResY ?? 720;
+  const enPosition = positionOverride(
+    opts.captionPosition,
+    playResX,
+    playResY,
+    90,
+  );
+  const zhPosition = positionOverride(
+    opts.captionPosition,
+    playResX,
+    playResY,
+    42,
+  );
 
   // Two styles, anchored bottom-center. English sits on top, Chinese below.
   // MarginV is in PlayRes units; libass scales relative to actual frame size.
@@ -90,7 +152,9 @@ export function subtitlesToAss(
         opts.highlightKeyPhrases ? cue.highlightWords : [],
       );
       if (text.trim()) {
-        lines.push(`Dialogue: 0,${start},${end},EN,,0,0,0,,${text}`);
+        lines.push(
+          `Dialogue: 0,${start},${end},EN,,0,0,0,,${enPosition}${text}`,
+        );
       }
     }
     if (opts.includeChinese) {
@@ -101,7 +165,9 @@ export function subtitlesToAss(
         : [];
       const text = buildLine(cue.translation, zhPhrases);
       if (text.trim()) {
-        lines.push(`Dialogue: 0,${start},${end},ZH,,0,0,0,,${text}`);
+        lines.push(
+          `Dialogue: 0,${start},${end},ZH,,0,0,0,,${zhPosition}${text}`,
+        );
       }
     }
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { subtitlesToAss } from "./ass";
+import { normalizeCaptionOffset, subtitlesToAss } from "./ass";
 import type { Subtitle } from "../llm/types";
 
 function cue(overrides: Partial<Subtitle> = {}): Subtitle {
@@ -17,6 +17,28 @@ function cue(overrides: Partial<Subtitle> = {}): Subtitle {
 }
 
 describe("subtitlesToAss", () => {
+  it("normalizes player pixel displacement against the current viewport", () => {
+    expect(normalizeCaptionOffset(128, -72, 1280, 720)).toEqual({
+      xRatio: 0.1,
+      yRatio: -0.1,
+    });
+  });
+
+  it.each([
+    [10, 20, 0, 720],
+    [10, 20, 1280, 0],
+    [Number.NaN, 20, 1280, 720],
+    [10, Number.POSITIVE_INFINITY, 1280, 720],
+  ])(
+    "falls back to zero displacement for invalid geometry",
+    (x, y, width, height) => {
+      expect(normalizeCaptionOffset(x, y, width, height)).toEqual({
+        xRatio: 0,
+        yRatio: 0,
+      });
+    },
+  );
+
   it("emits a header with PlayRes and two styles", () => {
     const out = subtitlesToAss([cue()], {
       includeEnglish: true,
@@ -29,6 +51,29 @@ describe("subtitlesToAss", () => {
     expect(out).toContain("Style: EN,Arial");
     expect(out).toContain("Style: ZH,Microsoft YaHei");
     expect(out).toContain("[Events]");
+  });
+
+  it("keeps default ASS events free of explicit position overrides", () => {
+    const out = subtitlesToAss([cue()], {
+      includeEnglish: true,
+      includeChinese: true,
+      highlightKeyPhrases: false,
+      captionPosition: { xRatio: 0, yRatio: 0 },
+    });
+    expect(out).not.toContain("\\pos(");
+  });
+
+  it("scales one normalized displacement into both ASS language anchors", () => {
+    const out = subtitlesToAss([cue()], {
+      includeEnglish: true,
+      includeChinese: true,
+      highlightKeyPhrases: false,
+      playResX: 1920,
+      playResY: 1080,
+      captionPosition: { xRatio: 0.1, yRatio: -0.2 },
+    });
+    expect(out).toContain(",EN,,0,0,0,,{\\pos(1152,774)}hello world");
+    expect(out).toContain(",ZH,,0,0,0,,{\\pos(1152,822)}");
   });
 
   it("formats centiseconds in event times", () => {

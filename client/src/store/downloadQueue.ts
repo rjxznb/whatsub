@@ -15,6 +15,8 @@ import { cancelImportAndInvalidateAnalysis } from "../llm/analysisPersistence";
 
 export type QueuePhase =
   | "started"
+  | "waiting_download"
+  | "waiting_compute"
   | "downloading"
   | "extracting"
   | "transcribing"
@@ -99,6 +101,11 @@ type Started = {
   source_value?: string;
   background?: boolean;
 };
+type Waiting = {
+  stage: "Waiting";
+  video_id: string;
+  resource: "download" | "compute";
+};
 type Downloading = {
   stage: "Downloading";
   video_id: string;
@@ -119,6 +126,7 @@ type Failed = { stage: "Failed"; video_id: string; error: string };
 type Uploading = { stage: "Uploading"; video_id: string; percent: number; note?: string };
 type PipelineEvent =
   | Started
+  | Waiting
   | Downloading
   | Extracting
   | Transcribing
@@ -161,6 +169,14 @@ export function applyPipelineEvent(ev: PipelineEvent): void {
         phase: "started",
         percent: 0,
         startedAt: Date.now(),
+      });
+      break;
+    }
+    case "Waiting": {
+      const w = ev as Waiting;
+      store.update(w.video_id, {
+        phase: w.resource === "download" ? "waiting_download" : "waiting_compute",
+        percent: 0,
       });
       break;
     }

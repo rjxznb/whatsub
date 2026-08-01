@@ -224,10 +224,21 @@ export function Player() {
 
   const entry = library.videos.find((v) => v.id === videoId);
 
-  useTauriEvent<{ stage: string; video_id?: string; percent?: number }>(
+  useTauriEvent<{
+    stage: string;
+    video_id?: string;
+    percent?: number;
+    resource?: "download" | "compute";
+  }>(
     "pipeline-event",
     (e) => {
       if (e.video_id !== videoId) return;
+      if (e.stage === "Waiting") {
+        analysis.setPhase(
+          e.resource === "download" ? "waiting_download" : "waiting_compute",
+          0,
+        );
+      }
       if (e.stage === "Downloading") analysis.setPhase("downloading", e.percent);
       if (e.stage === "ExtractingAudio") analysis.setPhase("extracting", 100);
       if (e.stage === "Transcribing") analysis.setPhase("transcribing", e.percent);

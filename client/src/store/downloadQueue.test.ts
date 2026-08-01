@@ -25,6 +25,32 @@ describe("applyPipelineEvent — Uploading", () => {
   });
 });
 
+describe("applyPipelineEvent — Waiting", () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    useDownloadQueue.setState({ entries: {} });
+  });
+
+  it("tracks both scheduler waits and lets running stages replace them", () => {
+    applyPipelineEvent({
+      stage: "Started",
+      video_id: "v1",
+      source_kind: "url",
+      source_value: "https://youtube.com/watch?v=x",
+      background: true,
+    });
+
+    applyPipelineEvent({ stage: "Waiting", video_id: "v1", resource: "download" });
+    expect(useDownloadQueue.getState().entries.v1.phase).toBe("waiting_download");
+
+    applyPipelineEvent({ stage: "Waiting", video_id: "v1", resource: "compute" });
+    expect(useDownloadQueue.getState().entries.v1.phase).toBe("waiting_compute");
+
+    applyPipelineEvent({ stage: "Transcribing", video_id: "v1", percent: 4 });
+    expect(useDownloadQueue.getState().entries.v1.phase).toBe("transcribing");
+  });
+});
+
 describe("download queue cancellation persistence", () => {
   beforeEach(() => {
     mockInvoke.mockReset();

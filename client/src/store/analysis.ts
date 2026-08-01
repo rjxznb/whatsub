@@ -23,6 +23,8 @@ export function dedupSubtitles(subs: Subtitle[]): Subtitle[] {
 
 export type AnalysisPhase =
   | "idle"
+  | "waiting_download"
+  | "waiting_compute"
   | "downloading"
   | "extracting"
   | "transcribing"

@@ -62,6 +62,7 @@ interface Props {
 
 type PipelineEventPayload =
   | { stage: "Started"; video_id: string; source_kind?: string; source_value?: string; background?: boolean }
+  | { stage: "Waiting"; video_id: string; resource: "download" | "compute" }
   | { stage: "Preparing"; video_id: string; step: string }
   | { stage: "Downloading"; video_id: string; percent: number; total?: string; speed?: string; eta?: string }
   | { stage: "ExtractingAudio"; video_id: string }
@@ -99,13 +100,24 @@ interface LogLine {
 }
 const LOG_BUFFER_SIZE = 80;
 
-type Phase = "idle" | "started" | "downloading" | "extracting" | "transcribing" | "done" | "error";
+type Phase =
+  | "idle"
+  | "started"
+  | "waiting_download"
+  | "downloading"
+  | "extracting"
+  | "waiting_compute"
+  | "transcribing"
+  | "done"
+  | "error";
 
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
   started: "准备中",
+  waiting_download: "等待下载…",
   downloading: "下载视频",
   extracting: "抽取音频",
+  waiting_compute: "等待转录…",
   transcribing: "本地转录",
   done: "完成，跳转到播放页",
   error: "失败",
@@ -131,8 +143,10 @@ function transcribeDuration(size: WhisperModelSize): string {
 function phaseDuration(phase: Phase, whisperModel: WhisperModelSize): string {
   switch (phase) {
     case "started":      return "约 5-30 秒";
+    case "waiting_download": return "等待空闲下载任务";
     case "downloading":  return "随网速：几秒到几分钟";
     case "extracting":   return "约 1-5 秒";
+    case "waiting_compute": return "等待空闲转录任务";
     case "transcribing": return transcribeDuration(whisperModel);
     case "done":         return "立即";
     default:             return "";
@@ -450,6 +464,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           setPhase("started");
           setPercent(0);
           setPreparingStep(null);
+          break;
+        case "Waiting":
+          setPhase(ev.resource === "download" ? "waiting_download" : "waiting_compute");
+          setPercent(0);
           break;
         case "Preparing":
           setPreparingStep(ev.step);
@@ -966,8 +984,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 Esc has the same effect (handled in the keydown
                 listener above). */}
             {(phase === "started" ||
+              phase === "waiting_download" ||
               phase === "downloading" ||
               phase === "extracting" ||
+              phase === "waiting_compute" ||
               phase === "transcribing") && (
               <button
                 type="button"
@@ -1003,12 +1023,20 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
               // "done" once we move past downloading (extracting+).
               const isStarted = p === "started";
               const isCurrent = isStarted
-                ? phase === "started" || phase === "downloading"
-                : phase === p;
+                ? phase === "started" || phase === "waiting_download" || phase === "downloading"
+                : p === "transcribing" && phase === "waiting_compute"
+                  ? true
+                  : phase === p;
               const isDone = isStarted
                 ? phaseOrder(phase) > phaseOrder("downloading")
                 : phaseOrder(p) < phaseOrder(phase);
-              const label = isStarted && tab !== "local" ? "下载视频" : PHASE_LABEL[p];
+              const label = phase === "waiting_download" && isStarted
+                ? PHASE_LABEL.waiting_download
+                : phase === "waiting_compute" && p === "transcribing"
+                  ? PHASE_LABEL.waiting_compute
+                  : isStarted && tab !== "local"
+                    ? "下载视频"
+                    : PHASE_LABEL[p];
               return (
                 <div
                   key={p}
@@ -1470,8 +1498,10 @@ function phaseOrder(p: Phase): number {
   return {
     idle: -1,
     started: 0,
+    waiting_download: 0,
     downloading: 1,
     extracting: 2,
+    waiting_compute: 2,
     transcribing: 3,
     done: 4,
     error: 99,

@@ -11,6 +11,13 @@ pub struct GpuDevice {
     pub discrete: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaitingResource {
+    Download,
+    Compute,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "stage")]
 pub enum PipelineEvent {
@@ -29,6 +36,10 @@ pub enum PipelineEvent {
         /// duplicated in the queue panel.
         #[serde(skip_serializing_if = "std::ops::Not::not", default)]
         background: bool,
+    },
+    Waiting {
+        video_id: String,
+        resource: WaitingResource,
     },
     /// Fine-grained "准备中" sub-step. Emitted by the yt-dlp stderr
     /// scanner when it detects known patterns (resolving URL / fetching

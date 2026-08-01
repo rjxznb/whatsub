@@ -170,3 +170,34 @@ describe("background analysis rows", () => {
     expect(navigate).toHaveBeenCalledWith(SETTINGS_LLM_LINK);
   });
 });
+
+describe("background import scheduler waits", () => {
+  beforeEach(() => {
+    useDownloadQueue.setState({ entries: {} });
+    useBgAnalyses.setState({ jobs: {} });
+  });
+
+  it.each([
+    ["waiting_download", "等待下载…"],
+    ["waiting_compute", "等待转录…"],
+  ] as const)("renders %s as %s", (phase, label) => {
+    useDownloadQueue.setState({
+      entries: {
+        "video-1": {
+          videoId: "video-1",
+          sourceKind: "url",
+          sourceValue: "https://youtube.com/watch?v=x",
+          label: "Video",
+          phase,
+          percent: 0,
+          startedAt: 1,
+        },
+      },
+    });
+
+    render(<DownloadQueueWidget />);
+    fireEvent.click(screen.getByTitle("后台任务（1）"));
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+});

@@ -14,6 +14,19 @@ describe("ProgressBanner recovery actions", () => {
     navigate.mockClear();
   });
 
+  it("shows scheduler wait labels without a fabricated progress bar", () => {
+    useAnalysis.setState({ phase: "waiting_compute", progressPercent: 0 });
+
+    const { container, rerender } = render(<ProgressBanner />);
+
+    expect(screen.getByText("等待转录…")).toBeInTheDocument();
+    expect(container.querySelector('[data-testid="determinate-progress"]')).toBeNull();
+
+    useAnalysis.setState({ phase: "waiting_download" });
+    rerender(<ProgressBanner />);
+    expect(screen.getByText("等待下载…")).toBeInTheDocument();
+  });
+
   it("shows canonical and durable partial-batch progress while analyzing", () => {
     const onStop = vi.fn();
     useAnalysis.setState({

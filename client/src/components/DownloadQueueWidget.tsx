@@ -408,6 +408,10 @@ function phaseText(item: UnifiedItem): string {
     switch (item.phase) {
       case "started":
         return "准备中";
+      case "waiting_download":
+        return "等待下载…";
+      case "waiting_compute":
+        return "等待转录…";
       case "downloading":
         return "下载中";
       case "extracting":

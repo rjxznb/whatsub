@@ -234,6 +234,24 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
     eventHandlers.clear();
   });
 
+  it("shows which scheduler resource the foreground import is waiting for", async () => {
+    const r = await startImport();
+
+    await act(async () => {
+      pipelineHandler?.({
+        payload: { stage: "Waiting", video_id: "vidWait", resource: "download" },
+      });
+    });
+    expect(r.getByText("等待下载…")).toBeTruthy();
+
+    await act(async () => {
+      pipelineHandler?.({
+        payload: { stage: "Waiting", video_id: "vidWait", resource: "compute" },
+      });
+    });
+    expect(r.getByText("等待转录…")).toBeTruthy();
+  });
+
   it("cancels using an id learned from a later event when Started was missed", async () => {
     const r = await startImport();
     // Started never arrives (lost to the listen()/invoke race); progress does.

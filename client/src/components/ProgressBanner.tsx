@@ -11,6 +11,8 @@ import {
 const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 
 const PHASE_LABELS: Record<string, string> = {
+  waiting_download: "等待下载…",
+  waiting_compute: "等待转录…",
   downloading: "下载视频",
   extracting: "抽取音频",
   transcribing: "本地转录",
@@ -58,6 +60,7 @@ export function ProgressBanner({
   const isError = phase === "error";
   const isAnalyzing = phase === "analyzing";
   const isPaused = phase === "paused";
+  const isWaiting = phase === "waiting_download" || phase === "waiting_compute";
 
   const tone = quotaError
     ? "bg-amber-900/40 text-amber-100"
@@ -145,8 +148,11 @@ export function ProgressBanner({
         </button>
       )}
 
-      {!isError && !isAnalyzing && !isPaused && (
-        <div className="w-32 h-1.5 bg-zinc-700 rounded overflow-hidden">
+      {!isError && !isAnalyzing && !isPaused && !isWaiting && (
+        <div
+          data-testid="determinate-progress"
+          className="w-32 h-1.5 bg-zinc-700 rounded overflow-hidden"
+        >
           <div
             className="h-full bg-blue-400 transition-all"
             style={{ width: `${progressPercent}%` }}

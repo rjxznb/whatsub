@@ -210,6 +210,36 @@ describe("ImportModal — existing video confirmation", () => {
     );
   });
 
+  it("coalesces rapid replacement submits into one confirmation and one import", async () => {
+    importPreflightResult = {
+      videoId: "jNQXAC9IVRw",
+      state: "existing",
+      title: "Me at the zoo",
+    };
+    let resolveConfirm!: (value: boolean) => void;
+    appDialogMocks.confirmDialog.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveConfirm = resolve;
+      }),
+    );
+    const r = renderWithUrl();
+    const button = r.getByRole("button", { name: "开始解析" });
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(appDialogMocks.confirmDialog).toHaveBeenCalledTimes(1));
+    expect(
+      invokeMock.mock.calls.filter(([cmd]) => cmd === "import_preflight"),
+    ).toHaveLength(1);
+
+    resolveConfirm(true);
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter(([cmd]) => cmd === "import_video"),
+      ).toHaveLength(1),
+    );
+  });
+
   it("keeps confirmed overwrite authorization for a background import", async () => {
     importPreflightResult = {
       videoId: "jNQXAC9IVRw",

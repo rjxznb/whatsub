@@ -381,6 +381,35 @@ fn decide_import_mode(
     }
 }
 
+const REPLACEMENT_RECOVERY_REQUIRED: &str = "replacement recovery required:";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplacementCommit {
+    Committed,
+}
+
+fn replacement_recovery_required(error: &AppError) -> bool {
+    error.to_string().contains(REPLACEMENT_RECOVERY_REQUIRED)
+}
+
+fn commit_replacement_if_active<F>(
+    cancel: &CancellationToken,
+    commit: F,
+) -> AppResult<ReplacementCommit>
+where
+    F: FnOnce() -> AppResult<()>,
+{
+    // This check sits inside the destructive boundary, immediately before
+    // the first rename. Once commit starts it is intentionally
+    // non-interruptible: a late cancel cannot turn a committed replacement
+    // into a reported failure or delete its recovery artifacts.
+    if cancel.is_cancelled() {
+        return Err(AppError::Cancelled);
+    }
+    commit()?;
+    Ok(ReplacementCommit::Committed)
+}
+
 fn promote_staged_directory_with<F>(
     canonical: &std::path::Path,
     staging: &std::path::Path,
@@ -390,17 +419,44 @@ fn promote_staged_directory_with<F>(
 where
     F: FnOnce() -> AppResult<()>,
 {
+    promote_staged_directory_with_ops(
+        canonical,
+        staging,
+        backup,
+        |from, to| std::fs::rename(from, to),
+        commit,
+    )
+}
+
+fn promote_staged_directory_with_ops<R, F>(
+    canonical: &std::path::Path,
+    staging: &std::path::Path,
+    backup: &std::path::Path,
+    mut rename: R,
+    commit: F,
+) -> AppResult<()>
+where
+    R: FnMut(&std::path::Path, &std::path::Path) -> std::io::Result<()>,
+    F: FnOnce() -> AppResult<()>,
+{
     let had_canonical = canonical.exists();
     if backup.exists() {
         std::fs::remove_dir_all(backup)?;
     }
     if had_canonical {
-        std::fs::rename(canonical, backup)
+        rename(canonical, backup)
             .map_err(|error| AppError::Other(format!("replacement backup failed: {error}")))?;
     }
-    if let Err(error) = std::fs::rename(staging, canonical) {
+    if let Err(error) = rename(staging, canonical) {
         if had_canonical {
-            let _ = std::fs::rename(backup, canonical);
+            if let Err(restore_error) = rename(backup, canonical) {
+                return Err(AppError::Other(format!(
+                    "{REPLACEMENT_RECOVERY_REQUIRED} promotion failed ({error}); old result restore failed ({restore_error}); canonical={}; staging={}; backup={}",
+                    canonical.display(),
+                    staging.display(),
+                    backup.display()
+                )));
+            }
         }
         return Err(AppError::Other(format!(
             "replacement promotion failed: {error}"
@@ -409,11 +465,11 @@ where
 
     if let Err(commit_error) = commit() {
         let mut rollback_errors = Vec::new();
-        if let Err(error) = std::fs::rename(canonical, staging) {
+        if let Err(error) = rename(canonical, staging) {
             rollback_errors.push(format!("new result recovery failed: {error}"));
         }
         if had_canonical {
-            if let Err(error) = std::fs::rename(backup, canonical) {
+            if let Err(error) = rename(backup, canonical) {
                 rollback_errors.push(format!("old result restore failed: {error}"));
             }
         }
@@ -422,8 +478,16 @@ where
         } else {
             format!("; {}", rollback_errors.join("; "))
         };
+        let prefix = if rollback_errors.is_empty() {
+            ""
+        } else {
+            REPLACEMENT_RECOVERY_REQUIRED
+        };
         return Err(AppError::Other(format!(
-            "replacement metadata commit failed: {commit_error}{suffix}"
+            "{prefix} replacement metadata commit failed: {commit_error}{suffix}; canonical={}; staging={}; backup={}",
+            canonical.display(),
+            staging.display(),
+            backup.display()
         )));
     }
 
@@ -517,16 +581,20 @@ pub async fn import_video(
     )
     .await;
 
+    let mut replacement_committed = false;
     let result = match (result, &work_mode) {
         (Ok(mut prepared), ImportWorkMode::Replacement { staging, backup }) => {
             canonicalize_replacement_entry(&mut prepared.entry, &canonical_dir);
             let promoted = analysis_store::with_destructive_boundary(&video_id, || {
-                promote_staged_directory_with(&canonical_dir, staging, backup, || {
-                    library_upsert(prepared.entry.clone())
+                commit_replacement_if_active(&registration.token, || {
+                    promote_staged_directory_with(&canonical_dir, staging, backup, || {
+                        library_upsert(prepared.entry.clone())
+                    })
                 })
             });
             match promoted {
-                Ok(()) => {
+                Ok(ReplacementCommit::Committed) => {
+                    replacement_committed = true;
                     prepared.result.srt_path = canonical_dir
                         .join("transcript.srt")
                         .to_string_lossy()
@@ -539,10 +607,16 @@ pub async fn import_video(
         (other, _) => other,
     };
 
-    let cancellation_requested =
-        registration.token.is_cancelled() || matches!(result, Err(AppError::Cancelled));
-    let replacement_failed =
-        matches!(&work_mode, ImportWorkMode::Replacement { .. }) && result.is_err();
+    let preserve_recovery_artifacts = result
+        .as_ref()
+        .err()
+        .is_some_and(replacement_recovery_required);
+    let cancellation_requested = !replacement_committed
+        && !preserve_recovery_artifacts
+        && (registration.token.is_cancelled() || matches!(result, Err(AppError::Cancelled)));
+    let replacement_failed = matches!(&work_mode, ImportWorkMode::Replacement { .. })
+        && result.is_err()
+        && !preserve_recovery_artifacts;
     let cleanup_required = cancellation_requested || replacement_failed;
     let cleanup_result = if cleanup_required {
         retry_cancel_cleanup(work_mode.cleanup_kind(), &video_id)
@@ -1128,6 +1202,68 @@ mod tests {
         assert!(canonical.join("old.txt").exists());
         assert!(staging.join("new.txt").exists());
         assert!(!backup.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_replacement_never_enters_the_commit_boundary() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let called = std::cell::Cell::new(false);
+
+        let result = commit_replacement_if_active(&token, || {
+            called.set(true);
+            Ok(())
+        });
+
+        assert!(matches!(result, Err(AppError::Cancelled)));
+        assert!(!called.get());
+    }
+
+    #[test]
+    fn cancellation_after_replacement_commit_is_too_late_to_rollback() {
+        let token = CancellationToken::new();
+        let result = commit_replacement_if_active(&token, || {
+            token.cancel();
+            Ok(())
+        });
+
+        assert_eq!(result.unwrap(), ReplacementCommit::Committed);
+    }
+
+    #[test]
+    fn failed_restore_marks_recovery_artifacts_for_preservation() {
+        let root = overwrite_test_root("restore-failure");
+        let canonical = root.join("video");
+        let staging = root.join("staging");
+        let backup = root.join("backup");
+        std::fs::create_dir_all(&canonical).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(canonical.join("old.txt"), "old").unwrap();
+        std::fs::write(staging.join("new.txt"), "new").unwrap();
+        let calls = std::cell::Cell::new(0usize);
+
+        let error = promote_staged_directory_with_ops(
+            &canonical,
+            &staging,
+            &backup,
+            |from, to| {
+                let call = calls.get() + 1;
+                calls.set(call);
+                match call {
+                    1 => std::fs::rename(from, to),
+                    2 => Err(std::io::Error::other("promotion denied")),
+                    3 => Err(std::io::Error::other("restore denied")),
+                    _ => unreachable!(),
+                }
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(replacement_recovery_required(&error));
+        assert!(backup.join("old.txt").exists());
+        assert!(staging.join("new.txt").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

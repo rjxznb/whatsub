@@ -221,6 +221,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     setAnalysisStyle(STYLE_SLIDER_ORDER[clamped]);
   }
   const [submitting, setSubmitting] = useState(false);
+  // React state does not update synchronously, so it cannot stop two clicks
+  // in the same event turn from opening duplicate confirmation dialogs or
+  // starting two destructive replacements. This ref is the synchronous gate.
+  const submitGateRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [quotaBlock, setQuotaBlock] = useState<QuotaExhaustedDetails | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -591,6 +595,18 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   async function submit(
     opts: { background?: boolean; overwriteAuthorized?: boolean } = {},
   ) {
+    if (submitGateRef.current) return;
+    submitGateRef.current = true;
+    try {
+      await submitOnce(opts);
+    } finally {
+      submitGateRef.current = false;
+    }
+  }
+
+  async function submitOnce(
+    opts: { background?: boolean; overwriteAuthorized?: boolean } = {},
+  ) {
     const background = opts.background ?? false;
     setError(null);
     setQuotaBlock(null);
@@ -716,7 +732,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         currentVideoIdRef.current = null;
         foregroundImportActiveRef.current = false;
         if (await confirmExistingVideo()) {
-          void submit({ background, overwriteAuthorized: true });
+          await submitOnce({ background, overwriteAuthorized: true });
         }
         return;
       }
@@ -730,7 +746,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // Keep submitRef pointed at the latest submit() so the in-modal
   // site-login flow's auto-retry (triggered from a `[]`-deps effect)
   // doesn't fire a stale closure with outdated form state.
-  submitRef.current = () => submit(retryImportOptionsRef.current);
+  // A login-success retry is an internal continuation of the same logical
+  // submit. It must not be blocked by the user-click gate while the original
+  // invoke is still unwinding after emitting its Failed event.
+  submitRef.current = () => submitOnce(retryImportOptionsRef.current);
 
   function reset() {
     setSubmitting(false);

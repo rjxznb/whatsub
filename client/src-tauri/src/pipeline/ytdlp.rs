@@ -791,6 +791,7 @@ pub async fn download(
         );
         let stall_watch_cb = stall_watch.clone();
         let mut merge_start_detector = MergeStartDetector::default();
+        let mut output_lines = OutputLineBuffer::default();
         // Common stderr callback for both the bundled-sidecar path and
         // the AppData-direct path. Defined here so it's identical in
         // semantics (logs / progress / sub-step detection).
@@ -808,11 +809,11 @@ pub async fn download(
             if observe_merge_chunk(&mut merge_start_detector, stream, chunk) {
                 stall_watch_cb.mark_merging();
             }
-            for actual_line in chunk.lines() {
-                if let Some(step) = detect_prepare_step(actual_line) {
+            for actual_line in output_lines.push(stream, chunk) {
+                if let Some(step) = detect_prepare_step(&actual_line) {
                     emit_step(step);
                 }
-                if let Some(p) = parse_progress(actual_line) {
+                if let Some(p) = parse_progress(&actual_line) {
                     progress_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     emit(
                         &app_cb,
@@ -1068,6 +1069,36 @@ pub(crate) struct DownloadProgress {
     pub total: Option<String>,
     pub speed: Option<String>,
     pub eta: Option<String>,
+}
+
+#[derive(Default)]
+struct OutputLineBuffer {
+    stdout: String,
+    stderr: String,
+}
+
+impl OutputLineBuffer {
+    fn push(&mut self, stream: OutputStream, chunk: &str) -> Vec<String> {
+        let pending = match stream {
+            OutputStream::Stdout => &mut self.stdout,
+            OutputStream::Stderr => &mut self.stderr,
+        };
+        pending.push_str(chunk);
+        let mut lines = Vec::new();
+        while let Some(newline) = pending.find('\n') {
+            let line = pending[..newline].trim_end_matches('\r').to_string();
+            pending.drain(..=newline);
+            lines.push(line);
+        }
+
+        // yt-dlp lines are normally tiny. Bound malformed/no-newline output
+        // so a child cannot grow this parser buffer without limit.
+        const MAX_PENDING_BYTES: usize = 64 * 1024;
+        if pending.len() > MAX_PENDING_BYTES {
+            lines.push(std::mem::take(pending));
+        }
+        lines
+    }
 }
 
 /// Map a yt-dlp stderr line to a fine-grained "准备中" sub-step
@@ -1609,6 +1640,19 @@ mod tests {
         assert_eq!(p.total.as_deref(), Some("458.3MiB"));
         assert_eq!(p.speed.as_deref(), Some("1.2MiB/s"));
         assert_eq!(p.eta.as_deref(), Some("00:42"));
+    }
+
+    #[test]
+    fn buffers_progress_lines_split_across_process_reads() {
+        let mut lines = OutputLineBuffer::default();
+
+        assert!(lines
+            .push(OutputStream::Stdout, "[progress] 42.3%|458.3")
+            .is_empty());
+        let completed = lines.push(OutputStream::Stdout, "MiB|1.2MiB/s|00:42\r\n");
+
+        assert_eq!(completed, vec!["[progress] 42.3%|458.3MiB|1.2MiB/s|00:42"]);
+        assert_eq!(parse_progress(&completed[0]).unwrap().percent, 42);
     }
 
     #[test]

@@ -1,7 +1,9 @@
 use crate::core::paths;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -143,11 +145,88 @@ pub(crate) fn read_index() -> AppResult<Library> {
 }
 
 pub(crate) fn write_index(lib: &Library) -> AppResult<()> {
-    let dir = paths::app_data_dir()?;
-    fs::create_dir_all(&dir)?;
-    let pretty = serde_json::to_string_pretty(lib)?;
-    fs::write(paths::library_index_path()?, pretty)?;
+    let path = paths::library_index_path()?;
+    write_index_at_with_replacer(&path, lib, replace_library_file)
+}
+
+fn write_index_at_with_replacer<F>(path: &Path, lib: &Library, replacer: F) -> AppResult<()>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("library.json");
+    let temporary = path.with_file_name(format!(
+        ".{file_name}.{}.{nonce}.tmp",
+        std::process::id()
+    ));
+    let write_result = (|| -> AppResult<()> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        serde_json::to_writer_pretty(&mut file, lib)?;
+        file.write_all(b"\n")?;
+        file.flush()?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = replacer(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
     Ok(())
+}
+
+#[cfg(windows)]
+fn replace_library_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    if !destination.exists() {
+        return fs::rename(temporary, destination);
+    }
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
+    let destination_wide = wide(destination);
+    let temporary_wide = wide(temporary);
+    let replaced = unsafe {
+        ReplaceFileW(
+            destination_wide.as_ptr(),
+            temporary_wide.as_ptr(),
+            ptr::null(),
+            0,
+            ptr::null(),
+            ptr::null(),
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_library_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, destination)
 }
 
 #[tauri::command]
@@ -624,6 +703,37 @@ mod tests {
             synced_at: None,
             sync_error: None,
         }
+    }
+
+    #[test]
+    fn failed_atomic_index_replace_keeps_the_previous_library_intact() {
+        let root = std::env::temp_dir().join(format!(
+            "whatsub-library-atomic-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("library.json");
+        let mut old = Library::default();
+        upsert_in_memory(&mut old, sample("old"));
+        std::fs::write(&path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+        let mut replacement = Library::default();
+        upsert_in_memory(&mut replacement, sample("new"));
+
+        let error = write_index_at_with_replacer(&path, &replacement, |_temporary, _target| {
+            Err(std::io::Error::other("replace denied"))
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("replace denied"));
+        let persisted: Library =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted.videos.len(), 1);
+        assert_eq!(persisted.videos[0].id, "old");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

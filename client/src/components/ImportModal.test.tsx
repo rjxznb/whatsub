@@ -48,13 +48,20 @@ let deferImportCancel = false;
 let rejectImportCancel: Error | null = null;
 let resolveDeferredImportCancel: (() => void) | null = null;
 let rejectNextImportVideo: Error | null = null;
-let importPreflightResult: {
+type ImportPreflightResult = {
   videoId: string;
   state: "missing" | "existing" | "running";
   title?: string;
-} = { videoId: "jNQXAC9IVRw", state: "missing" };
+};
+let importPreflightResult: ImportPreflightResult = {
+  videoId: "jNQXAC9IVRw",
+  state: "missing",
+};
+let deferredImportPreflight: Promise<ImportPreflightResult> | null = null;
 const invokeMock = vi.fn((cmd: string, _args?: unknown) => {
-  if (cmd === "import_preflight") return Promise.resolve(importPreflightResult);
+  if (cmd === "import_preflight") {
+    return deferredImportPreflight ?? Promise.resolve(importPreflightResult);
+  }
   if (cmd === "import_video") {
     if (rejectNextImportVideo) {
       const error = rejectNextImportVideo;
@@ -144,6 +151,7 @@ beforeEach(() => {
   resolveDeferredImportCancel = null;
   rejectNextImportVideo = null;
   importPreflightResult = { videoId: "jNQXAC9IVRw", state: "missing" };
+  deferredImportPreflight = null;
   appDialogMocks.confirmDialog.mockReset();
   appDialogMocks.confirmDialog.mockResolvedValue(false);
 });
@@ -339,6 +347,154 @@ describe("ImportModal — managed AI quota preflight", () => {
       expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(true),
     );
   });
+
+  it("shows each managed preflight step immediately and blocks duplicate submits", async () => {
+    settingsState.settings.vendorId = "whatsub-managed";
+    let resolveQuota!: (value: {
+      used: number;
+      limit: number;
+      requestCount: number;
+      tier: "pro";
+      periodResetAt: number;
+    }) => void;
+    llmQuotaMock.mockReturnValue(new Promise((resolve) => { resolveQuota = resolve; }));
+    let resolvePreflight!: (value: ImportPreflightResult) => void;
+    deferredImportPreflight = new Promise((resolve) => { resolvePreflight = resolve; });
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    expect(await r.findByRole("status")).toHaveTextContent("正在确认本月 AI 解析额度…");
+    expect(r.getByRole("button", { name: "准备解析中…" })).toBeDisabled();
+    expect(r.getByRole("button", { name: "后台下载" })).toBeDisabled();
+
+    await act(async () => {
+      resolveQuota({
+        used: 0,
+        limit: 5_000_000,
+        requestCount: 0,
+        tier: "pro",
+        periodResetAt: Date.UTC(2026, 7, 1),
+      });
+    });
+
+    await waitFor(() =>
+      expect(r.getByRole("status")).toHaveTextContent(
+        "正在检查这个视频是否已在资料库中…",
+      ),
+    );
+
+    await act(async () => {
+      resolvePreflight({ videoId: "jNQXAC9IVRw", state: "missing" });
+    });
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(true),
+    );
+  });
+
+  it("starts non-managed imports at the existing-video check", async () => {
+    let resolvePreflight!: (value: ImportPreflightResult) => void;
+    deferredImportPreflight = new Promise((resolve) => { resolvePreflight = resolve; });
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    expect(await r.findByRole("status")).toHaveTextContent(
+      "正在检查这个视频是否已在资料库中…",
+    );
+    expect(llmQuotaMock).not.toHaveBeenCalled();
+    expect(r.getByRole("button", { name: "准备解析中…" })).toBeDisabled();
+    expect(r.getByRole("button", { name: "后台下载" })).toBeDisabled();
+
+    await act(async () => {
+      resolvePreflight({ videoId: "jNQXAC9IVRw", state: "missing" });
+    });
+    await waitFor(() =>
+      expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(true),
+    );
+  });
+
+  it("does not continue after cancelling during the managed quota check", async () => {
+    settingsState.settings.vendorId = "whatsub-managed";
+    let resolveQuota!: (value: {
+      used: number;
+      limit: number;
+      requestCount: number;
+      tier: "pro";
+      periodResetAt: number;
+    }) => void;
+    llmQuotaMock.mockReturnValue(new Promise((resolve) => { resolveQuota = resolve; }));
+    const onClose = vi.fn();
+    const r = render(<ImportModal onClose={onClose} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+    expect(await r.findByRole("status")).toHaveTextContent("正在确认本月 AI 解析额度…");
+    fireEvent.click(r.getByRole("button", { name: "取消" }));
+
+    await act(async () => {
+      resolveQuota({
+        used: 0,
+        limit: 5_000_000,
+        requestCount: 0,
+        tier: "pro",
+        periodResetAt: Date.UTC(2026, 7, 1),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_preflight")).toBe(false);
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(false);
+  });
+
+  it("does not start importing after cancelling during the existing-video check", async () => {
+    let resolvePreflight!: (value: ImportPreflightResult) => void;
+    deferredImportPreflight = new Promise((resolve) => { resolvePreflight = resolve; });
+    const onClose = vi.fn();
+    const r = render(<ImportModal onClose={onClose} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+    expect(await r.findByRole("status")).toHaveTextContent(
+      "正在检查这个视频是否已在资料库中…",
+    );
+    fireEvent.click(r.getByRole("button", { name: "取消" }));
+
+    await act(async () => {
+      resolvePreflight({ videoId: "jNQXAC9IVRw", state: "missing" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(false);
+  });
+
+  it("closes immediately and does not import when Escape cancels a preflight", async () => {
+    let resolvePreflight!: (value: ImportPreflightResult) => void;
+    deferredImportPreflight = new Promise((resolve) => { resolvePreflight = resolve; });
+    const onClose = vi.fn();
+    const r = render(<ImportModal onClose={onClose} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+    expect(await r.findByRole("status")).toHaveTextContent(
+      "正在检查这个视频是否已在资料库中…",
+    );
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolvePreflight({ videoId: "jNQXAC9IVRw", state: "missing" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(invokeMock.mock.calls.some(([cmd]) => cmd === "import_video")).toBe(false);
+  });
 });
 
 describe("ImportModal — onboarding sample-URL affordance", () => {
@@ -433,6 +589,22 @@ describe("ImportModal — ✕ cancels the in-flight import", () => {
       });
     });
     expect(r.getByText("等待下载…")).toBeTruthy();
+  });
+
+  it("does not invoke Rust when unmounted before the pipeline listener is ready", async () => {
+    deferPipelineListenerRegistration = true;
+    const r = render(<ImportModal onClose={() => {}} />);
+    fireEvent.change(urlInput(), { target: { value: SAMPLE_URL } });
+    fireEvent.click(r.getByRole("button", { name: "开始解析" }));
+
+    await act(async () => {});
+    r.unmount();
+    await act(async () => {
+      resolveDeferredPipelineListener?.();
+      await Promise.resolve();
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith("import_video", expect.anything());
   });
 
   it("shows which scheduler resource the foreground import is waiting for", async () => {

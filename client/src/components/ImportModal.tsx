@@ -225,6 +225,17 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // in the same event turn from opening duplicate confirmation dialogs or
   // starting two destructive replacements. This ref is the synchronous gate.
   const submitGateRef = useRef(false);
+  // Each logical submission owns a generation. Closing/unmounting the modal
+  // advances it, so late quota/preflight responses cannot start an import
+  // after the user has already cancelled the flow.
+  const submitAttemptRef = useRef(0);
+  const [submitPreparation, setSubmitPreparation] = useState<
+    "quota" | "existing-video" | null
+  >(null);
+  useEffect(() => () => {
+    submitAttemptRef.current += 1;
+    submitGateRef.current = false;
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [quotaBlock, setQuotaBlock] = useState<QuotaExhaustedDetails | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -363,6 +374,13 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     }
   }
 
+  function closeImportModal() {
+    submitAttemptRef.current += 1;
+    submitGateRef.current = false;
+    setSubmitPreparation(null);
+    onClose();
+  }
+
   // Esc dismisses overlays in priority order: error dialog → close modal.
   // Closing the modal during an in-flight foreground import ALSO cancels
   // the backing Rust task (kills yt-dlp/ffmpeg/whisper, cleans partial
@@ -374,16 +392,20 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       if (e.key !== "Escape") return;
       if (showErrorDialog) {
         setShowErrorDialog(false);
+      } else if (submitPreparation) {
+        // No Rust task exists yet, so waiting for a video id would only delay
+        // closing and let the pending preflight continue in the meantime.
+        closeImportModal();
       } else {
         void (async () => {
-          if (await cancelInFlight()) onClose();
+          if (await cancelInFlight()) closeImportModal();
         })();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showErrorDialog, onClose]);
+  }, [showErrorDialog, onClose, submitPreparation]);
 
   const [percent, setPercent] = useState<number>(0);
   // Fine-grained sub-step within "准备中". Cleared on each phase change.
@@ -597,16 +619,21 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   ) {
     if (submitGateRef.current) return;
     submitGateRef.current = true;
+    const attempt = ++submitAttemptRef.current;
     try {
-      await submitOnce(opts);
+      await submitOnce(opts, attempt);
     } finally {
-      submitGateRef.current = false;
+      if (submitAttemptRef.current === attempt) {
+        submitGateRef.current = false;
+      }
     }
   }
 
   async function submitOnce(
     opts: { background?: boolean; overwriteAuthorized?: boolean } = {},
+    attempt: number,
   ) {
+    const isCurrentAttempt = () => submitAttemptRef.current === attempt;
     const background = opts.background ?? false;
     setError(null);
     setQuotaBlock(null);
@@ -628,36 +655,54 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
       return;
     }
 
-    const managedQuotaBlock =
+    let overwrite = opts.overwriteAuthorized ?? false;
+    setSubmitPreparation(
       settings.vendorId === "whatsub-managed"
-        ? await preflightManagedQuota(settings)
-        : null;
-    if (managedQuotaBlock) {
-      setQuotaBlock(managedQuotaBlock);
-      return;
+        ? "quota"
+        : overwrite
+          ? null
+          : "existing-video",
+    );
+    try {
+      const managedQuotaBlock =
+        settings.vendorId === "whatsub-managed"
+          ? await preflightManagedQuota(settings)
+          : null;
+      if (!isCurrentAttempt()) return;
+      if (managedQuotaBlock) {
+        setQuotaBlock(managedQuotaBlock);
+        return;
+      }
+
+      if (!overwrite) {
+        setSubmitPreparation("existing-video");
+        let preflight: ImportPreflight;
+        try {
+          preflight = await invoke<ImportPreflight>("import_preflight", {
+            sourceKind,
+            sourceValue,
+          });
+        } catch (e) {
+          if (!isCurrentAttempt()) return;
+          setValidationError(`检查视频是否已存在失败：${String(e)}`);
+          return;
+        }
+        if (!isCurrentAttempt()) return;
+        if (preflight.state === "running") {
+          setValidationError("该视频正在下载或解析，请等待当前任务完成。");
+          return;
+        }
+        if (preflight.state === "existing") {
+          overwrite = await confirmExistingVideo(preflight.title);
+          if (!isCurrentAttempt()) return;
+          if (!overwrite) return;
+        }
+      }
+    } finally {
+      if (isCurrentAttempt()) setSubmitPreparation(null);
     }
 
-    let overwrite = opts.overwriteAuthorized ?? false;
-    if (!overwrite) {
-      let preflight: ImportPreflight;
-      try {
-        preflight = await invoke<ImportPreflight>("import_preflight", {
-          sourceKind,
-          sourceValue,
-        });
-      } catch (e) {
-        setValidationError(`检查视频是否已存在失败：${String(e)}`);
-        return;
-      }
-      if (preflight.state === "running") {
-        setValidationError("该视频正在下载或解析，请等待当前任务完成。");
-        return;
-      }
-      if (preflight.state === "existing") {
-        overwrite = await confirmExistingVideo(preflight.title);
-        if (!overwrite) return;
-      }
-    }
+    if (!isCurrentAttempt()) return;
 
     const req = {
       sourceKind,
@@ -686,7 +731,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           console.warn("background import failed", e);
         }
       })();
-      onClose();
+      closeImportModal();
       return;
     }
 
@@ -700,6 +745,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
     setLogLines([]);
 
     await pipelineListenerReadyRef.current;
+    if (!isCurrentAttempt()) return;
 
     try {
       const result = await invoke<{
@@ -707,15 +753,18 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         srtPath: string;
         durationSec: number;
       }>("import_video", { req });
+      if (!isCurrentAttempt()) return;
       // Cleared early so a subsequent close doesn't try to cancel an
       // already-completed import.
       currentVideoIdRef.current = null;
       foregroundImportActiveRef.current = false;
       startFor(result.videoId);
       await reload();
+      if (!isCurrentAttempt()) return;
       onClose();
       navigate(`/player/${result.videoId}?srt=${encodeURIComponent(result.srtPath)}`);
     } catch (e) {
+      if (!isCurrentAttempt()) return;
       const msg = String(e);
       // "cancelled" comes from AppError::Cancelled when the user pressed
       // Esc / ✕ — that's not a failure to show in the error dialog,
@@ -731,8 +780,10 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
         setPhase("idle");
         currentVideoIdRef.current = null;
         foregroundImportActiveRef.current = false;
-        if (await confirmExistingVideo()) {
-          await submitOnce({ background, overwriteAuthorized: true });
+        const confirmed = await confirmExistingVideo();
+        if (!isCurrentAttempt()) return;
+        if (confirmed) {
+          await submitOnce({ background, overwriteAuthorized: true }, attempt);
         }
         return;
       }
@@ -749,7 +800,17 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
   // A login-success retry is an internal continuation of the same logical
   // submit. It must not be blocked by the user-click gate while the original
   // invoke is still unwinding after emitting its Failed event.
-  submitRef.current = () => submitOnce(retryImportOptionsRef.current);
+  submitRef.current = async () => {
+    const attempt = ++submitAttemptRef.current;
+    submitGateRef.current = true;
+    try {
+      await submitOnce(retryImportOptionsRef.current, attempt);
+    } finally {
+      if (submitAttemptRef.current === attempt) {
+        submitGateRef.current = false;
+      }
+    }
+  };
 
   function reset() {
     setSubmitting(false);
@@ -1115,7 +1176,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                 disabled={canceling}
                 onClick={() => {
                   void (async () => {
-                    if (await cancelInFlight()) onClose();
+                    if (await cancelInFlight()) closeImportModal();
                   })();
                 }}
                 className="text-zinc-500 hover:text-zinc-200 disabled:opacity-50 text-xl leading-none px-2 -mr-2"
@@ -1555,6 +1616,17 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           </div>
         )}
 
+        {submitPreparation && (
+          <div
+            role="status"
+            className="mt-3 text-xs text-blue-300"
+          >
+            {submitPreparation === "quota"
+              ? "正在确认本月 AI 解析额度…"
+              : "正在检查这个视频是否已在资料库中…"}
+          </div>
+        )}
+
         {(() => {
           // Visually disable the submit buttons when no source is set,
           // but keep them clickable — clicking surfaces the inline
@@ -1562,12 +1634,13 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
           // Don't use HTML `disabled` because that would swallow the
           // click and the user wouldn't see why the action didn't fire.
           const canSubmit = tab === "url" ? !!urlValue.trim() : !!filePath;
-          const disabledCls = canSubmit
+          const actionsDisabled = submitPreparation !== null;
+          const disabledCls = canSubmit && !actionsDisabled
             ? ""
             : " opacity-50 cursor-not-allowed";
           return (
             <div className="flex justify-end items-center gap-2 mt-5">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm text-zinc-300">
+              <button onClick={closeImportModal} className="px-3 py-1.5 text-sm text-zinc-300">
                 取消
               </button>
               {/* 后台下载 — fire-and-forget. Modal closes immediately; Rust
@@ -1575,6 +1648,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                   started moving, foreground and background both keep
                   cancellably resuming transient failures from partial files. */}
               <button
+                disabled={actionsDisabled}
                 onClick={() => void submit({ background: true })}
                 className={
                   "px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded" +
@@ -1594,6 +1668,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
               </button>
               <button
                 data-tour="submit-button"
+                disabled={actionsDisabled}
                 onClick={() => void submit({ background: false })}
                 className={
                   "px-4 py-1.5 bg-blue-500 hover:bg-blue-400 text-black text-sm rounded font-medium" +
@@ -1607,7 +1682,7 @@ export function ImportModal({ onClose, initialFilePath, showSampleLink }: Props)
                     : "请先选择视频文件"
                 }
               >
-                开始解析
+                {actionsDisabled ? "准备解析中…" : "开始解析"}
               </button>
             </div>
           );

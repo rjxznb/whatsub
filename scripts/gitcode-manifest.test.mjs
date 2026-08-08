@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { releaseAsset, rewriteManifest } from './gitcode-manifest.mjs';
 
@@ -91,4 +92,25 @@ test('preserves manifests with missing platforms without adding entries', () => 
     rewriteManifest(manifest, { owner: 'rjxznb', repo: 'whatsub-release' }),
     manifest,
   );
+});
+
+test('GitCode mirror workflow keeps its required security and verification contract', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),
+    'utf8',
+  );
+
+  for (const required of [
+    'workflow_call',
+    'workflow_dispatch',
+    'GITCODE_TOKEN',
+    'Range: bytes=0-0',
+    'scripts/gitcode-manifest.mjs',
+  ]) {
+    assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  for (const forbidden of ['curl -I', 'jihulab.com', 'GITCODE_TOKEN=']) {
+    assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
 });

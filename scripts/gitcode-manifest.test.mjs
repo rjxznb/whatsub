@@ -74,6 +74,8 @@ test('releaseAsset decodes the final URL filename', () => {
 test('rejects malformed or non-GitHub release asset hosts', () => {
   for (const url of [
     'https://gitcode.com/rjxznb/whatsub-release/releases/download/v0.1.108/app.exe',
+    'https://github.com:444/rjxznb/whatsub-releases/releases/download/v0.1.108/app.exe',
+    'https://user:password@github.com/rjxznb/whatsub-releases/releases/download/v0.1.108/app.exe',
     'https://github.com/other/repo/releases/download/v0.1.108/app.exe',
     'https://github.com/rjxznb/whatsub-releases/releases/tag/v0.1.108',
     'https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.108/',

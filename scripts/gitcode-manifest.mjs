@@ -16,6 +16,9 @@ export function releaseAsset(url) {
   if (
     parsed.protocol !== 'https:' ||
     parsed.hostname !== 'github.com' ||
+    parsed.port ||
+    parsed.username ||
+    parsed.password ||
     parsed.search ||
     parsed.hash
   ) {

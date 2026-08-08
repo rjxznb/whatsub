@@ -135,8 +135,6 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     'find_attachment_id',
     '/releases/$encoded_tag/attach_files/$attachment_id',
     'gh release view "$tag"',
-    'windows-x86_64',
-    'darwin-aarch64',
     '%header{content-range}',
     'Content-Range:\\ bytes\\ 0-0/[1-9][0-9]*$',
     '--globoff',
@@ -164,5 +162,77 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     workflow,
     /\.attach_file_id\s*\/\/\s*\.id/,
     'only the documented attach_file_id may be used for an attachment delete',
+  );
+
+  const planner = await readFile(
+    new URL('./gitcode-mirror-plan.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(planner, /windows-x86_64/);
+  assert.match(planner, /darwin-aarch64/);
+});
+
+test('mirror plan includes every requested-release asset plus carried updater assets', async () => {
+  const { buildMirrorPlan } = await import('./gitcode-mirror-plan.mjs');
+  const requestedTag = 'v0.1.108';
+  const plan = buildMirrorPlan({
+    requestedTag,
+    currentAssets: [
+      { name: 'latest.json' },
+      { name: 'whatsub_0.1.108_x64-setup.exe' },
+      { name: 'whatsub_0.1.108_x64-setup.exe.sig' },
+      { name: 'whatsub_0.1.108.dmg' },
+      { name: 'whatsub_0.1.108_aarch64.app.tar.gz' },
+      { name: 'whatsub_0.1.108_aarch64.app.tar.gz.sig' },
+    ],
+    manifest: {
+      platforms: {
+        'windows-x86_64': {
+          url: githubAsset('v0.1.107', 'whatsub_0.1.107_x64-setup.exe'),
+        },
+        'darwin-aarch64': {
+          url: githubAsset('v0.1.106', 'whatsub_0.1.106_aarch64.app.tar.gz'),
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    plan.map(({ tag, fileName, source }) => ({ tag, fileName, source })),
+    [
+      { tag: requestedTag, fileName: 'latest.json', source: 'rewritten-manifest' },
+      { tag: requestedTag, fileName: 'whatsub_0.1.108_x64-setup.exe', source: 'current-download' },
+      { tag: requestedTag, fileName: 'whatsub_0.1.108_x64-setup.exe.sig', source: 'current-download' },
+      { tag: requestedTag, fileName: 'whatsub_0.1.108.dmg', source: 'current-download' },
+      { tag: requestedTag, fileName: 'whatsub_0.1.108_aarch64.app.tar.gz', source: 'current-download' },
+      { tag: requestedTag, fileName: 'whatsub_0.1.108_aarch64.app.tar.gz.sig', source: 'current-download' },
+      { tag: 'v0.1.107', fileName: 'whatsub_0.1.107_x64-setup.exe', source: 'carried-updater' },
+      { tag: 'v0.1.106', fileName: 'whatsub_0.1.106_aarch64.app.tar.gz', source: 'carried-updater' },
+    ],
+  );
+  assert.equal(new Set(plan.map(({ tag, fileName }) => `${tag}\u0000${fileName}`)).size, plan.length);
+});
+
+test('mirror workflow promotes the requested release before mirroring a full asset plan', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),
+    'utf8',
+  );
+
+  for (const required of [
+    'promote_requested_release',
+    'api_request --request PATCH',
+    'scripts/gitcode-mirror-plan.mjs',
+    'rewritten-manifest',
+    'current-download',
+    'carried-updater',
+    'promote_requested_release "$tag"',
+  ]) {
+    assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  assert.ok(
+    workflow.indexOf('promote_requested_release "$tag"') < workflow.indexOf('while IFS= read -r asset'),
+    'requested release promotion must happen before any asset processing',
   );
 });

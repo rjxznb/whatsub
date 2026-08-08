@@ -123,17 +123,27 @@ jobs:
                 ;;
             esac
 
-            if [ "$release_tag" = "$tag" ]; then
-              payload=$(jq -nc --arg tag "$release_tag" --arg name "whatsub $release_tag" \
-                '{tag_name:$tag, name:$name, body:"", target_commitish:"main", release_status:"latest"}')
-            else
-              # Omit release_status so GitCode creates a normal (non-latest) carried Release.
-              payload=$(jq -nc --arg tag "$release_tag" --arg name "whatsub $release_tag" \
-                '{tag_name:$tag, name:$name, body:"", target_commitish:"main"}')
-            fi
+            # Releases start normal; only promote_requested_release may make one latest.
+            payload=$(jq -nc --arg tag "$release_tag" --arg name "whatsub $release_tag" \
+              '{tag_name:$tag, name:$name, body:"", target_commitish:"main"}')
             api_request --request POST --header 'Content-Type: application/json' \
               --data "$payload" --output "$summary_file" \
               "$api_base/repos/$mirror_owner/$mirror_repo/releases"
+          }
+
+          promote_requested_release() {
+            local release_tag="$1"
+            local encoded_tag summary_file release_name release_body payload
+            ensure_release "$release_tag"
+            encoded_tag=$(urlencode "$release_tag")
+            summary_file=$(release_file summary "$release_tag")
+            release_name=$(jq -r --arg fallback "whatsub $release_tag" '.name // $fallback' "$summary_file")
+            release_body=$(jq -r '.body // ""' "$summary_file")
+            payload=$(jq -nc --arg tag "$release_tag" --arg name "$release_name" --arg body "$release_body" \
+              '{tag_name:$tag, name:$name, body:$body, release_status:"latest"}')
+            api_request --request PATCH --header 'Content-Type: application/json' \
+              --data "$payload" --output "$summary_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag"
           }
 
           fetch_release_detail() {
@@ -276,44 +286,45 @@ jobs:
           rm -rf work mirror
           mkdir -p work/releases work/uploads work/assets
           require_published_github_release
+          # Promotion is independent of updater URLs: both platforms may be carried from older tags.
+          promote_requested_release "$tag"
           current_assets_dir="work/current-$(hash_value "$tag")"
           mkdir -p "$current_assets_dir"
           gh release download "$tag" --repo "$source_repo" --dir "$current_assets_dir"
+          gh release view "$tag" --repo "$source_repo" --json assets > work/current-assets.json
           latest_file="$current_assets_dir/latest.json"
           test -f "$latest_file" || { echo "::error::GitHub Release $tag has no latest.json"; exit 1; }
           cp "$latest_file" work/source-latest.json
 
-          node --input-type=module - work/source-latest.json work/assets.json <<'NODE'
-          import { readFile, writeFile } from 'node:fs/promises';
-          import { releaseAsset } from './scripts/gitcode-manifest.mjs';
-
-          const manifest = JSON.parse(await readFile(process.argv[2], 'utf8'));
-          const requiredPlatforms = ['windows-x86_64', 'darwin-aarch64'];
-          for (const platformName of requiredPlatforms) {
-            if (typeof manifest.platforms?.[platformName]?.url !== 'string') {
-              throw new TypeError(`latest.json must provide a string URL for ${platformName}`);
-            }
-          }
-
-          const assets = new Map();
-          for (const platform of Object.values(manifest.platforms ?? {})) {
-            if (platform && typeof platform.url === 'string') {
-              const { tag, fileName } = releaseAsset(platform.url);
-              assets.set(`${tag}\u0000${fileName}`, { tag, fileName, sourceUrl: platform.url });
-            }
-          }
-          await writeFile(process.argv[3], `${JSON.stringify([...assets.values()])}\n`, 'utf8');
-          NODE
+          node scripts/gitcode-mirror-plan.mjs \
+            work/source-latest.json work/current-assets.json "$tag" work/assets.json
           node scripts/gitcode-manifest.mjs work/source-latest.json work/latest.json
           test -s work/assets.json || { echo '::error::latest.json has no updater assets'; exit 1; }
 
           while IFS= read -r asset; do
             asset_tag=$(jq -r '.tag' <<< "$asset")
             asset_name=$(jq -r '.fileName' <<< "$asset")
-            source_url=$(jq -r '.sourceUrl' <<< "$asset")
+            asset_source=$(jq -r '.source' <<< "$asset")
             asset_path="work/assets/$(asset_key "$asset_tag" "$asset_name")"
-            curl --fail --silent --show-error --location --globoff \
-              --proto '=https' --proto-redir '=https' --output "$asset_path" "$source_url"
+            case "$asset_source" in
+              rewritten-manifest)
+                cp work/latest.json "$asset_path"
+                ;;
+              current-download)
+                current_asset="$current_assets_dir/$asset_name"
+                test -f "$current_asset" || { echo "::error::Downloaded GitHub Release is missing $asset_name"; exit 1; }
+                cp -- "$current_asset" "$asset_path"
+                ;;
+              carried-updater)
+                source_url=$(jq -r '.sourceUrl' <<< "$asset")
+                curl --fail --silent --show-error --location --globoff \
+                  --proto '=https' --proto-redir '=https' --output "$asset_path" "$source_url"
+                ;;
+              *)
+                echo "::error::Unknown mirror asset source $asset_source"
+                exit 1
+                ;;
+            esac
             test -s "$asset_path" || { echo '::error::Downloaded GitHub asset is empty'; exit 1; }
             upload_asset "$asset_tag" "$asset_path" "$asset_name"
             verify_asset "$asset_tag" "$asset_name"

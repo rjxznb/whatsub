@@ -107,14 +107,14 @@ Pre-Plan-D server builds returned only `{ mine }`. Both Rust (`#[serde(default)]
 
 GitHub remains the release source of truth. The reusable `.github/workflows/mirror-gitcode.yml` mirrors its published release assets and writes GitCode's stable `main/latest.json` with GitCode asset URLs. Same minisign key for both—signature bytes remain identical; only each platform URL is rewritten.
 
-Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. The only GitCode mirror secret is `GITCODE_TOKEN`: create a GitCode PAT with minimum `api` scope, copy it when first shown (it is shown once), and store it as the private repository's Actions secret.
+Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. Cross-repository publication to canonical GitHub uses the existing `RELEASES_REPO_TOKEN`. `GITCODE_TOKEN` is the only GitCode credential and the only secret passed to `mirror-gitcode.yml`: create a GitCode PAT with minimum `api` scope, copy it when first shown (it is shown once), and store it as the private repository's Actions secret.
 
 ### Per-release
 
 1. Bump version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (must match).
 2. Commit + push to `main`.
 3. GH Actions → **Release** → Run workflow. Inputs: `targets` (both/windows/macos, single-platform iterates with the other carried over), `release_notes`, `whisper_tag`, `vulkan_sdk_version` (bump if LunarG 404s an old version), `node_version`, `yt_dlp_tag` (default `latest`; pin to e.g. `2026.03.17` when chasing an upstream regression), `dry_run`. `dry_run=true` publishes neither GitHub nor GitCode.
-4. ~5–25 min depending on cache hit. Both `.msi` + `.dmg` get signed; `.dmg` is notarized + stapled in CI. `.app.tar.gz` repackaged from the stapled `.app` so auto-updater serves notarized version.
+4. ~5–25 min depending on cache hit. Windows produces NSIS `*-setup.exe` plus `*-setup.exe.sig`; macOS produces `.dmg`, `.app.tar.gz`, and `.app.tar.gz.sig`. The `.dmg` is notarized + stapled in CI, and `.app.tar.gz` is repackaged from the stapled `.app` so auto-updater serves the notarized version. The five release assets are uploaded before `latest.json`.
 
 If GitHub publish succeeds but the mirror fails, manually dispatch **Mirror releases to GitCode** with the same tag to retry/backfill. Verify each anonymous GitCode asset with `GET Range: bytes=0-0`: success is exactly HTTP `206` and `Content-Range: bytes 0-0/<positive-size>`; never use `HEAD`. GitCode's attachment UI has been verified at a 2 GB maximum.
 
@@ -133,7 +133,7 @@ Updater state lives in a module-level zustand store in `useUpdater.ts` (not comp
 - **Never lose the private key** (public key shipped in app; rotation breaks all installed clients).
 - **Never make source repo public** without rotating the local backup key.
 - **Never delete a release users installed from** — breaks signature chain for subsequent updates.
-- **Never commit `.msi` / `.sig`** — release assets only.
+- **Never commit `*-setup.exe`, `.dmg`, `.app.tar.gz`, or their `.sig` files** — release assets only.
 
 ### JiHu migration history
 

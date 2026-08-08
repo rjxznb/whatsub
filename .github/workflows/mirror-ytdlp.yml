@@ -132,11 +132,12 @@ jobs:
           upload_url_from() {
             local response_file="$1"
             jq -er '
-              [
+              (.url? | select(type == "string" and test("^https://"))) //
+              ([
                 .. | objects | to_entries[]? |
                 select(.key | ascii_downcase | test("upload.*url|url.*upload")) |
                 .value | .. | strings | select(test("^https://"))
-              ] | first // empty
+              ] | first // empty)
             ' "$response_file"
           }
 
@@ -144,7 +145,7 @@ jobs:
             local asset_path="$1"
             local asset_name="$2"
             local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_policy upload_method
-            local -a form_fields upload_command
+            local -a form_fields upload_headers upload_command
 
             ensure_release
             encoded_tag=$(urlencode "$tag")
@@ -182,6 +183,13 @@ jobs:
               .. | objects | .fields? | objects | to_entries[]? |
               [.key, (.value | tostring)] | @tsv
             ' "$upload_response")
+            upload_headers=()
+            while IFS=$'\t' read -r field value; do
+              upload_headers+=(--header "$field: $value")
+            done < <(jq -r '
+              .headers? | objects | to_entries[]? |
+              [.key, (.value | tostring)] | @tsv
+            ' "$upload_response")
             upload_method=$(jq -r '
               [
                 .. | objects | to_entries[]? |
@@ -199,11 +207,11 @@ jobs:
               exit 1
             fi
             if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
-              "${upload_command[@]}" --request POST "${form_fields[@]}" \
+              "${upload_command[@]}" "${upload_headers[@]}" --request POST "${form_fields[@]}" \
                 --form "file=@$asset_path;filename=$asset_name" "$upload_url" > /dev/null
             elif [ -z "$upload_method" ] || [ "$upload_method" = PUT ]; then
-              "${upload_command[@]}" --upload-file "$asset_path" \
-                --url-query "name=$asset_name" "$upload_url" > /dev/null
+              "${upload_command[@]}" "${upload_headers[@]}" --upload-file "$asset_path" \
+                "$upload_url" > /dev/null
             else
               echo "::error::GitCode returned an unsupported upload method: $upload_method"
               exit 1

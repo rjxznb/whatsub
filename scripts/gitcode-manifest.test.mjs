@@ -167,11 +167,13 @@ test('yt-dlp mirror workflow uses the GitCode release controller security contra
     '--globoff',
     "trap 'rm -rf \"$work_dir\"' EXIT",
     '--url-query "file_name=$asset_name"',
+    '.url?',
+    '.headers?',
   ]) {
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
-  for (const forbidden of ['jihulab.com', 'GITLAB_TOKEN', 'curl -I', 'GITCODE_TOKEN=', 'body:""']) {
+  for (const forbidden of ['jihulab.com', 'GITLAB_TOKEN', 'curl -I', 'GITCODE_TOKEN=', 'body:""', '--url-query "name=$asset_name"']) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
@@ -240,6 +242,8 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     'REQUESTED_TAG',
     '--url-query "access_token=$GITCODE_TOKEN"',
     '--url-query "file_name=$asset_name"',
+    '.url?',
+    '.headers?',
   ]) {
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -252,6 +256,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     'PRIVATE-TOKEN:',
     'Authorization: Bearer',
     'body:""',
+    '--url-query "name=$asset_name"',
   ]) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

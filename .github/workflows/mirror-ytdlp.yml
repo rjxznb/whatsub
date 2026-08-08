@@ -123,7 +123,7 @@ jobs:
             jq -r -s --arg name "$asset_name" '
               [ .[] | .. | objects |
                 select(.name? == $name or .file_name? == $name or .filename? == $name) |
-                (.attach_file_id // empty) |
+                (.attach_file_id // .id // empty) |
                 select((type == "string" and length > 0) or type == "number") | tostring
               ] | first // empty
             ' "$@"

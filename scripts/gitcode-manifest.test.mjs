@@ -237,7 +237,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     '--globoff',
     'https://gitcode.com/rjxznb/whatsub-release.git',
     'REQUESTED_TAG',
-    'Authorization: Bearer $GITCODE_TOKEN',
+    '--url-query "access_token=$GITCODE_TOKEN"',
   ]) {
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -248,6 +248,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     'https://github.com/rjxznb/whatsub-release.git',
     '--header "PRIVATE-TOKEN: $GITCODE_TOKEN" \\\n+                --upload-file',
     'PRIVATE-TOKEN:',
+    'Authorization: Bearer',
   ]) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

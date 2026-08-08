@@ -52,7 +52,7 @@ jobs:
 
           api_request() {
             curl --fail --silent --show-error --proto '=https' --max-redirs 0 \
-              --header "Authorization: Bearer $GITCODE_TOKEN" "$@"
+              --url-query "access_token=$GITCODE_TOKEN" "$@"
           }
 
           api_get_status() {
@@ -60,7 +60,7 @@ jobs:
             local url="$2"
             local status
             status=$(curl --silent --show-error --proto '=https' --max-redirs 0 \
-              --header "Authorization: Bearer $GITCODE_TOKEN" \
+              --url-query "access_token=$GITCODE_TOKEN" \
               --output "$output" --write-out '%{http_code}' "$url") || return
             printf '%s' "$status"
           }
@@ -191,7 +191,7 @@ jobs:
             upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0)
             # A returned presigned host never receives the GitCode personal access token.
             if [ "$upload_policy" = allow-private-token ]; then
-              upload_command+=(--header "Authorization: Bearer $GITCODE_TOKEN")
+              upload_command+=(--url-query "access_token=$GITCODE_TOKEN")
             elif [ "$upload_policy" != forbid-private-token ]; then
               echo '::error::GitCode returned an unsupported upload policy'
               exit 1

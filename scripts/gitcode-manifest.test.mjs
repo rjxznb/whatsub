@@ -101,6 +101,24 @@ test('preserves manifests with missing platforms without adding entries', () => 
   );
 });
 
+test('release workflow publishes before mirroring GitCode and skips both in dry runs', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/release.yml', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(workflow, /publish:[\s\S]*?outputs:\s*\r?\n\s*tag:/);
+  assert.match(workflow, /id:\s*publish-release/);
+  assert.match(workflow, /echo\s+"tag=v\$VERSION"\s*>>\s*"\$GITHUB_OUTPUT"/);
+  assert.match(workflow, /mirror-gitcode:\s*\r?\n\s*needs:\s*publish/);
+  assert.match(workflow, /if:\s*\$\{\{\s*!inputs\.dry_run\s*&&\s*needs\.publish\.result\s*==\s*'success'\s*\}\}/);
+  assert.match(workflow, /uses:\s*\.\/\.github\/workflows\/mirror-gitcode\.yml/);
+  assert.match(workflow, /tag:\s*\$\{\{\s*needs\.publish\.outputs\.tag\s*\}\}/);
+  assert.match(workflow, /GITCODE_TOKEN:\s*\$\{\{\s*secrets\.GITCODE_TOKEN\s*\}\}/);
+  assert.doesNotMatch(workflow, /Mirror to JiHu GitLab/);
+  assert.doesNotMatch(workflow, /GITLAB_TOKEN/);
+});
+
 test('GitCode mirror workflow keeps its required security and verification contract', async () => {
   const workflow = await readFile(
     new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),

@@ -7,7 +7,7 @@
 | `scripts/` (本文件其余内容) | **Python 视频素材采集 pipeline**：从 YouTube 自动搜索、过滤、转写、AI 评分、下载 | 见下文 |
 | [`client/`](./client/) | **Tauri 桌面客户端**（whatsub）：本地 whisper.cpp + LLM 翻译 + 双语播放器 | [`client/README.md`](./client/README.md) · [`client/CLAUDE.md`](./client/CLAUDE.md) |
 
-最新客户端下载：[Releases 页](https://github.com/rjxznb/whatsub-releases/releases/latest)（Windows .msi + macOS arm64 .dmg）。
+最新客户端下载（GitCode 优先，GitHub 备用）：[GitCode Releases](https://gitcode.com/rjxznb/whatsub-release/releases) · [GitHub Releases](https://github.com/rjxznb/whatsub-releases/releases/latest)。Windows 使用 NSIS `*-setup.exe`，macOS Apple Silicon 使用 `.dmg`。
 
 ---
 

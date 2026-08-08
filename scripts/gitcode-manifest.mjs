@@ -30,18 +30,20 @@ export function releaseAsset(url) {
     throw new TypeError('GitHub release asset URL is invalid');
   }
 
+  let tag;
   let fileName;
   try {
+    tag = decodeURIComponent(match[1]);
     fileName = decodeURIComponent(match[2]);
   } catch {
     throw new TypeError('GitHub release asset URL is invalid');
   }
 
-  if (!fileName || fileName.includes('/')) {
+  if (!tag || !fileName || fileName.includes('/')) {
     throw new TypeError('GitHub release asset URL is invalid');
   }
 
-  return { tag: match[1], fileName };
+  return { tag, fileName };
 }
 
 export function rewriteManifest(manifest, { owner, repo }) {

@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { releaseAsset, rewriteManifest } from './gitcode-manifest.mjs';
 
 const githubAsset = (tag, fileName) =>
-  `https://github.com/rjxznb/whatsub-releases/releases/download/${tag}/${encodeURIComponent(fileName)}`;
+  `https://github.com/rjxznb/whatsub-releases/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(fileName)}`;
 
 test('rewrites both updater platform URLs to GitCode and preserves manifest fields', () => {
   const manifest = {
@@ -72,6 +72,13 @@ test('releaseAsset decodes the final URL filename', () => {
   );
 });
 
+test('releaseAsset decodes slash-bearing release tags', () => {
+  assert.deepEqual(
+    releaseAsset(githubAsset('release/2026.08', 'whatsub installer.exe')),
+    { tag: 'release/2026.08', fileName: 'whatsub installer.exe' },
+  );
+});
+
 test('rejects malformed or non-GitHub release asset hosts', () => {
   for (const url of [
     'https://gitcode.com/rjxznb/whatsub-release/releases/download/v0.1.108/app.exe',
@@ -113,4 +120,49 @@ test('GitCode mirror workflow keeps its required security and verification contr
   for (const forbidden of ['curl -I', 'jihulab.com', 'GITCODE_TOKEN=']) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+});
+
+test('GitCode mirror workflow hardens the release-mirror controller boundaries', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),
+    'utf8',
+  );
+
+  for (const required of [
+    'REQUESTED_TAG: ${{ inputs.tag }}',
+    'GH_TOKEN: ${{ github.token }}',
+    'fetch_release_detail',
+    'find_attachment_id',
+    '/releases/$encoded_tag/attach_files/$attachment_id',
+    'gh release view "$tag"',
+    'windows-x86_64',
+    'darwin-aarch64',
+    '%header{content-range}',
+    'Content-Range:\\ bytes\\ 0-0/[1-9][0-9]*$',
+    '--globoff',
+    'https://gitcode.com/rjxznb/whatsub-release.git',
+    'REQUESTED_TAG',
+  ]) {
+    assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  for (const forbidden of [
+    'RELEASES_REPO_TOKEN',
+    "requested_tag='${{ inputs.tag }}'",
+    'https://github.com/rjxznb/whatsub-release.git',
+    '--header "PRIVATE-TOKEN: $GITCODE_TOKEN" \\\n+                --upload-file',
+  ]) {
+    assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  assert.doesNotMatch(
+    workflow,
+    /PRIVATE-TOKEN:\s*(?!\$GITCODE_TOKEN\b)[^\s'"\\]+/,
+    'a literal GitCode token must never be committed',
+  );
+  assert.doesNotMatch(
+    workflow,
+    /\.attach_file_id\s*\/\/\s*\.id/,
+    'only the documented attach_file_id may be used for an attachment delete',
+  );
 });

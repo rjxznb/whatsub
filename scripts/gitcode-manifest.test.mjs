@@ -170,7 +170,7 @@ test('yt-dlp mirror workflow uses the GitCode release controller security contra
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
-  for (const forbidden of ['jihulab.com', 'GITLAB_TOKEN', 'curl -I', 'GITCODE_TOKEN=']) {
+  for (const forbidden of ['jihulab.com', 'GITLAB_TOKEN', 'curl -I', 'GITCODE_TOKEN=', 'body:""']) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
@@ -249,6 +249,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     '--header "PRIVATE-TOKEN: $GITCODE_TOKEN" \\\n+                --upload-file',
     'PRIVATE-TOKEN:',
     'Authorization: Bearer',
+    'body:""',
   ]) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

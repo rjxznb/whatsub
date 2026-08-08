@@ -84,7 +84,8 @@ jobs:
             esac
 
             payload=$(jq -nc --arg tag "$tag" --arg name 'yt-dlp mirror' \
-              '{tag_name:$tag, name:$name, body:"", target_commitish:"main"}')
+              --arg body 'Mirrored from the official yt-dlp GitHub Release' \
+              '{tag_name:$tag, name:$name, body:$body, target_commitish:"main"}')
             api_request --request POST --header 'Content-Type: application/json' \
               --data "$payload" --output "$summary_file" \
               "$api_base/repos/$mirror_owner/$mirror_repo/releases"

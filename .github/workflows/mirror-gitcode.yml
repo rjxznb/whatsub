@@ -125,7 +125,8 @@ jobs:
 
             # Releases start normal; only promote_requested_release may make one latest.
             payload=$(jq -nc --arg tag "$release_tag" --arg name "whatsub $release_tag" \
-              '{tag_name:$tag, name:$name, body:"", target_commitish:"main"}')
+              --arg body "Mirrored from GitHub Release $release_tag" \
+              '{tag_name:$tag, name:$name, body:$body, target_commitish:"main"}')
             api_request --request POST --header 'Content-Type: application/json' \
               --data "$payload" --output "$summary_file" \
               "$api_base/repos/$mirror_owner/$mirror_repo/releases"
@@ -138,7 +139,8 @@ jobs:
             encoded_tag=$(urlencode "$release_tag")
             summary_file=$(release_file summary "$release_tag")
             release_name=$(jq -r --arg fallback "whatsub $release_tag" '.name // $fallback' "$summary_file")
-            release_body=$(jq -r '.body // ""' "$summary_file")
+            release_body=$(jq -r --arg fallback "Mirrored from GitHub Release $release_tag" \
+              'if (.body // "") == "" then $fallback else .body end' "$summary_file")
             payload=$(jq -nc --arg tag "$release_tag" --arg name "$release_name" --arg body "$release_body" \
               '{tag_name:$tag, name:$name, body:$body, release_status:"latest"}')
             api_request --request PATCH --header 'Content-Type: application/json' \

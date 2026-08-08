@@ -107,7 +107,18 @@ test('release workflow publishes before mirroring GitCode and skips both in dry 
     'utf8',
   );
 
-  assert.match(workflow, /publish:[\s\S]*?outputs:\s*\r?\n\s*tag:/);
+  const publishJob = workflow.match(/^  publish:\r?\n[\s\S]*?(?=^  mirror-gitcode:)/m)?.[0];
+  assert.ok(publishJob, 'release workflow must define the publish job before the GitCode mirror');
+  assert.match(
+    publishJob,
+    /^      tag: \$\{\{ steps\.publish-release\.outputs\.tag \}\}$/m,
+    'publish must expose the output emitted by the publish-release step',
+  );
+  assert.match(
+    publishJob,
+    /^    if: \|\r?\n\s*!inputs\.dry_run\b/m,
+    'publish itself must be skipped during dry runs',
+  );
   assert.match(workflow, /id:\s*publish-release/);
   assert.match(workflow, /echo\s+"tag=v\$VERSION"\s*>>\s*"\$GITHUB_OUTPUT"/);
   assert.match(workflow, /mirror-gitcode:\s*\r?\n\s*needs:\s*publish/);

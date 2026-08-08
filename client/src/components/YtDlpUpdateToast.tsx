@@ -21,7 +21,7 @@ function addSkipped(version: string) {
 }
 
 /**
- * Launch-time yt-dlp update prompt. Checks the JiHuLab manifest ~3s after
+ * Launch-time yt-dlp update prompt. Checks the GitCode manifest ~3s after
  * launch and, if a newer yt-dlp exists (and the user hasn't skipped it),
  * shows a non-blocking bottom-left toast. Explicit-consent only. Silent on
  * failure / no update. Bottom-LEFT so it never overlaps the app-updater toast.

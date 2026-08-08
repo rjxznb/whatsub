@@ -205,6 +205,19 @@ const YTDLP_MANIFEST_URLS: [&str; 2] = [
     "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json",
     "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
 ];
+const YTDLP_MANIFEST_USER_AGENT: &str = "whatsub/yt-dlp-updater";
+
+fn ytdlp_manifest_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+}
+
+fn ytdlp_manifest_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, YTDLP_MANIFEST_USER_AGENT)
+}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -233,8 +246,7 @@ async fn download_update_manifest(
     client: &reqwest::Client,
     url: &str,
 ) -> Result<YtDlpManifest, ()> {
-    let bytes = client
-        .get(url)
+    let bytes = ytdlp_manifest_request(client, url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
@@ -285,10 +297,7 @@ pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, Stri
         notes: String::new(),
     };
     // Best-effort: any network/parse failure → "no update" (never blocks launch).
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-    {
+    let client = match ytdlp_manifest_client() {
         Ok(c) => c,
         Err(_) => return Ok(none(&current)),
     };
@@ -313,7 +322,20 @@ pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::is_newer;
+    use super::{is_newer, ytdlp_manifest_request, YTDLP_MANIFEST_URLS};
+    use reqwest::header::USER_AGENT;
+
+    #[test]
+    fn manifest_client_sends_a_stable_user_agent_to_github() {
+        let request = ytdlp_manifest_request(&reqwest::Client::new(), YTDLP_MANIFEST_URLS[1])
+            .build()
+            .expect("GitHub manifest request must build");
+
+        assert_eq!(
+            request.headers().get(USER_AGENT).and_then(|value| value.to_str().ok()),
+            Some("whatsub/yt-dlp-updater"),
+        );
+    }
 
     #[test]
     fn yt_dlp_runtime_sources_prefer_gitcode_before_official_github() {

@@ -140,7 +140,7 @@ jobs:
           upload_asset() {
             local asset_path="$1"
             local asset_name="$2"
-            local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_method
+            local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_host upload_method
             local -a form_fields upload_command
 
             ensure_release
@@ -170,6 +170,7 @@ jobs:
               echo '::error::GitCode returned an invalid upload URL'
               exit 1
             }
+            upload_host="${BASH_REMATCH[1]}"
 
             form_fields=()
             while IFS=$'\t' read -r field value; do
@@ -186,8 +187,11 @@ jobs:
               ] | first // empty
             ' "$upload_response")
 
-            # The upload URL may be presigned. Never attach the GitCode token to it.
             upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0)
+            # A returned presigned host never receives the GitCode personal access token.
+            if [ "$upload_host" = api.gitcode.com ]; then
+              upload_command+=(--header "PRIVATE-TOKEN: $GITCODE_TOKEN")
+            fi
             if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
               "${upload_command[@]}" --request POST "${form_fields[@]}" \
                 --form "file=@$asset_path;filename=$asset_name" "$upload_url" > /dev/null

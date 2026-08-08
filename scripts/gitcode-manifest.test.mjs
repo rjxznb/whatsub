@@ -172,6 +172,23 @@ test('yt-dlp mirror workflow uses the GitCode release controller security contra
   for (const forbidden of ['jihulab.com', 'GITLAB_TOKEN', 'curl -I', 'GITCODE_TOKEN=']) {
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+
+  const uploadAsset = workflow
+    .split('          upload_asset() {')[1]
+    ?.split('          verify_asset() {')[0];
+  assert.ok(uploadAsset, 'yt-dlp mirror must retain a bounded upload helper');
+  const uploadHost = 'upload_host="${BASH_REMATCH[1]}"';
+  const exactHostGuard = 'if [ "$upload_host" = api.gitcode.com ]; then';
+  const tokenHeader = 'upload_command+=(--header "PRIVATE-TOKEN: $GITCODE_TOKEN")';
+  assert.match(uploadAsset, new RegExp(uploadHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(uploadAsset, new RegExp(exactHostGuard.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(uploadAsset, new RegExp(tokenHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(uploadAsset, /upload_command=\(curl .*--max-redirs 0\)/);
+  assert.ok(
+    uploadAsset.indexOf(uploadHost) < uploadAsset.indexOf(exactHostGuard) &&
+      uploadAsset.indexOf(exactHostGuard) < uploadAsset.indexOf(tokenHeader),
+    'only the exact api.gitcode.com upload host may receive the token',
+  );
 });
 
 test('GitCode mirror workflow keeps its required security and verification contract', async () => {

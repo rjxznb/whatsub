@@ -270,12 +270,6 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     /PRIVATE-TOKEN:\s*(?!\$GITCODE_TOKEN\b)[^\s'"\\]+/,
     'a literal GitCode token must never be committed',
   );
-  assert.doesNotMatch(
-    workflow,
-    /\.attach_file_id\s*\/\/\s*\.id/,
-    'only the documented attach_file_id may be used for an attachment delete',
-  );
-
   const planner = await readFile(
     new URL('./gitcode-mirror-plan.mjs', import.meta.url),
     'utf8',

@@ -229,6 +229,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
   );
 
   for (const required of [
+    'timeout-minutes: 120',
     'REQUESTED_TAG: ${{ inputs.tag }}',
     'GH_TOKEN: ${{ github.token }}',
     'fetch_release_detail',

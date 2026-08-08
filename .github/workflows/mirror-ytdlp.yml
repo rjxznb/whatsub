@@ -1,18 +1,9 @@
-# Mirror the latest upstream yt-dlp to the JiHuLab `yt-dlp` release tag.
-#
-# The desktop app's launch-time update check reads
-#   https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp-version.json
-# and its 更新 button downloads yt-dlp.exe / yt-dlp_macos from the same tag
-# (GitHub official as fallback). This workflow refreshes those three assets.
-#
-# MANUALLY triggered — you decide when users get a newer yt-dlp. Before
-# running, skim the upstream changelog per client/docs/ytdlp-mirror.md
-# (flag renames, Node runtime minimums — the bundled node sidecar is coupled).
-#
-# Runs on ubuntu in ~1 min: pulls the official latest from GitHub (fast on
-# runners; that's the whole reason this isn't done from a mainland machine),
-# then PUTs to JiHuLab generic packages and refreshes the release links.
-name: Mirror yt-dlp to JiHuLab
+# Mirror the latest upstream yt-dlp to the fixed GitCode `yt-dlp` release tag.
+# The desktop app reads the GitCode release assets first and falls back to the
+# official yt-dlp GitHub Release. This manually triggered workflow refreshes
+# the two platform binaries and the app's version manifest without promoting
+# the non-app `yt-dlp` release to latest.
+name: Mirror yt-dlp to GitCode
 
 on:
   workflow_dispatch:
@@ -22,102 +13,239 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: read
+
+concurrency:
+  group: gitcode-ytdlp-mirror
+  cancel-in-progress: false
+
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Download upstream + upload to JiHuLab
+      - name: Download upstream and mirror to GitCode
         env:
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
-          if [ -z "$GITLAB_TOKEN" ]; then echo "::error::GITLAB_TOKEN secret missing"; exit 1; fi
+          test -n "$GITCODE_TOKEN" || { echo '::error::GITCODE_TOKEN secret missing'; exit 1; }
 
-          GITLAB_HOST="https://jihulab.com"
-          PROJECT_ID="335658"
-          PROJECT_PATH="rjxznb-group/whatsub-release"
-          API="$GITLAB_HOST/api/v4/projects/$PROJECT_ID"
-          TAG="yt-dlp"
+          mirror_owner='rjxznb'
+          mirror_repo='whatsub-release'
+          api_base='https://api.gitcode.com/api/v5'
+          tag='yt-dlp'
+          work_dir=$(mktemp -d)
+          trap 'rm -rf "$work_dir"' EXIT
 
-          # ── Resolve upstream latest version from the release tag ──────
-          VERSION=$(curl -sf --retry 3 https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest | jq -r .tag_name)
-          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then echo "::error::could not resolve upstream version"; exit 1; fi
-          echo "Upstream latest: $VERSION"
+          urlencode() {
+            jq -rn --arg value "$1" '$value | @uri'
+          }
 
-          # ── Download the two binaries ─────────────────────────────────
-          curl -fL --retry 3 -o yt-dlp.exe   "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-          curl -fL --retry 3 -o yt-dlp_macos "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
-          for f in yt-dlp.exe yt-dlp_macos; do
-            sz=$(stat -c%s "$f")
-            echo "$f: $sz bytes"
-            if [ "$sz" -lt 10000000 ]; then echo "::error::$f too small ($sz) — download failed"; exit 1; fi
+          asset_key() {
+            printf '%s\0%s' "$1" "$2" | sha256sum | awk '{print $1}'
+          }
+
+          api_request() {
+            curl --fail --silent --show-error --proto '=https' --max-redirs 0 \
+              --header "PRIVATE-TOKEN: $GITCODE_TOKEN" "$@"
+          }
+
+          api_get_status() {
+            local output="$1"
+            local url="$2"
+            local status
+            status=$(curl --silent --show-error --proto '=https' --max-redirs 0 \
+              --header "PRIVATE-TOKEN: $GITCODE_TOKEN" \
+              --output "$output" --write-out '%{http_code}' "$url") || return
+            printf '%s' "$status"
+          }
+
+          ensure_release() {
+            local encoded_tag summary_file status payload
+            encoded_tag=$(urlencode "$tag")
+            summary_file="$work_dir/release-summary.json"
+            status=$(api_get_status "$summary_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/tags/$encoded_tag") || {
+              echo '::error::Unable to query GitCode yt-dlp Release'
+              exit 1
+            }
+            case "$status" in
+              200) return ;;
+              404) ;;
+              *)
+                echo "::error::GitCode yt-dlp Release lookup returned HTTP $status"
+                exit 1
+                ;;
+            esac
+
+            payload=$(jq -nc --arg tag "$tag" --arg name 'yt-dlp mirror' \
+              '{tag_name:$tag, name:$name, body:"", target_commitish:"main"}')
+            api_request --request POST --header 'Content-Type: application/json' \
+              --data "$payload" --output "$summary_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases"
+          }
+
+          fetch_release_detail() {
+            local encoded_tag detail_file status
+            encoded_tag=$(urlencode "$tag")
+            detail_file="$work_dir/release-detail.json"
+            status=$(api_get_status "$detail_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag") || {
+              echo '::error::Unable to query detailed GitCode yt-dlp Release'
+              exit 1
+            }
+            if [ "$status" != 200 ]; then
+              echo "::error::Detailed GitCode yt-dlp Release lookup returned HTTP $status"
+              exit 1
+            fi
+            printf '%s' "$detail_file"
+          }
+
+          has_attachment_named() {
+            local asset_name="$1"
+            shift
+            jq -e -s --arg name "$asset_name" '
+              [ .[] | .. | objects |
+                select(.name? == $name or .file_name? == $name or .filename? == $name)
+              ] | length > 0
+            ' "$@" > /dev/null
+          }
+
+          find_attachment_id() {
+            local asset_name="$1"
+            shift
+            jq -r -s --arg name "$asset_name" '
+              [ .[] | .. | objects |
+                select(.name? == $name or .file_name? == $name or .filename? == $name) |
+                (.attach_file_id // empty) |
+                select((type == "string" and length > 0) or type == "number") | tostring
+              ] | first // empty
+            ' "$@"
+          }
+
+          upload_url_from() {
+            local response_file="$1"
+            jq -er '
+              [
+                .. | objects | to_entries[]? |
+                select(.key | ascii_downcase | test("upload.*url|url.*upload")) |
+                .value | .. | strings | select(test("^https://"))
+              ] | first // empty
+            ' "$response_file"
+          }
+
+          upload_asset() {
+            local asset_path="$1"
+            local asset_name="$2"
+            local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_method
+            local -a form_fields upload_command
+
+            ensure_release
+            encoded_tag=$(urlencode "$tag")
+            summary_file="$work_dir/release-summary.json"
+            detail_file=$(fetch_release_detail)
+            if has_attachment_named "$asset_name" "$summary_file" "$detail_file"; then
+              attachment_id=$(find_attachment_id "$asset_name" "$summary_file" "$detail_file")
+              if [ -z "$attachment_id" ]; then
+                echo "::error::GitCode attachment $asset_name exists but has no verified attach_file_id"
+                exit 1
+              fi
+              api_request --request DELETE \
+                "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/attach_files/$attachment_id" \
+                > /dev/null
+            fi
+
+            upload_response="$work_dir/upload-$(asset_key "$tag" "$asset_name").json"
+            api_request --output "$upload_response" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/upload_url"
+            upload_url=$(upload_url_from "$upload_response") || {
+              echo '::error::GitCode did not return a usable upload URL'
+              exit 1
+            }
+            upload_url="${upload_url%%\{*}"
+            [[ "$upload_url" =~ ^https://([^/?#:]+)(:[0-9]+)?(/|$) ]] || {
+              echo '::error::GitCode returned an invalid upload URL'
+              exit 1
+            }
+
+            form_fields=()
+            while IFS=$'\t' read -r field value; do
+              form_fields+=(-F "$field=$value")
+            done < <(jq -r '
+              .. | objects | .fields? | objects | to_entries[]? |
+              [.key, (.value | tostring)] | @tsv
+            ' "$upload_response")
+            upload_method=$(jq -r '
+              [
+                .. | objects | to_entries[]? |
+                select(.key | ascii_downcase | test("^(method|upload_method)$")) |
+                .value | strings | ascii_upcase | select(. == "POST" or . == "PUT")
+              ] | first // empty
+            ' "$upload_response")
+
+            # The upload URL may be presigned. Never attach the GitCode token to it.
+            upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0)
+            if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
+              "${upload_command[@]}" --request POST "${form_fields[@]}" \
+                --form "file=@$asset_path;filename=$asset_name" "$upload_url" > /dev/null
+            elif [ -z "$upload_method" ] || [ "$upload_method" = PUT ]; then
+              "${upload_command[@]}" --upload-file "$asset_path" \
+                --url-query "name=$asset_name" "$upload_url" > /dev/null
+            else
+              echo "::error::GitCode returned an unsupported upload method: $upload_method"
+              exit 1
+            fi
+          }
+
+          verify_asset() {
+            local asset_name="$1"
+            local public_url response status content_range
+            public_url="https://gitcode.com/$mirror_owner/$mirror_repo/releases/download/$(urlencode "$tag")/$(urlencode "$asset_name")"
+            # --range 0-0 sends Range: bytes=0-0; HEAD is deliberately never used.
+            response=$(curl --location --fail --silent --show-error --globoff \
+              --proto '=https' --proto-redir '=https' --range 0-0 \
+              --header 'Range: bytes=0-0' --output /dev/null \
+              --write-out '%{http_code}\n%header{content-range}' "$public_url")
+            status=${response%%$'\n'*}
+            content_range=${response#*$'\n'}
+            if [ "$status" != 206 ] || \
+              [[ ! "Content-Range: $content_range" =~ ^Content-Range:\ bytes\ 0-0/[1-9][0-9]*$ ]]; then
+              echo "::error::Range verification failed for yt-dlp/$asset_name"
+              exit 1
+            fi
+          }
+
+          version_response="$work_dir/upstream-release.json"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --retry 3 --output "$version_response" \
+            'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest'
+          version=$(jq -r '.tag_name' "$version_response")
+          test -n "$version" && test "$version" != null || {
+            echo '::error::Could not resolve upstream yt-dlp version'
+            exit 1
+          }
+
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --retry 3 --output "$work_dir/yt-dlp.exe" \
+            'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --retry 3 --output "$work_dir/yt-dlp_macos" \
+            'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos'
+          for asset_name in yt-dlp.exe yt-dlp_macos; do
+            size=$(stat -c%s "$work_dir/$asset_name")
+            if [ "$size" -lt 10000000 ]; then
+              echo "::error::$asset_name too small ($size); upstream download failed"
+              exit 1
+            fi
           done
+          jq -n --arg version "$version" --arg notes "$NOTES" \
+            '{version:$version, notes:$notes}' > "$work_dir/yt-dlp-version.json"
 
-          # ── Version manifest the app checks on launch ─────────────────
-          jq -n --arg v "$VERSION" --arg n "$NOTES" '{version:$v, notes:$n}' > yt-dlp-version.json
-          cat yt-dlp-version.json
-
-          # ── Upload to generic packages (fixed version "latest" → PUT
-          #    overwrites, so re-running refreshes in place) ─────────────
-          upload_file() {
-            local name="$1"
-            echo "  → uploading $name"
-            curl -sf --connect-timeout 30 --max-time 600 \
-                 --retry 3 --retry-delay 5 --retry-all-errors \
-                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                 --upload-file "$name" \
-                 "$API/packages/generic/yt-dlp/latest/$name" > /dev/null
-          }
-          upload_file yt-dlp-version.json
-          upload_file yt-dlp.exe
-          upload_file yt-dlp_macos
-
-          # ── Refresh the fixed release (delete + recreate; tag survives,
-          #    same pattern as release.yml's JiHu mirror step) ───────────
-          LINKS="[]"
-          add_link() {
-            local name="$1"
-            local pkg_url="$API/packages/generic/yt-dlp/latest/$name"
-            LINKS=$(echo "$LINKS" | jq --arg n "$name" --arg u "$pkg_url" --arg p "/$name" \
-                    '. + [{name:$n, url:$u, direct_asset_path:$p, link_type:"package"}]')
-          }
-          add_link yt-dlp-version.json
-          add_link yt-dlp.exe
-          add_link yt-dlp_macos
-
-          if curl -sf --connect-timeout 15 --max-time 30 \
-                  --retry 3 --retry-delay 5 \
-                  --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                  "$API/releases/$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG exists — deleting + recreating to refresh asset links"
-            curl -sf --connect-timeout 15 --max-time 30 \
-                 --retry 3 --retry-delay 5 --retry-all-errors \
-                 -X DELETE --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                 "$API/releases/$TAG" > /dev/null
-          fi
-
-          PAYLOAD=$(jq -n \
-            --arg name "yt-dlp mirror ($VERSION)" \
-            --arg tag "$TAG" \
-            --arg desc "Mirror of upstream yt-dlp $VERSION for the in-app updater. Refreshed manually via the mirror-ytdlp workflow." \
-            --arg ref "main" \
-            --argjson links "$LINKS" \
-            '{name:$name, tag_name:$tag, description:$desc, ref:$ref, assets:{links:$links}}')
-
-          curl -sf --connect-timeout 15 --max-time 60 \
-               -X POST --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-               --header "Content-Type: application/json" \
-               --data "$PAYLOAD" \
-               "$API/releases" > /dev/null
-
-          echo "::notice::Mirrored yt-dlp $VERSION → $GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG"
-
-          # ── Verify the public URLs actually serve ─────────────────────
-          sleep 3
-          curl -sfL "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/yt-dlp-version.json"
-          echo ""
-          code=$(curl -s -o /dev/null -w "%{http_code}" -L "$GITLAB_HOST/$PROJECT_PATH/-/releases/$TAG/downloads/yt-dlp.exe" -r 0-0)
-          echo "yt-dlp.exe HEAD-ish check: HTTP $code"
-          [ "$code" = "200" ] || [ "$code" = "206" ] || { echo "::error::yt-dlp.exe not downloadable"; exit 1; }
+          for asset_name in yt-dlp-version.json yt-dlp.exe yt-dlp_macos; do
+            upload_asset "$work_dir/$asset_name" "$asset_name"
+            verify_asset "$asset_name"
+          done
+          echo "::notice::Mirrored yt-dlp $version to GitCode release $tag"

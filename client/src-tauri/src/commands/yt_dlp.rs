@@ -127,12 +127,12 @@ pub async fn yt_dlp_get_status(app: AppHandle) -> Result<YtDlpStatus, String> {
 pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     let (primary, fallback) = if cfg!(target_os = "windows") {
         (
-            "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp.exe",
+            "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe",
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
         )
     } else if cfg!(target_os = "macos") {
         (
-            "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp_macos",
+            "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos",
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
         )
     } else {
@@ -155,8 +155,8 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     ));
 
     // 120s total timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
-    // JiHuLab mirror is primary (mainland CN); GitHub is fallback. A short
-    // connect_timeout bounds the worst case: if the JiHuLab primary hangs at
+    // GitCode mirror is primary (mainland CN); GitHub is fallback. A short
+    // connect_timeout bounds the worst case: if the GitCode primary hangs at
     // connect, we fall back to GitHub in ~15s instead of waiting the full 120s.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
@@ -199,10 +199,12 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     })
 }
 
-/// JiHuLab-hosted version manifest URL (a dedicated `yt-dlp` release tag,
-/// manually kept fresh by the maintainer). See docs/ytdlp-mirror.md.
-const YTDLP_MANIFEST_URL: &str =
-    "https://jihulab.com/rjxznb-group/whatsub-release/-/releases/yt-dlp/downloads/yt-dlp-version.json";
+/// GitCode-hosted version manifest URL, followed by the official upstream
+/// GitHub Release API fallback. The fixed `yt-dlp` tag is not the app latest.
+const YTDLP_MANIFEST_URLS: [&str; 2] = [
+    "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json",
+    "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
+];
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -218,6 +220,38 @@ struct YtDlpManifest {
     version: String,
     #[serde(default)]
     notes: String,
+}
+
+#[derive(Deserialize)]
+struct GitHubYtDlpRelease {
+    tag_name: String,
+    #[serde(default)]
+    body: String,
+}
+
+async fn download_update_manifest(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<YtDlpManifest, ()> {
+    let bytes = client
+        .get(url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|_| ())?
+        .bytes()
+        .await
+        .map_err(|_| ())?;
+
+    if url == YTDLP_MANIFEST_URLS[0] {
+        serde_json::from_slice(&bytes).map_err(|_| ())
+    } else {
+        let release: GitHubYtDlpRelease = serde_json::from_slice(&bytes).map_err(|_| ())?;
+        Ok(YtDlpManifest {
+            version: release.tag_name,
+            notes: release.body,
+        })
+    }
 }
 
 /// True when dotted-numeric `latest` is strictly newer than `current`
@@ -258,18 +292,15 @@ pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, Stri
         Ok(c) => c,
         Err(_) => return Ok(none(&current)),
     };
-    let manifest: YtDlpManifest = match client.get(YTDLP_MANIFEST_URL).send().await {
-        Ok(resp) => match resp.error_for_status() {
-            Ok(ok) => match ok.bytes().await {
-                Ok(b) => match serde_json::from_slice(&b) {
-                    Ok(m) => m,
-                    Err(_) => return Ok(none(&current)),
-                },
-                Err(_) => return Ok(none(&current)),
-            },
-            Err(_) => return Ok(none(&current)),
-        },
-        Err(_) => return Ok(none(&current)),
+    let mut manifest = None;
+    for url in YTDLP_MANIFEST_URLS {
+        if let Ok(candidate) = download_update_manifest(&client, url).await {
+            manifest = Some(candidate);
+            break;
+        }
+    }
+    let Some(manifest) = manifest else {
+        return Ok(none(&current));
     };
     let has_update = is_newer(&manifest.version, &current);
     Ok(YtDlpUpdateInfo {
@@ -283,6 +314,54 @@ pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, Stri
 #[cfg(test)]
 mod tests {
     use super::is_newer;
+
+    #[test]
+    fn yt_dlp_runtime_sources_prefer_gitcode_before_official_github() {
+        let source = include_str!("yt_dlp.rs");
+        let update_sources = source
+            .split("pub async fn yt_dlp_update()")
+            .nth(1)
+            .and_then(|section| section.split("let final_path").next())
+            .expect("yt-dlp update source selection must remain present");
+        let manifest_sources = source
+            .split("const YTDLP_MANIFEST_URLS")
+            .nth(1)
+            .and_then(|section| section.split("#[derive(Serialize, Clone)]").next())
+            .expect("yt-dlp manifest source selection must remain present");
+
+        for (gitcode, github) in [
+            (
+                "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe",
+                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+            ),
+            (
+                "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos",
+                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
+            ),
+        ] {
+            assert!(
+                update_sources.find(gitcode).is_some_and(|gitcode_index| {
+                    update_sources
+                        .find(github)
+                        .is_some_and(|github_index| gitcode_index < github_index)
+                }),
+                "GitCode source must precede the official GitHub fallback",
+            );
+        }
+
+        let gitcode_manifest = "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json";
+        let github_manifest = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
+        assert!(
+            manifest_sources
+                .find(gitcode_manifest)
+                .is_some_and(|gitcode_index| {
+                    manifest_sources
+                        .find(github_manifest)
+                        .is_some_and(|github_index| gitcode_index < github_index)
+                }),
+            "GitCode manifest must precede the official GitHub fallback",
+        );
+    }
 
     #[test]
     fn newer_by_day_month_year() {

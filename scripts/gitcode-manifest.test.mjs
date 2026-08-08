@@ -130,6 +130,50 @@ test('release workflow publishes before mirroring GitCode and skips both in dry 
   assert.doesNotMatch(workflow, /GITLAB_TOKEN/);
 });
 
+test('runtime updater endpoints prefer GitCode and retain the official GitHub fallback', async () => {
+  const config = JSON.parse(
+    await readFile(new URL('../client/src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+  );
+  const endpoints = config.plugins.updater.endpoints;
+
+  assert.deepEqual(endpoints, [
+    'https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json',
+    'https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json',
+  ]);
+  assert.equal(
+    endpoints.some((endpoint) => endpoint.includes('jihulab.com')),
+    false,
+    'the runtime updater must not retain a JiHuLab endpoint',
+  );
+});
+
+test('yt-dlp mirror workflow uses the GitCode release controller security contract', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-ytdlp.yml', import.meta.url),
+    'utf8',
+  );
+
+  for (const required of [
+    'GITCODE_TOKEN',
+    "api_base='https://api.gitcode.com/api/v5'",
+    "tag='yt-dlp'",
+    'fetch_release_detail',
+    'find_attachment_id',
+    '/releases/$encoded_tag/attach_files/$attachment_id',
+    'Range: bytes=0-0',
+    '%header{content-range}',
+    'Content-Range:\\ bytes\\ 0-0/[1-9][0-9]*$',
+    '--globoff',
+    "trap 'rm -rf \"$work_dir\"' EXIT",
+  ]) {
+    assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  for (const forbidden of ['jihulab.com', 'GITLAB_TOKEN', 'curl -I', 'GITCODE_TOKEN=']) {
+    assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+});
+
 test('GitCode mirror workflow keeps its required security and verification contract', async () => {
   const workflow = await readFile(
     new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),

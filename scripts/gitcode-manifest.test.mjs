@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import { releaseAsset, rewriteManifest } from './gitcode-manifest.mjs';
+import { allowsPrivateToken } from './gitcode-upload-policy.mjs';
 
 const githubAsset = (tag, fileName) =>
   `https://github.com/rjxznb/whatsub-releases/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(fileName)}`;
@@ -173,22 +174,28 @@ test('yt-dlp mirror workflow uses the GitCode release controller security contra
     assert.doesNotMatch(workflow, new RegExp(forbidden.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
-  const uploadAsset = workflow
-    .split('          upload_asset() {')[1]
-    ?.split('          verify_asset() {')[0];
-  assert.ok(uploadAsset, 'yt-dlp mirror must retain a bounded upload helper');
-  const uploadHost = 'upload_host="${BASH_REMATCH[1]}"';
-  const exactHostGuard = 'if [ "$upload_host" = api.gitcode.com ]; then';
-  const tokenHeader = 'upload_command+=(--header "PRIVATE-TOKEN: $GITCODE_TOKEN")';
-  assert.match(uploadAsset, new RegExp(uploadHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(uploadAsset, new RegExp(exactHostGuard.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(uploadAsset, new RegExp(tokenHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(uploadAsset, /upload_command=\(curl .*--max-redirs 0\)/);
-  assert.ok(
-    uploadAsset.indexOf(uploadHost) < uploadAsset.indexOf(exactHostGuard) &&
-      uploadAsset.indexOf(exactHostGuard) < uploadAsset.indexOf(tokenHeader),
-    'only the exact api.gitcode.com upload host may receive the token',
-  );
+  assert.match(workflow, /uses:\s*actions\/checkout@v4/);
+  assert.match(workflow, /node scripts\/gitcode-upload-policy\.mjs "\$upload_url"/);
+  assert.match(workflow, /if \[ "\$upload_policy" = allow-private-token \]; then/);
+  assert.match(workflow, /upload_command=\(curl .*--max-redirs 0\)/);
+});
+
+test('upload policy permits a token only for the exact GitCode API hostname', () => {
+  assert.equal(allowsPrivateToken('https://api.gitcode.com/uploads/asset'), true);
+  assert.equal(allowsPrivateToken('https://cdn.example.net/presigned-upload'), false);
+  assert.equal(allowsPrivateToken('https://api.gitcode.com.evil.example/upload'), false);
+  assert.equal(allowsPrivateToken('https://api.gitcode.com./upload'), false);
+});
+
+test('upload policy rejects URLs that could carry credentials or use a non-HTTPS scheme', () => {
+  for (const uploadUrl of [
+    'https://token@api.gitcode.com/upload',
+    'https://api.gitcode.com:secret@cdn.example.net/upload',
+    'http://api.gitcode.com/upload',
+    'not a URL',
+  ]) {
+    assert.throws(() => allowsPrivateToken(uploadUrl), /upload URL/i);
+  }
 });
 
 test('GitCode mirror workflow keeps its required security and verification contract', async () => {

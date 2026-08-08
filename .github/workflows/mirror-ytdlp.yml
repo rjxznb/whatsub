@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download upstream and mirror to GitCode
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
@@ -140,7 +142,7 @@ jobs:
           upload_asset() {
             local asset_path="$1"
             local asset_name="$2"
-            local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_host upload_method
+            local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_policy upload_method
             local -a form_fields upload_command
 
             ensure_release
@@ -166,11 +168,10 @@ jobs:
               exit 1
             }
             upload_url="${upload_url%%\{*}"
-            [[ "$upload_url" =~ ^https://([^/?#:]+)(:[0-9]+)?(/|$) ]] || {
+            upload_policy=$(node scripts/gitcode-upload-policy.mjs "$upload_url") || {
               echo '::error::GitCode returned an invalid upload URL'
               exit 1
             }
-            upload_host="${BASH_REMATCH[1]}"
 
             form_fields=()
             while IFS=$'\t' read -r field value; do
@@ -189,8 +190,11 @@ jobs:
 
             upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0)
             # A returned presigned host never receives the GitCode personal access token.
-            if [ "$upload_host" = api.gitcode.com ]; then
+            if [ "$upload_policy" = allow-private-token ]; then
               upload_command+=(--header "PRIVATE-TOKEN: $GITCODE_TOKEN")
+            elif [ "$upload_policy" != forbid-private-token ]; then
+              echo '::error::GitCode returned an unsupported upload policy'
+              exit 1
             fi
             if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
               "${upload_command[@]}" --request POST "${form_fields[@]}" \

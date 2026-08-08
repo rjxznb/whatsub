@@ -303,7 +303,7 @@ Three-repo release distribution (private source / canonical GitHub release / Git
 - **Never lose the private signing key** (public key shipped in app; rotation breaks all installed clients).
 - **Never make source repo public** without rotating the local backup key.
 - **Never delete a release users installed from** — breaks signature chain for subsequent updates.
-- **Never commit `.msi` / `.sig`** — release assets only.
+- **Never commit `*-setup.exe`, `.dmg`, `.app.tar.gz`, or their `.sig` files** — release assets only.
 - **Before any release `git commit`, run `git branch --show-current` and confirm it's `main`** (see [`CLAUDE-PITFALLS.md`](./CLAUDE-PITFALLS.md#build--release--git)).
 
 ## Known limitations / TODO

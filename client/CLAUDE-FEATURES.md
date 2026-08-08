@@ -124,7 +124,7 @@ Mac dmg build is wrapped in a 3× retry loop — Tauri's create-dmg wrapper reli
 
 ### Updater UX
 
-Auto-check 3s after launch; bottom-right toast with 「立即更新」/「稍后」/「✓ 不再提醒此版本」 (persisted in `localStorage["skippedUpdateVersions"]`). Settings → 检查更新 ignores skip list. Win uses `installMode: "basicUi"` (default `passive` silently swallowed UAC). `useUpdater.ts` does NOT call `relaunch()` after `downloadAndInstall` on Windows (would file-lock msiexec out of the install dir); msiexec handles its own restart. macOS: `open -b com.whatsub.app` via Launch Services + `exit(0)` (more reliable than `plugin-process::relaunch`'s direct exec).
+Auto-check 3s after launch; bottom-right toast with 「立即更新」/「稍后」/「✓ 不再提醒此版本」 (persisted in `localStorage["skippedUpdateVersions"]`). Settings → 检查更新 ignores skip list. Windows updater uses `installMode: "passive"` and installs the signed NSIS `*-setup.exe` updater artifact. The NSIS installer is `currentUser`, includes its path picker, creates the install subfolder, and requires no UAC. `useUpdater.ts` does not call `relaunch()` after `downloadAndInstall` on Windows; Tauri hands off the update process. macOS: `open -b com.whatsub.app` via Launch Services + `exit(0)` (more reliable than `plugin-process::relaunch`'s direct exec).
 
 Updater state lives in a module-level zustand store in `useUpdater.ts` (not component-local useState) so navigation away mid-download keeps the percent indicator alive + shared between the auto-check toast and the Settings panel. `runningDownload: Promise<void>` is a module-level singleton so a second click while one is in flight short-circuits.
 

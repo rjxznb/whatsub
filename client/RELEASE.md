@@ -92,7 +92,7 @@ GitHub UI → **Actions** → **Release** → **Run workflow**. Inputs:
 | `dry_run` | `false` | If `true`: produce artifacts only; neither GitHub nor GitCode publishes |
 
 Total wall time ~25 min (Windows is the slow one — Vulkan SDK install +
-whisper.cpp Vulkan build + Tauri MSI bundling). Cost: ~25 min Windows
+whisper.cpp Vulkan build + Tauri NSIS setup bundling). Cost: ~25 min Windows
 (2x weight) + ~10 min macOS (10x weight) = ~150 weighted minutes per
 release out of the 2000/month free quota.
 

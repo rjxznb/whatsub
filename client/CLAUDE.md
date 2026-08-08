@@ -201,14 +201,14 @@ When the iOS app encounters a caption-less YouTube video — OR **any non-YouTub
 
 `pipeline/ytdlp.rs::download()` resolves yt-dlp at runtime in priority order:
 
-1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy (`commands::yt_dlp::yt_dlp_update`), written to `.downloading`, atomic-renamed. `chmod +x` on unix. Download is **dual-source**: JiHuLab mirror first (`.../whatsub-release/-/releases/yt-dlp/downloads/…`, mainland-reachable), GitHub official `releases/latest/download/` fallback; `connect_timeout(15s)` so a hung mirror falls back fast.
+1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy (`commands::yt_dlp::yt_dlp_update`), written to `.downloading`, atomic-renamed. `chmod +x` on unix. Download is **dual-source**: GitCode mirror first (`https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/…`), GitHub official `releases/latest/download/` fallback; `connect_timeout(15s)` so a hung mirror falls back fast.
 2. **Bundled sidecar** (`binaries/yt-dlp-<target_triple>{.exe}`) — what `pnpm tauri build` ships. CI workflow input `yt_dlp_tag` (default `latest`) controls which yt-dlp release gets bundled.
 
 The AppData path uses `pipeline/spawn.rs::run_external_with_callback` because Tauri shell plugin's `sidecar()` only accepts whitelisted basenames, not arbitrary paths. The bundled fallback uses `run_sidecar`.
 
 Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's player JS changes. Bundling means weeks-long lag when extractors break.
 
-**Launch-time update prompt (0.1.98).** `yt_dlp_check_update` reads a version manifest (`yt-dlp-version.json = {version, notes}`) from the fixed JiHuLab release tag `yt-dlp` — best-effort, any failure ⇒ silently no prompt. `useYtDlpUpdater` + `YtDlpUpdateToast` (bottom-LEFT, so it never overlaps the app-updater toast at bottom-right) prompt 更新 / 稍后 / 不再提醒此版本 (localStorage `ytdlpSkippedVersions`); the binary swaps ONLY on an explicit 更新 click — no silent auto-update. Users can still hit Settings → 更新 yt-dlp manually. The mirror is refreshed on demand via the **Mirror yt-dlp to JiHuLab** workflow (`.github/workflows/mirror-ytdlp.yml`); upkeep + compatibility checklist (flag renames, Node-runtime minimums coupled to the bundled node sidecar) in [`docs/ytdlp-mirror.md`](./docs/ytdlp-mirror.md).
+**Launch-time update prompt (0.1.98).** `yt_dlp_check_update` reads a version manifest (`yt-dlp-version.json = {version, notes}`) from the fixed GitCode release tag `yt-dlp` — best-effort, any failure ⇒ silently no prompt. `useYtDlpUpdater` + `YtDlpUpdateToast` (bottom-LEFT, so it never overlaps the app-updater toast at bottom-right) prompt 更新 / 稍后 / 不再提醒此版本 (localStorage `ytdlpSkippedVersions`); the binary swaps ONLY on an explicit 更新 click — no silent auto-update. Users can still hit Settings → 更新 yt-dlp manually. The mirror is refreshed on demand via the **Mirror yt-dlp to GitCode** workflow (`.github/workflows/mirror-ytdlp.yml`); upkeep + compatibility checklist (flag renames, Node-runtime minimums coupled to the bundled node sidecar) in [`docs/ytdlp-mirror.md`](./docs/ytdlp-mirror.md).
 
 **macOS: the `node` sidecar needs JIT entitlements (0.1.100).** yt-dlp spawns `node` (`--js-runtimes node:<path>`) to solve YouTube's n-challenge — no JS runtime ⇒ `No video formats found`, i.e. ALL YouTube downloads fail. Notarization requires every executable in the `.app` to carry OUR signature, so Tauri re-signs each sidecar with hardened runtime + `Entitlements.plist`, **discarding the entitlements the official nodejs.org binary ships with**. Without re-granting them the kernel kills node inside V8's `SetPermissions` → `Error running node process (returncode: -5)` (−5 = SIGTRAP). `Entitlements.plist` must therefore keep BOTH `com.apple.security.cs.allow-jit` **and** `com.apple.security.cs.allow-unsigned-executable-memory` (allow-jit alone is insufficient on recent macOS). Both are allowed for Developer ID + notarization. Windows is unaffected (no hardened runtime). Don't prune these keys.
 
@@ -298,7 +298,7 @@ cd src-tauri && cargo test    # safe: tests use temp paths only
 
 ## Release workflow
 
-Three-repo dual-publish (private source / GitHub mirror / JiHu mirror) with minisign-signed updater. Step-by-step instructions, signing key handling, JiHu setup, and Updater UX live in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#release-workflow). The non-negotiables:
+Three-repo release distribution (private source / canonical GitHub release / GitCode mirror) with minisign-signed updater. Step-by-step instructions, signing key handling, GitCode setup, and Updater UX live in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#release-workflow). The non-negotiables:
 
 - **Never lose the private signing key** (public key shipped in app; rotation breaks all installed clients).
 - **Never make source repo public** without rotating the local backup key.

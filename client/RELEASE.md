@@ -4,22 +4,17 @@ How to ship a new version that existing users will pick up via auto-update.
 
 ## One-time setup
 
-### Public release repo
+### Public distribution repositories
 
-The auto-updater fetches `latest.json` from a publicly-readable URL. Our
-private repo can't serve release assets publicly, so we use a separate
-public repo for distribution only.
+GitHub is canonical: `https://github.com/rjxznb/whatsub-releases` holds the
+published release and source `latest.json`. GitCode mirrors its release assets and
+rewrites the stable manifest at `https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json`.
+The app tries that GitCode manifest first, then falls back to GitHub:
 
-**Create it once on GitHub** (UI):
+1. `https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json`
+2. `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json`
 
-1. New → Repository → Name: `whatsub-releases` → **Public** → Create
-2. The endpoint baked into the app is:
-   ```
-   https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json
-   ```
-   (configured in `src-tauri/tauri.conf.json` `plugins.updater.endpoints`)
-3. If you want a different repo name, update that endpoint AND the URL paths
-   below.
+These are the configured `plugins.updater.endpoints` in `src-tauri/tauri.conf.json`.
 
 ### Signing keys (already done)
 
@@ -35,9 +30,9 @@ have to manually reinstall.
 
 ## Release flow
 
-One workflow (`.github/workflows/release.yml`) builds both Windows and
-macOS in parallel and publishes a single GitHub Release with one
-assembled `latest.json`. No more local-build-and-drag-drop.
+One workflow (`.github/workflows/release.yml`) builds both Windows and macOS,
+publishes the canonical GitHub Release, then calls the reusable
+`.github/workflows/mirror-gitcode.yml` workflow to mirror it to GitCode.
 
 ```
                 ┌─ build-windows (windows-latest, ~25 min)
@@ -59,6 +54,11 @@ dispatch  ──────┤     → pnpm tauri build --bundles msi
                           → upload all 5 files
                           → assemble + upload latest.json
                             (windows-x86_64 + darwin-aarch64)
+                                       │
+                                       ▼
+                          mirror-gitcode (reusable workflow)
+                          → mirror assets/releases to GitCode
+                          → rewrite and commit GitCode main/latest.json
 ```
 
 ### 1. Bump the version (3 places must match)
@@ -88,7 +88,7 @@ GitHub UI → **Actions** → **Release** → **Run workflow**. Inputs:
 | `vulkan_sdk_version` | `1.4.341.0` | LunarG Vulkan SDK for the Windows whisper-cli build |
 | `ffmpeg_url_macos` | `https://www.osxexperts.net/ffmpeg711arm.zip` | Static arm64 ffmpeg |
 | `ffmpeg_url_windows` | `https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip` | Static Windows ffmpeg (zip must contain `bin/ffmpeg.exe`) |
-| `dry_run` | `false` | If `true`: produce artifacts only, skip the publish job |
+| `dry_run` | `false` | If `true`: produce artifacts only; neither GitHub nor GitCode publishes |
 
 Total wall time ~25 min (Windows is the slow one — Vulkan SDK install +
 whisper.cpp Vulkan build + Tauri MSI bundling). Cost: ~25 min Windows
@@ -98,12 +98,15 @@ release out of the 2000/month free quota.
 ### 3. Test before publishing (optional but recommended)
 
 For the first run, or when changing whisper.cpp / SDK versions, set
-`dry_run=true`. The build jobs run, the publish job is skipped, and you
+`dry_run=true`. The build jobs run; neither GitHub nor GitCode receives a release
+or manifest update. The publish and mirror jobs are skipped, and you
 can download the artifacts from the workflow run page → `windows-bundle`
 and `macos-bundle`. Install the .msi / .dmg on a real machine to verify.
 
-If everything looks good, re-trigger with `dry_run=false`. (Or, since the
-artifacts are retained 7 days, you can re-run only the publish job.)
+If everything looks good, re-trigger with `dry_run=false`; do not invent a new
+app version merely to retry a failed publish or mirror. A failed GitCode mirror can
+be backfilled by manually dispatching **Mirror releases to GitCode** with the
+already-published GitHub tag. Retry transient failures with the same tag.
 
 ### 4. What the publish job does
 
@@ -111,21 +114,37 @@ Runs only when `dry_run=false` and both build jobs succeeded. On
 `ubuntu-latest`:
 
 1. Reads version from `client/src-tauri/tauri.conf.json`
-2. Creates `vX.Y.Z` release on `rjxznb/whatsub-releases` if missing
-   (using `RELEASES_REPO_TOKEN` PAT)
+2. Creates `vX.Y.Z` release on the canonical `rjxznb/whatsub-releases` repository
 3. Uploads `.msi`, `.msi.sig`, `.dmg`, `.app.tar.gz`, `.app.tar.gz.sig`
    with `gh release upload --clobber`
 4. Assembles `latest.json` from scratch — both platforms in one call,
-   with raw `.sig` text content (Tauri 2 spec, jq-escaped) — and uploads
+    with raw `.sig` text content (Tauri 2 spec, jq-escaped) — and uploads
+5. Calls `mirror-gitcode.yml`, which mirrors the release to
+   `rjxznb/whatsub-release` and publishes its rewritten stable manifest.
 
 ### 5. Verify
 
 ```bash
-curl -s https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json | jq .
+curl -fsSL https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json | jq .
+curl -fsSL https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json | jq .
 ```
 
-Should show `version`, `pub_date`, and a `platforms` object with both
-`windows-x86_64` and `darwin-aarch64` entries.
+Both manifests should show `version`, `pub_date`, and `platforms` entries for
+`windows-x86_64` and `darwin-aarch64`. GitCode platform URLs must target GitCode;
+the canonical GitHub manifest continues to target GitHub.
+
+For every mirrored public asset, make an anonymous range GET—not `HEAD`—and require
+the exact partial response:
+
+```bash
+curl -sS -o /dev/null -D - -H 'Range: bytes=0-0' \
+  https://gitcode.com/rjxznb/whatsub-release/releases/download/vX.Y.Z/<asset>
+```
+
+The status must be exactly `206` and `Content-Range` must be
+`bytes 0-0/<positive-size>`. This is also the workflow's health check. GitCode's
+release-attachment UI has been verified to allow attachments up to 2 GB; do not
+upload a larger asset without re-verifying that limit in the UI.
 
 On a machine with the previous version installed:
 
@@ -140,7 +159,7 @@ For the `.dmg` on a fresh Mac, first launch hits Gatekeeper "已损坏" —
 documented user bypass is System Settings → 隐私与安全性 → 仍要打开
 (or `xattr -cr <app>`). No notarization yet (no Apple Developer account).
 
-## Required secrets
+## Required secrets and GitCode setup
 
 Set these once on the **private** repo (Settings → Secrets and variables
 → Actions → Repository secrets):
@@ -149,7 +168,13 @@ Set these once on the **private** repo (Settings → Secrets and variables
 |---|---|---|
 | `TAURI_SIGNING_PRIVATE_KEY` | Sign installers → produce `.sig` (Win + Mac share the same key) | Full PEM contents of `~/.tauri/whatsub.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Decrypt the key | Empty string for our key |
-| `RELEASES_REPO_TOKEN` | Publish job uses `gh` to upload assets to the public release repo | Fine-grained PAT, expiry ≥ next release, **resource owner = your account, repository access = `rjxznb/whatsub-releases` only**, permissions: `Contents: Read and write` |
+| `GITCODE_TOKEN` | The only GitCode mirror secret; creates/updates releases, attachments, and `main/latest.json` | GitCode personal access token with the minimum `api` scope |
+
+Create the GitCode PAT once in the GitCode UI with only the minimum `api` scope.
+GitCode displays the token value only once: copy it immediately into the private
+repository's Actions secret named `GITCODE_TOKEN`, then do not place it in local
+files, logs, or documentation. The release workflow uses the built-in GitHub token
+for the canonical GitHub release; do not add a second GitHub-release PAT.
 
 The Tauri signing key in CI must match the public key embedded at
 `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey`. They were
@@ -183,11 +208,14 @@ produced for the .msi / .app.tar.gz. Common causes:
   produced by Tauri) — do NOT base64-encode it.
 
 ### `Failed to fetch latest.json`
-- Release wasn't actually published (still draft): check the public repo
-- Asset name typo: must be exactly `latest.json`, lowercase
-- `/latest/download/` only works on the release marked "latest" — usually
-  automatic, but if you've published a newer-tagged draft on top of an
-  older live release, check the "Set as latest release" checkbox.
+- Confirm the GitHub release is published, not a draft, and includes lowercase
+  `latest.json`.
+- Re-run **Mirror releases to GitCode** for that existing tag to backfill GitCode;
+  do not bump the app version for a mirror-only repair.
+- Fetch the GitCode raw manifest URL directly. If it is stale, the mirror job did
+  not complete its final `main/latest.json` commit.
+- Test the affected GitCode attachment with the anonymous `Range: bytes=0-0` GET
+  above. A non-`206` response or incorrect `Content-Range` means retry the mirror.
 
 ### Vulkan SDK installer step fails
 LunarG occasionally rotates installer URLs. Verify
@@ -214,10 +242,12 @@ build (the `.msi` from the workflow artifact) instead.
 |---|---|---|
 | Private signing key | Sign installers → produce `.sig` (shared by Win + Mac) | `secrets/whatsub.key` (repo backup) + `%USERPROFILE%\.tauri\whatsub.key` (active local copy) + `TAURI_SIGNING_PRIVATE_KEY` GitHub secret |
 | Public verification key | Verify `.sig` in user's app | `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey` (committed) |
-| `RELEASES_REPO_TOKEN` | Publish job → upload assets to public release repo | GitHub secret (fine-grained PAT, scoped only to `rjxznb/whatsub-releases`, contents: read+write) |
+| `GITCODE_TOKEN` | Mirror published GitHub assets/releases and commit GitCode's stable manifest | Private-repo Actions secret; GitCode PAT with minimum `api` scope |
 | `release.yml` | Unified Win+Mac release workflow | `.github/workflows/release.yml` |
+| `mirror-gitcode.yml` | Reusable GitCode release mirror | `.github/workflows/mirror-gitcode.yml` |
 | `build-mac-binaries.yml` | (separate concern) Refresh Mac sidecar binaries committed to repo for local dev | `.github/workflows/build-mac-binaries.yml` |
 | Built `.msi` + `.msi.sig` | Windows installer + signature | Built in CI runner, uploaded to release |
 | Built `.dmg` | Mac installer (first install) | Built in CI runner, uploaded to release |
 | Built `.app.tar.gz` + `.sig` | Mac updater bundle + signature | Built in CI runner, uploaded to release |
-| `latest.json` | Update manifest the app fetches | Generated by the `publish` job each release, both platforms in one file |
+| GitHub `latest.json` | Canonical updater manifest | Generated by the `publish` job each release |
+| GitCode `latest.json` | Stable GitCode-first updater manifest | `https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json`, rewritten by the mirror workflow |

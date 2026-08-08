@@ -1,15 +1,21 @@
-# Manually refreshing the JiHuLab yt-dlp mirror
+# Manually refreshing the GitCode yt-dlp mirror
 
-The desktop app checks `.../releases/yt-dlp/downloads/yt-dlp-version.json` on the
-JiHuLab `whatsub-release` project (a fixed release tag named `yt-dlp`) and prompts
-users to update. That mirror is refreshed manually — you decide when.
+The desktop app checks the fixed GitCode `yt-dlp` release tag and prompts users to
+update. The three stable mirror URLs are:
+
+- `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json`
+- `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe`
+- `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos`
+
+The binary and version-manifest requests use GitCode first and the official yt-dlp
+GitHub URLs as their fallback. The fixed `yt-dlp` tag is not the app's latest release.
 
 ## The easy way: run the mirror workflow
 
-GitHub → Actions → **Mirror yt-dlp to JiHuLab** → Run workflow (optional `notes`
+GitHub → Actions → **Mirror yt-dlp to GitCode** → Run workflow (optional `notes`
 shown in the in-app prompt). It pulls the official latest from GitHub, uploads
 all three assets to the `yt-dlp` tag, and verifies the public URLs — ~1 min,
-no local downloads or tokens needed (uses the repo's `GITLAB_TOKEN` secret).
+no local downloads or tokens needed (uses the repo's `GITCODE_TOKEN` secret).
 Still read the compatibility checklist below first.
 
 ## The manual way (fallback if CI is unavailable)
@@ -24,8 +30,15 @@ Still read the compatibility checklist below first.
    { "version": "2026.07.01", "notes": "修复 YouTube 下载" }
    ```
 4. Upload all THREE assets to the `yt-dlp` release tag on
-   `rjxznb-group/whatsub-release` (overwrite/clobber the existing ones), so the
+   `rjxznb/whatsub-release` (overwrite/clobber the existing ones), so the
    fixed download URLs keep pointing at the new files.
+
+After either path, verify every public asset anonymously. Use an HTTP GET with
+`Range: bytes=0-0`; do not use `HEAD`. Each request must return exactly `206` and
+`Content-Range: bytes 0-0/<positive-size>`. Retry the workflow after transient
+upstream or GitCode failures; its replacement upload is safe to rerun. If an asset
+was partially refreshed, rerun the workflow to backfill all three assets—do not
+create a new app version for a yt-dlp mirror repair.
 
 ## Before publishing a newer yt-dlp, re-check compatibility
 

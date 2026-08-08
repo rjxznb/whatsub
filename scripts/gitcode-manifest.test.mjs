@@ -166,6 +166,7 @@ test('yt-dlp mirror workflow uses the GitCode release controller security contra
     'Content-Range:\\ bytes\\ 0-0/[1-9][0-9]*$',
     '--globoff',
     "trap 'rm -rf \"$work_dir\"' EXIT",
+    '--url-query "file_name=$asset_name"',
   ]) {
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
@@ -238,6 +239,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
     'https://gitcode.com/rjxznb/whatsub-release.git',
     'REQUESTED_TAG',
     '--url-query "access_token=$GITCODE_TOKEN"',
+    '--url-query "file_name=$asset_name"',
   ]) {
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }

@@ -163,6 +163,7 @@ jobs:
 
             upload_response="$work_dir/upload-$(asset_key "$tag" "$asset_name").json"
             api_request --output "$upload_response" \
+              --url-query "file_name=$asset_name" \
               "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/upload_url"
             upload_url=$(upload_url_from "$upload_response") || {
               echo '::error::GitCode did not return a usable upload URL'

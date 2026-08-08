@@ -155,6 +155,7 @@ test('yt-dlp mirror workflow uses the GitCode release controller security contra
   );
 
   for (const required of [
+    'timeout-minutes: 60',
     'GITCODE_TOKEN',
     "api_base='https://api.gitcode.com/api/v5'",
     "tag='yt-dlp'",

@@ -288,6 +288,7 @@ test('GitCode mirror retries large uploads with a fresh signed URL', async () =>
     'upload_attempts=3',
     'for upload_attempt in $(seq 1 "$upload_attempts")',
     '--connect-timeout 30',
+    '--max-time 1800',
     'GitCode upload failed for $asset_name',
   ]) {
     assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -297,6 +298,31 @@ test('GitCode mirror retries large uploads with a fresh signed URL', async () =>
   const freshUploadRequest = workflow.indexOf('upload_response="work/uploads/', retryLoop);
   assert.ok(retryLoop >= 0 && freshUploadRequest > retryLoop,
     'each retry must request a fresh GitCode upload URL');
+});
+
+test('GitCode mirror keeps an existing attachment when its public bytes verify', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),
+    'utf8',
+  );
+
+  const existsCheck = workflow.indexOf('if has_attachment_named "$asset_name"');
+  const verifyCheck = workflow.indexOf(
+    'if verify_asset "$release_tag" "$asset_name"; then',
+    existsCheck,
+  );
+  const deleteRequest = workflow.indexOf('api_request --request DELETE', existsCheck);
+
+  assert.ok(existsCheck >= 0, 'workflow must detect an existing attachment');
+  assert.ok(
+    verifyCheck > existsCheck && verifyCheck < deleteRequest,
+    'workflow must verify an existing attachment before deleting it',
+  );
+  assert.match(
+    workflow.slice(verifyCheck, deleteRequest),
+    /return 0/,
+    'a verified attachment must be reused without uploading it again',
+  );
 });
 
 test('mirror plan includes every requested-release asset plus carried updater assets', async () => {

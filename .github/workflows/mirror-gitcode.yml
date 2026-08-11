@@ -212,6 +212,10 @@ jobs:
             summary_file=$(release_file summary "$release_tag")
             detail_file=$(fetch_release_detail "$release_tag")
             if has_attachment_named "$asset_name" "$summary_file" "$detail_file"; then
+              if verify_asset "$release_tag" "$asset_name"; then
+                echo "::notice::Reusing verified GitCode attachment $asset_name"
+                return 0
+              fi
               attachment_id=$(find_attachment_id "$asset_name" "$summary_file" "$detail_file")
               if [ -z "$attachment_id" ]; then
                 echo "::error::GitCode attachment $asset_name exists but no verified attachment id was found in summary or detailed Release responses"
@@ -262,7 +266,7 @@ jobs:
                 ] | first // empty
               ' "$upload_response")
 
-              upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0 --connect-timeout 30)
+              upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0 --connect-timeout 30 --max-time 1800)
               # A returned presigned host never receives the GitCode personal access token.
               if [ "$upload_host" = api.gitcode.com ]; then
                 upload_command+=(--url-query "access_token=$GITCODE_TOKEN")
@@ -307,8 +311,8 @@ jobs:
             content_range=${response#*$'\n'}
             if [ "$status" != 206 ] || \
               [[ ! "Content-Range: $content_range" =~ ^Content-Range:\ bytes\ 0-0/[1-9][0-9]*$ ]]; then
-              echo "::error::Range verification failed for $release_tag/$asset_name"
-              exit 1
+              echo "::warning::Range verification failed for $release_tag/$asset_name"
+              return 1
             fi
           }
 
@@ -356,7 +360,10 @@ jobs:
             esac
             test -s "$asset_path" || { echo '::error::Downloaded GitHub asset is empty'; exit 1; }
             upload_asset "$asset_tag" "$asset_path" "$asset_name"
-            verify_asset "$asset_tag" "$asset_name"
+            verify_asset "$asset_tag" "$asset_name" || {
+              echo "::error::Uploaded GitCode asset failed verification: $asset_tag/$asset_name"
+              exit 1
+            }
           done < <(jq -c '.[]' work/assets.json)
 
           git -c credential.helper="store --file=$CREDENTIAL_FILE" clone --branch main \

@@ -27,7 +27,7 @@ concurrency:
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - name: Checkout manifest transformer
         uses: actions/checkout@v4
@@ -204,6 +204,7 @@ jobs:
             local asset_path="$2"
             local asset_name="$3"
             local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_host upload_method
+            local upload_attempt upload_attempts
             local -a form_fields upload_headers upload_command
 
             ensure_release "$release_tag"
@@ -221,58 +222,75 @@ jobs:
                 > /dev/null
             fi
 
-            upload_response="work/uploads/$(asset_key "$release_tag" "$asset_name").json"
-            api_request --output "$upload_response" \
-              --url-query "file_name=$asset_name" \
-              "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/upload_url"
-            upload_url=$(upload_url_from "$upload_response") || {
-              echo "::error::GitCode did not return a usable upload URL for $release_tag"
-              exit 1
-            }
-            upload_url="${upload_url%%\{*}"
-            if [[ ! "$upload_url" =~ ^https://([^/?#:]+)(:[0-9]+)?(/|$) ]]; then
-              echo '::error::GitCode returned an invalid upload URL'
-              exit 1
-            fi
-            upload_host="${BASH_REMATCH[1]}"
+            upload_attempts=3
+            for upload_attempt in $(seq 1 "$upload_attempts"); do
+              # Upload URLs are short-lived. Always request a fresh one for each retry.
+              upload_response="work/uploads/$(asset_key "$release_tag" "$asset_name")-$upload_attempt.json"
+              api_request --output "$upload_response" \
+                --url-query "file_name=$asset_name" \
+                "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/upload_url"
+              upload_url=$(upload_url_from "$upload_response") || {
+                echo "::error::GitCode did not return a usable upload URL for $release_tag"
+                exit 1
+              }
+              upload_url="${upload_url%%\{*}"
+              if [[ ! "$upload_url" =~ ^https://([^/?#:]+)(:[0-9]+)?(/|$) ]]; then
+                echo '::error::GitCode returned an invalid upload URL'
+                exit 1
+              fi
+              upload_host="${BASH_REMATCH[1]}"
 
-            form_fields=()
-            while IFS=$'\t' read -r field value; do
-              form_fields+=(-F "$field=$value")
-            done < <(jq -r '
-              .. | objects | .fields? | objects | to_entries[]? |
-              [.key, (.value | tostring)] | @tsv
-            ' "$upload_response")
-            upload_headers=()
-            while IFS=$'\t' read -r field value; do
-              upload_headers+=(--header "$field: $value")
-            done < <(jq -r '
-              .headers? | objects | to_entries[]? |
-              [.key, (.value | tostring)] | @tsv
-            ' "$upload_response")
-            upload_method=$(jq -r '
-              [
-                .. | objects | to_entries[]? |
-                select(.key | ascii_downcase | test("^(method|upload_method)$")) |
-                .value | strings | ascii_upcase | select(. == "POST" or . == "PUT")
-              ] | first // empty
-            ' "$upload_response")
+              form_fields=()
+              while IFS=$'\t' read -r field value; do
+                form_fields+=(-F "$field=$value")
+              done < <(jq -r '
+                .. | objects | .fields? | objects | to_entries[]? |
+                [.key, (.value | tostring)] | @tsv
+              ' "$upload_response")
+              upload_headers=()
+              while IFS=$'\t' read -r field value; do
+                upload_headers+=(--header "$field: $value")
+              done < <(jq -r '
+                .headers? | objects | to_entries[]? |
+                [.key, (.value | tostring)] | @tsv
+              ' "$upload_response")
+              upload_method=$(jq -r '
+                [
+                  .. | objects | to_entries[]? |
+                  select(.key | ascii_downcase | test("^(method|upload_method)$")) |
+                  .value | strings | ascii_upcase | select(. == "POST" or . == "PUT")
+                ] | first // empty
+              ' "$upload_response")
 
-            upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0)
-            # A returned presigned host never receives the GitCode personal access token.
-            if [ "$upload_host" = api.gitcode.com ]; then
-              upload_command+=(--url-query "access_token=$GITCODE_TOKEN")
-            fi
-            if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
-              "${upload_command[@]}" "${upload_headers[@]}" --request POST "${form_fields[@]}" \
-                --form "file=@$asset_path;filename=$asset_name" "$upload_url" > /dev/null
-            elif [ -z "$upload_method" ] || [ "$upload_method" = PUT ]; then
-              "${upload_command[@]}" "${upload_headers[@]}" --upload-file "$asset_path" \
-                "$upload_url" > /dev/null
-            else
-              echo "::error::GitCode returned an unsupported upload method: $upload_method"
-              exit 1
-            fi
+              upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0 --connect-timeout 30)
+              # A returned presigned host never receives the GitCode personal access token.
+              if [ "$upload_host" = api.gitcode.com ]; then
+                upload_command+=(--url-query "access_token=$GITCODE_TOKEN")
+              fi
+              echo "::notice::Uploading $asset_name to GitCode (attempt $upload_attempt/$upload_attempts)"
+              if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
+                if "${upload_command[@]}" "${upload_headers[@]}" --request POST "${form_fields[@]}" \
+                  --form "file=@$asset_path;filename=$asset_name" "$upload_url" > /dev/null; then
+                  return 0
+                fi
+              elif [ -z "$upload_method" ] || [ "$upload_method" = PUT ]; then
+                if "${upload_command[@]}" "${upload_headers[@]}" --upload-file "$asset_path" \
+                  "$upload_url" > /dev/null; then
+                  return 0
+                fi
+              else
+                echo "::error::GitCode returned an unsupported upload method: $upload_method"
+                exit 1
+              fi
+
+              echo "::warning::GitCode upload failed for $asset_name (attempt $upload_attempt/$upload_attempts)"
+              if [ "$upload_attempt" -lt "$upload_attempts" ]; then
+                sleep $((upload_attempt * 10))
+              fi
+            done
+
+            echo "::error::GitCode upload failed for $asset_name after $upload_attempts attempts"
+            return 1
           }
 
           verify_asset() {

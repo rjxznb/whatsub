@@ -231,7 +231,7 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
   );
 
   for (const required of [
-    'timeout-minutes: 120',
+    'timeout-minutes: 240',
     'REQUESTED_TAG: ${{ inputs.tag }}',
     'GH_TOKEN: ${{ github.token }}',
     'fetch_release_detail',
@@ -276,6 +276,27 @@ test('GitCode mirror workflow hardens the release-mirror controller boundaries',
   );
   assert.match(planner, /windows-x86_64/);
   assert.match(planner, /darwin-aarch64/);
+});
+
+test('GitCode mirror retries large uploads with a fresh signed URL', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),
+    'utf8',
+  );
+
+  for (const required of [
+    'upload_attempts=3',
+    'for upload_attempt in $(seq 1 "$upload_attempts")',
+    '--connect-timeout 30',
+    'GitCode upload failed for $asset_name',
+  ]) {
+    assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  const retryLoop = workflow.indexOf('for upload_attempt in $(seq 1 "$upload_attempts")');
+  const freshUploadRequest = workflow.indexOf('upload_response="work/uploads/', retryLoop);
+  assert.ok(retryLoop >= 0 && freshUploadRequest > retryLoop,
+    'each retry must request a fresh GitCode upload URL');
 });
 
 test('mirror plan includes every requested-release asset plus carried updater assets', async () => {

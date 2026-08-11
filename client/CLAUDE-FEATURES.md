@@ -102,7 +102,7 @@ Pre-Plan-D server builds returned only `{ mine }`. Both Rust (`#[serde(default)]
 - Release mirror: `rjxznb/whatsub-release` on GitCode (public)
 
 **Updater endpoints** in `tauri.conf.json`, tried in order:
-1. `https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json` — GitCode first
+1. `https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main` — GitCode first
 2. `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json` — GitHub fallback
 
 GitHub remains the release source of truth. The reusable `.github/workflows/mirror-gitcode.yml` mirrors its published release assets and writes GitCode's stable `main/latest.json` with GitCode asset URLs. Same minisign key for both—signature bytes remain identical; only each platform URL is rewritten.

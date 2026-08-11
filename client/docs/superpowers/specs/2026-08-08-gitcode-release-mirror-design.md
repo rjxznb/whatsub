@@ -28,7 +28,7 @@ GitCode `main/latest.json` pointer.
 
 The desktop updater endpoints become:
 
-1. `https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json`
+1. `https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main`
 2. `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json`
 
 The JiHuLab endpoint is removed from new builds. GitCode's manifest contains

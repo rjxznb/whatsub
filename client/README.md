@@ -14,7 +14,7 @@
 | macOS Apple Silicon | [whatsub_0.1.53_aarch64.dmg](https://gitcode.com/rjxznb/whatsub-release/releases/download/v0.1.53/whatsub_0.1.53_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.53/whatsub_0.1.53_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证,双击 .dmg → **务必拖进 Applications 文件夹再打开**(直接从下载目录打开会触发 macOS App Translocation,自动更新会写不进去) |
 | Intel Mac | — | — | 暂不支持 |
 
-> 应用内自动更新和 yt-dlp 更新都优先尝试 GitCode；GitHub 是故障回退。稳定的应用更新清单为 [GitCode latest.json](https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json)。
+> 应用内自动更新和 yt-dlp 更新都优先尝试 GitCode；GitHub 是故障回退。稳定的应用更新清单为 [GitCode latest.json](https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main)。
 
 ## 主要功能
 

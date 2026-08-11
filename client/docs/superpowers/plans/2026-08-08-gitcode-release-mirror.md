@@ -199,7 +199,7 @@ git commit -m "ci(release): publish mainland mirror to GitCode"
 - [ ] **Step 1: Add failing static and Rust assertions**
 
 Static tests assert the first updater endpoint is exactly
-`https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json`, the second is the existing GitHub endpoint, and no updater endpoint references JiHuLab. Rust tests assert the GitCode yt-dlp manifest and platform URLs are selected before GitHub.
+`https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main`, the second is the existing GitHub endpoint, and no updater endpoint references JiHuLab. Rust tests assert the GitCode yt-dlp manifest and platform URLs are selected before GitHub.
 
 - [ ] **Step 2: Run focused tests and verify failure**
 
@@ -310,7 +310,7 @@ and do not publish a new version.
 Check:
 
 ```powershell
-curl.exe --noproxy "*" -fsSL https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json
+curl.exe --noproxy "*" -fsSL "https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main"
 ```
 
 Parse with `jq`, require both platform keys, then issue one-byte Range GETs for

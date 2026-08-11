@@ -138,7 +138,7 @@ test('runtime updater endpoints prefer GitCode and retain the official GitHub fa
   const endpoints = config.plugins.updater.endpoints;
 
   assert.deepEqual(endpoints, [
-    'https://gitcode.com/rjxznb/whatsub-release/raw/main/latest.json',
+    'https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main',
     'https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json',
   ]);
   assert.equal(

@@ -18,5 +18,7 @@ describe("ManagedLlmQueueToast", () => {
     expect(screen.getByText("AI 服务繁忙，正在排队…")).toBeInTheDocument();
     expect(screen.getByText("可继续等待，或在当前任务中点击停止")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByText("AI 服务繁忙，正在排队…").closest('[aria-live="polite"]'))
+      .toHaveClass("pointer-events-none");
   });
 });

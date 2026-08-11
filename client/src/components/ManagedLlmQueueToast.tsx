@@ -9,7 +9,7 @@ export function ManagedLlmQueueToast() {
   return (
     <div
       aria-live="polite"
-      className="fixed bottom-4 left-1/2 z-[65] w-80 -translate-x-1/2 rounded-lg border border-sky-500/30 bg-zinc-900 p-4 shadow-2xl"
+      className="pointer-events-none fixed bottom-4 left-1/2 z-[65] w-80 -translate-x-1/2 rounded-lg border border-sky-500/30 bg-zinc-900 p-4 shadow-2xl"
     >
       <div className="flex items-start gap-3">
         <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-sky-400" />

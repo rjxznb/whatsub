@@ -24,9 +24,13 @@ import {
 import { RelayError } from "./relayErrors";
 import { retryOperation } from "../retry";
 import { useManagedQueueStatus } from "../managedQueueStatus";
+import { invoke } from "@tauri-apps/api/core";
+
+const mockInvoke = vi.mocked(invoke);
 
 beforeEach(() => {
   mockFetch.mockReset();
+  mockInvoke.mockReset();
   useManagedQueueStatus.setState({ waitingCount: 0 });
 });
 
@@ -129,13 +133,56 @@ describe("openaiCompatible provider", () => {
     expect(useManagedQueueStatus.getState().waitingCount).toBe(0);
   });
 
-  it("does not expose queue status for BYOK providers", async () => {
+  it("clears the wait immediately when stopped during managed auth and never fetches", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let resolveSession!: (value: string | null) => void;
+    mockInvoke.mockImplementationOnce(() => new Promise<string | null>((resolve) => {
+      resolveSession = resolve;
+    }) as never);
+    mockFetch.mockRejectedValue(new DOMException("aborted", "AbortError"));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      llmProvider: "openai-compatible",
+      vendorId: "whatsub-managed",
+      openaiCompatible: {
+        baseUrl: "https://whatsub.eversay.cc/api/llm/v1",
+        apiKey: "",
+        model: "deepseek-chat",
+      },
+    });
+    const result = (async () => {
+      for await (const _ of provider.stream({
+        systemPrompt: "s",
+        userPrompt: "u",
+        signal: controller.signal,
+      })) {
+        // consume
+      }
+    })();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useManagedQueueStatus.getState().waitingCount).toBe(1);
+    controller.abort();
+    try {
+      expect(useManagedQueueStatus.getState().waitingCount).toBe(0);
+    } finally {
+      resolveSession(null);
+      await result.catch(() => undefined);
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://api.deepseek.com/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  ])("does not expose queue status for BYOK provider %s", async (baseUrl) => {
     vi.useFakeTimers();
     let resolveFetch!: (response: Response) => void;
     mockFetch.mockImplementation(() => new Promise<Response>((resolve) => { resolveFetch = resolve; }));
     const provider = createOpenAICompatibleProvider({
       ...DEFAULT_SETTINGS,
-      openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "k", model: "m" },
+      openaiCompatible: { baseUrl, apiKey: "k", model: "m" },
     });
     const result = (async () => {
       for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {

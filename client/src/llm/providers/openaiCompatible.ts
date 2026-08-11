@@ -80,8 +80,12 @@ export function createOpenAICompatibleProvider(
 
   async function fetchCompletion(body: unknown, signal?: AbortSignal): Promise<Response> {
     const finishWait = isWhatsubRelay ? beginManagedRelayWait() : null;
+    const onAbort = () => finishWait?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
     try {
+      if (signal?.aborted) throw signal.reason ?? new DOMException("aborted", "AbortError");
       const authHeader = await resolveAuthHeader();
+      if (signal?.aborted) throw signal.reason ?? new DOMException("aborted", "AbortError");
       try {
         return await fetch(`${baseUrl}/chat/completions`, {
           method: "POST",
@@ -99,6 +103,7 @@ export function createOpenAICompatibleProvider(
         });
       }
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       // Response headers mean admission is over. Streaming may continue for a
       // long time, but that is generation rather than queue wait.
       finishWait?.();

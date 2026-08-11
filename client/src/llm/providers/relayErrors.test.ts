@@ -53,6 +53,17 @@ describe("parseRelayError", () => {
     expect(parseRelayError(413, JSON.stringify({ error: "input_too_large" }))?.upsell).toBe(false);
   });
 
+  it.each([
+    ["llm_owner_busy", "你当前运行的 AI 任务较多"],
+    ["llm_queue_full", "当前使用人数较多"],
+    ["llm_queue_timeout", "本次等待已结束"],
+    ["llm_overloaded", "AI 服务暂时繁忙"],
+  ])("maps admission code %s without upselling", (code, message) => {
+    const info = parseRelayError(429, JSON.stringify({ error: code }));
+    expect(info).toMatchObject({ code, upsell: false });
+    expect(info?.message).toContain(message);
+  });
+
   it("synthesizes a message for an unknown code rather than dropping it", () => {
     const info = parseRelayError(500, JSON.stringify({ error: "weird_new_code" }));
     expect(info?.code).toBe("weird_new_code");
@@ -82,5 +93,12 @@ describe("RelayError", () => {
     expect(err.used).toBeNull();
     expect(err.limit).toBeNull();
     expect(err.periodResetAt).toBeNull();
+  });
+
+  it("preserves Retry-After for admission failures", () => {
+    const info = parseRelayError(429, JSON.stringify({ error: "llm_queue_full" }));
+    expect(info).not.toBeNull();
+    const error = new RelayError(info!, 429, "", 7_000);
+    expect(error.retryAfterMs).toBe(7_000);
   });
 });

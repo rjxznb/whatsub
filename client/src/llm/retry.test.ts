@@ -70,6 +70,22 @@ describe("retryOperation", () => {
     }
   });
 
+  it.each([
+    "llm_owner_busy",
+    "llm_queue_full",
+    "llm_queue_timeout",
+    "llm_overloaded",
+  ])("does not start another 30-second wait for admission failure %s", async (code) => {
+    const error = new RelayError({ code, message: code, upsell: false }, 429, "", 3_000);
+    const operation = vi.fn<(attempt: number) => Promise<never>>(async () => { throw error; });
+    const sleep = vi.fn<(ms: number, signal?: AbortSignal) => Promise<void>>(async () => undefined);
+
+    await expect(retryOperation(operation, { policy, isRetryable: isRetryableProviderFailure, sleep }))
+      .rejects.toBe(error);
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
   it("aborts a retry backoff without another attempt or a lingering timer", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();

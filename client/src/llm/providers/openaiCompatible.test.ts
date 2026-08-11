@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,9 +23,15 @@ import {
 } from "./errors";
 import { RelayError } from "./relayErrors";
 import { retryOperation } from "../retry";
+import { useManagedQueueStatus } from "../managedQueueStatus";
 
 beforeEach(() => {
   mockFetch.mockReset();
+  useManagedQueueStatus.setState({ waitingCount: 0 });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function makeStream(chunks: string[]): ReadableStream<Uint8Array> {
@@ -63,6 +69,86 @@ async function rejectionOf(action: () => Promise<unknown>): Promise<unknown> {
 }
 
 describe("openaiCompatible provider", () => {
+  it("marks only a managed normal stream as waiting and clears it when headers arrive", async () => {
+    vi.useFakeTimers();
+    let resolveFetch!: (response: Response) => void;
+    mockFetch.mockImplementation(() => new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      llmProvider: "openai-compatible",
+      vendorId: "whatsub-managed",
+      openaiCompatible: {
+        baseUrl: "https://whatsub.eversay.cc/api/llm/v1",
+        apiKey: "",
+        model: "deepseek-chat",
+      },
+    });
+
+    const result = (async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    })();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useManagedQueueStatus.getState().waitingCount).toBe(1);
+
+    let closeBody!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        closeBody = () => controller.close();
+      },
+    });
+    resolveFetch(new Response(body, { status: 200 }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useManagedQueueStatus.getState().waitingCount).toBe(0);
+    closeBody();
+    await result;
+  });
+
+  it("clears a managed tool-stream wait when fetch fails or aborts", async () => {
+    vi.useFakeTimers();
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      llmProvider: "openai-compatible",
+      vendorId: "whatsub-managed",
+      openaiCompatible: {
+        baseUrl: "https://whatsub.eversay.cc/api/llm/v1",
+        apiKey: "",
+        model: "deepseek-chat",
+      },
+    });
+    let rejectFetch!: (error: unknown) => void;
+    mockFetch.mockImplementation(() => new Promise<Response>((_resolve, reject) => { rejectFetch = reject; }));
+
+    const result = collectToolStream(provider);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useManagedQueueStatus.getState().waitingCount).toBe(1);
+    rejectFetch(new DOMException("aborted", "AbortError"));
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(useManagedQueueStatus.getState().waitingCount).toBe(0);
+  });
+
+  it("does not expose queue status for BYOK providers", async () => {
+    vi.useFakeTimers();
+    let resolveFetch!: (response: Response) => void;
+    mockFetch.mockImplementation(() => new Promise<Response>((resolve) => { resolveFetch = resolve; }));
+    const provider = createOpenAICompatibleProvider({
+      ...DEFAULT_SETTINGS,
+      openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "k", model: "m" },
+    });
+    const result = (async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    })();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(useManagedQueueStatus.getState().waitingCount).toBe(0);
+    resolveFetch(new Response(makeStream(["data: [DONE]\n\n"]), { status: 200 }));
+    await result;
+  });
+
   it("yields delta content from SSE stream", async () => {
     const sseLines =
       `data: {"choices":[{"delta":{"content":"hel"}}]}\n\n` +

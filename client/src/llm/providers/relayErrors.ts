@@ -42,6 +42,10 @@ const FALLBACK: Record<string, string> = {
   input_too_large: "本次输入过长，超出 whatSub 托管单次上限。",
   rate_limited: "请求过于频繁，请稍后再试。",
   service_unavailable: "whatSub 托管暂不可用，请稍后再试或改用自己的 API key。",
+  llm_owner_busy: "你当前运行的 AI 任务较多，请等待已有任务完成后再试。",
+  llm_queue_full: "当前使用人数较多，请稍后重试。",
+  llm_queue_timeout: "当前使用人数较多，本次等待已结束，请稍后重试。",
+  llm_overloaded: "AI 服务暂时繁忙，请稍后重试。",
 };
 
 /** Codes where retrying won't help — the user must upgrade or switch provider. */

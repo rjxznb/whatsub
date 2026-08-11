@@ -30,6 +30,7 @@ import {
   ProviderTransportError,
 } from "./errors";
 import { inferVendorId } from "../vendors";
+import { beginManagedRelayWait } from "../managedQueueStatus";
 
 export function createOpenAICompatibleProvider(
   settings: Settings,
@@ -77,6 +78,33 @@ export function createOpenAICompatibleProvider(
     return "Bearer ";
   }
 
+  async function fetchCompletion(body: unknown, signal?: AbortSignal): Promise<Response> {
+    const finishWait = isWhatsubRelay ? beginManagedRelayWait() : null;
+    try {
+      const authHeader = await resolveAuthHeader();
+      try {
+        return await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: authHeader,
+          },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("OpenAI-compatible request failed", "send", {
+          cause: error,
+        });
+      }
+    } finally {
+      // Response headers mean admission is over. Streaming may continue for a
+      // long time, but that is generation rather than queue wait.
+      finishWait?.();
+    }
+  }
+
   async function throwResponseFailure(resp: Response): Promise<never> {
     let body = "";
     let bodyReadCause: unknown;
@@ -109,32 +137,15 @@ export function createOpenAICompatibleProvider(
       ? { retryProfile: "deepseek-analysis" as const }
       : {}),
     async *stream(req: ProviderRequest): AsyncIterable<string> {
-      const authHeader = await resolveAuthHeader();
-      let resp: Response;
-      try {
-        resp = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: authHeader,
-          },
-          body: JSON.stringify({
-            model: cfg.model,
-            stream: true,
-            messages: [
-              { role: "system", content: req.systemPrompt },
-              { role: "user", content: req.userPrompt },
-            ],
-            ...deepseekNoThink,
-          }),
-          signal: req.signal,
-        });
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        throw new ProviderTransportError("OpenAI-compatible request failed", "send", {
-          cause: error,
-        });
-      }
+      const resp = await fetchCompletion({
+        model: cfg.model,
+        stream: true,
+        messages: [
+          { role: "system", content: req.systemPrompt },
+          { role: "user", content: req.userPrompt },
+        ],
+        ...deepseekNoThink,
+      }, req.signal);
 
       if (!resp.ok) {
         await throwResponseFailure(resp);
@@ -166,24 +177,7 @@ export function createOpenAICompatibleProvider(
         stream: true,
         ...deepseekNoThink,
       };
-      const authHeader = await resolveAuthHeader();
-      let resp: Response;
-      try {
-        resp = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: authHeader,
-          },
-          body: JSON.stringify(body),
-          signal: opts.signal,
-        });
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        throw new ProviderTransportError("OpenAI-compatible request failed", "send", {
-          cause: error,
-        });
-      }
+      const resp = await fetchCompletion(body, opts.signal);
       if (!resp.ok) await throwResponseFailure(resp);
       if (!resp.body) throw new ProviderProtocolError("response body missing");
       const reader = resp.body

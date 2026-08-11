@@ -46,10 +46,22 @@ export function isAbortError(error: unknown): boolean {
     : error instanceof Error && error.name === "AbortError";
 }
 
+export const MANAGED_RELAY_ADMISSION_CODES = new Set([
+  "llm_owner_busy",
+  "llm_queue_full",
+  "llm_queue_timeout",
+  "llm_overloaded",
+]);
+
 /** Returns true only for provider errors where a repeated request can succeed. */
 export function isRetryableProviderFailure(error: unknown): boolean {
   if (error instanceof ProviderTransportError) return true;
   if (!(error instanceof ProviderHttpError)) return false;
+
+  const relayCode = (error as { code?: unknown }).code;
+  if (typeof relayCode === "string" && MANAGED_RELAY_ADMISSION_CODES.has(relayCode)) {
+    return false;
+  }
 
   // Managed relay quota/license rejections require user action rather than a
   // retry. Other relay 429s (for example rate limiting) remain transient.

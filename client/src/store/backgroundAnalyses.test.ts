@@ -325,7 +325,6 @@ describe("background analysis lease handoff", () => {
     ];
     let attempt = 0;
     mocks.getProvider.mockReturnValue({
-      retryProfile: "deepseek-analysis",
       async *stream() {
         attempt += 1;
         if (attempt === 1) {
@@ -512,7 +511,6 @@ describe("background analysis lease handoff", () => {
       releaseRetry = resolve;
     });
     mocks.getProvider.mockReturnValue({
-      retryProfile: "deepseek-analysis",
       async *stream() {
         attempt += 1;
         if (attempt === 1) {

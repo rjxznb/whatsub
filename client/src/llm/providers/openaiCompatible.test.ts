@@ -449,23 +449,27 @@ describe("openaiCompatible provider", () => {
     expect(operation).toHaveBeenCalledTimes(1);
   });
 
-  it("sets the DeepSeek retry profile only for DeepSeek and managed relay vendors", () => {
-    const deepseek = createOpenAICompatibleProvider({
-      ...DEFAULT_SETTINGS,
-      openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "k", model: "m" },
-    });
-    const managed = createOpenAICompatibleProvider({
-      ...DEFAULT_SETTINGS,
-      openaiCompatible: { baseUrl: "https://whatsub.eversay.cc/api/llm/v1", apiKey: "k", model: "m" },
-    });
-    const other = createOpenAICompatibleProvider({
-      ...DEFAULT_SETTINGS,
-      openaiCompatible: { baseUrl: "https://api.openai.com/v1", apiKey: "k", model: "m" },
-    });
+  it("does not attach analysis retry policy to provider transports", () => {
+    const providers = [
+      createOpenAICompatibleProvider({
+        ...DEFAULT_SETTINGS,
+        openaiCompatible: { baseUrl: "https://api.deepseek.com/v1", apiKey: "k", model: "m" },
+      }),
+      createOpenAICompatibleProvider({
+        ...DEFAULT_SETTINGS,
+        openaiCompatible: { baseUrl: "https://whatsub.eversay.cc/api/llm/v1", apiKey: "k", model: "m" },
+      }),
+      createOpenAICompatibleProvider({
+        ...DEFAULT_SETTINGS,
+        openaiCompatible: {
+          baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          apiKey: "k",
+          model: "qwen-flash",
+        },
+      }),
+    ];
 
-    expect(deepseek.retryProfile).toBe("deepseek-analysis");
-    expect(managed.retryProfile).toBe("deepseek-analysis");
-    expect(other.retryProfile).toBeUndefined();
+    expect(providers.every((provider) => !("retryProfile" in provider))).toBe(true);
   });
 });
 

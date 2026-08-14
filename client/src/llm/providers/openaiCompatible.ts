@@ -29,7 +29,6 @@ import {
   ProviderProtocolError,
   ProviderTransportError,
 } from "./errors";
-import { inferVendorId } from "../vendors";
 import { beginManagedRelayWait } from "../managedQueueStatus";
 
 export function createOpenAICompatibleProvider(
@@ -37,7 +36,6 @@ export function createOpenAICompatibleProvider(
 ): Provider & AgentProvider {
   const cfg = settings.openaiCompatible;
   const baseUrl = cfg.baseUrl.replace(/\/$/, "");
-  const vendorId = inferVendorId(settings.llmProvider, cfg.baseUrl);
 
   // DeepSeek V4 (deepseek-v4-flash / -pro) defaults thinking mode to ENABLED,
   // so it emits a long reasoning chain before the answer — much slower than the
@@ -138,9 +136,6 @@ export function createOpenAICompatibleProvider(
   }
 
   return {
-    ...(vendorId === "deepseek" || vendorId === "whatsub-managed"
-      ? { retryProfile: "deepseek-analysis" as const }
-      : {}),
     async *stream(req: ProviderRequest): AsyncIterable<string> {
       const resp = await fetchCompletion({
         model: cfg.model,

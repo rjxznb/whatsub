@@ -277,10 +277,12 @@ Expected: all selected tests pass and TypeScript reports no references to `Provi
 Run:
 
 ```powershell
-rg -n "retryProfile|deepseek-analysis|DEEPSEEK_ANALYSIS_RETRY_POLICY|NO_RETRY_POLICY" src
+rg -n "retryProfile|deepseek-analysis|DEEPSEEK_ANALYSIS_RETRY_POLICY|NO_RETRY_POLICY" src --glob '!*.test.ts'
 ```
 
-Expected: no matches.
+Expected: no production-code matches. The provider test intentionally mentions
+`retryProfile` in a negative assertion that prevents the metadata from being
+reintroduced.
 
 - [ ] **Step 6: Commit the interface cleanup**
 

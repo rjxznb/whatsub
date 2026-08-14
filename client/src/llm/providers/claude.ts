@@ -12,31 +12,48 @@ import type { Message, ToolMessage } from "../../types/agent";
 // side (no CORS), and is otherwise a drop-in replacement for window.fetch.
 // URL allowlist is in src-tauri/capabilities/default.json.
 import { fetch } from "@tauri-apps/plugin-http";
+import {
+  isAbortError,
+  providerHttpErrorFromResponse,
+  ProviderProtocolError,
+  ProviderTransportError,
+} from "./errors";
 
 export function createClaudeProvider(settings: Settings): Provider & AgentProvider {
   const cfg = settings.claude;
   return {
     async *stream(req: ProviderRequest): AsyncIterable<string> {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": cfg.apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: cfg.model,
-          max_tokens: 8192,
-          stream: true,
-          system: req.systemPrompt,
-          messages: [{ role: "user", content: req.userPrompt }],
-        }),
-        signal: req.signal,
-      });
+      let resp: Response;
+      try {
+        resp = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": cfg.apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: cfg.model,
+            max_tokens: 8192,
+            stream: true,
+            system: req.systemPrompt,
+            messages: [{ role: "user", content: req.userPrompt }],
+          }),
+          signal: req.signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("Claude request failed", "send", { cause: error });
+      }
 
-      if (!resp.ok) throw new Error(`Claude API ${resp.status}: ${await resp.text()}`);
-      if (!resp.body) throw new Error("response body missing");
-      yield* parseTextStream(resp.body);
+      if (!resp.ok) throw await providerHttpErrorFromResponse("Claude API", resp);
+      if (!resp.body) throw new ProviderProtocolError("Claude response body missing");
+      try {
+        yield* parseTextStream(resp.body);
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("Claude response read failed", "read", { cause: error });
+      }
     },
 
     async *streamWithTools(

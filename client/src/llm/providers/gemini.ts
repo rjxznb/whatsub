@@ -10,6 +10,12 @@ import type { Message, ToolMessage } from "../../types/agent";
 // Rust-side fetch (plugin-http) — bypasses the WebView CSP/CORS so the packaged
 // app can reach generativelanguage.googleapis.com (same as the Claude provider).
 import { fetch } from "@tauri-apps/plugin-http";
+import {
+  isAbortError,
+  providerHttpErrorFromResponse,
+  ProviderProtocolError,
+  ProviderTransportError,
+} from "./errors";
 
 export function createGeminiProvider(settings: Settings): Provider & AgentProvider {
   const cfg = settings.gemini;
@@ -19,18 +25,29 @@ export function createGeminiProvider(settings: Settings): Provider & AgentProvid
         `https://generativelanguage.googleapis.com/v1beta/models/${cfg.model}:streamGenerateContent` +
         `?alt=sse&key=${encodeURIComponent(cfg.apiKey)}`;
 
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: req.systemPrompt }] },
-          contents: [{ role: "user", parts: [{ text: req.userPrompt }] }],
-        }),
-        signal: req.signal,
-      });
-      if (!resp.ok) throw new Error(`Gemini API ${resp.status}: ${await resp.text()}`);
-      if (!resp.body) throw new Error("response body missing");
-      yield* parseTextStream(resp.body);
+      let resp: Response;
+      try {
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: req.systemPrompt }] },
+            contents: [{ role: "user", parts: [{ text: req.userPrompt }] }],
+          }),
+          signal: req.signal,
+        });
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("Gemini request failed", "send", { cause: error });
+      }
+      if (!resp.ok) throw await providerHttpErrorFromResponse("Gemini API", resp);
+      if (!resp.body) throw new ProviderProtocolError("Gemini response body missing");
+      try {
+        yield* parseTextStream(resp.body);
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        throw new ProviderTransportError("Gemini response read failed", "read", { cause: error });
+      }
     },
 
     async *streamWithTools(

@@ -17,6 +17,7 @@ import {
   formatHistory,
   parseClaudeStream,
 } from "./claude";
+import { ProviderProtocolError } from "./errors";
 
 beforeEach(() => mockFetch.mockReset());
 
@@ -50,6 +51,47 @@ describe("claude provider", () => {
     let acc = "";
     for await (const c of p.stream({ systemPrompt: "s", userPrompt: "u" })) acc += c;
     expect(acc).toBe("hello");
+  });
+
+  it("normalizes send, HTTP, missing-body, and read failures for analysis retry", async () => {
+    const provider = createClaudeProvider({
+      ...DEFAULT_SETTINGS,
+      claude: { apiKey: "k", model: "m" },
+    });
+    const consume = async () => {
+      for await (const _ of provider.stream({ systemPrompt: "s", userPrompt: "u" })) {
+        // consume
+      }
+    };
+
+    mockFetch.mockRejectedValueOnce(new Error("network down"));
+    await expect(consume()).rejects.toMatchObject({
+      name: "ProviderTransportError",
+      stage: "send",
+    });
+
+    mockFetch.mockResolvedValueOnce(new Response("busy", {
+      status: 503,
+      headers: { "retry-after": "2" },
+    }));
+    await expect(consume()).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 503,
+      body: "busy",
+      retryAfterMs: 2_000,
+    });
+
+    mockFetch.mockResolvedValueOnce({ ok: true, body: null } as Response);
+    await expect(consume()).rejects.toBeInstanceOf(ProviderProtocolError);
+
+    const failedBody = new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error("socket closed")); },
+    });
+    mockFetch.mockResolvedValueOnce(new Response(failedBody, { status: 200 }));
+    await expect(consume()).rejects.toMatchObject({
+      name: "ProviderTransportError",
+      stage: "read",
+    });
   });
 });
 

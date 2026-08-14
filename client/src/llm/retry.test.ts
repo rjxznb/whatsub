@@ -53,6 +53,25 @@ describe("retryOperation", () => {
     expect(sleep).toHaveBeenCalledWith(9_000, undefined);
   });
 
+  it.each([
+    ['{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}'],
+    ['{"error":{"code":"billing_hard_limit_reached"}}'],
+    ['{"code":"Arrearage","message":"account balance is insufficient"}'],
+  ])("does not retry a permanent direct-provider quota 429 body %s", (body) => {
+    const error = new ProviderHttpError("quota", 429, body, null);
+    expect(isRetryableProviderFailure(error)).toBe(false);
+  });
+
+  it("still retries a direct-provider rate-limit 429", () => {
+    const error = new ProviderHttpError(
+      "rate limited",
+      429,
+      '{"error":{"code":"rate_limit_exceeded"}}',
+      null,
+    );
+    expect(isRetryableProviderFailure(error)).toBe(true);
+  });
+
   it("does not retry authentication, relay quota, or protocol failures", async () => {
     const failures = [
       new ProviderHttpError("unauthorized", 401, "", null),

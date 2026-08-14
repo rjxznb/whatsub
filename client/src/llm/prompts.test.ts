@@ -26,6 +26,8 @@ describe("analysis prompt contract", () => {
     expect(prompt).toContain("NEVER exceed eight English words");
     expect(prompt).not.toContain('"isKeyPoint": boolean');
     expect(prompt).not.toContain('"highlights": [{');
+    expect(prompt).not.toContain('"type": "summary"');
+    expect(prompt).not.toContain('"keyPhrases": [{');
   });
 
   it("builds a repair request containing only unresolved cues", () => {

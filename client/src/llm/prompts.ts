@@ -96,15 +96,10 @@ WRONG (these have caused real bugs — DO NOT do this):
 - Returning phrase tuples whose English source is not an exact substring of the cue text.
 - Returning a phrase tuple whose Chinese phrase is not an exact substring of zh.
 
-SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
-{
-  "type": "summary",
-  "keyPhrases": [{
-    "expression": string,
-    "meaningZh": string,
-    "usage": string
-  }]
-}
+SUMMARY JSONL SCHEMA (only when the user prompt explicitly asks for it)
+{"p":[["catch up","补上","用于表示赶上进度或补做遗漏事项"]]}
+
+Each summary tuple is [English expression, concise Chinese meaning, Chinese usage note].
 
 CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 

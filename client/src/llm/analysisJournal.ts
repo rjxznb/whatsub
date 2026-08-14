@@ -15,6 +15,7 @@ const STYLES = new Set<TranslationStyle>([
 export interface AnalysisInflightEntry {
   cueOffset: number;
   subtitle: Subtitle;
+  annotationRepair?: true;
 }
 
 export interface AnalysisInflightJournal {
@@ -67,8 +68,18 @@ export function parseAnalysisInflightJournal(
     ) {
       return null;
     }
+    if (candidate.annotationRepair !== undefined && candidate.annotationRepair !== true) {
+      return null;
+    }
+    if (candidate.annotationRepair === true && !hasEmptyAnnotations(candidate.subtitle)) {
+      return null;
+    }
     offsets.add(candidate.cueOffset);
-    entries.push({ cueOffset: candidate.cueOffset, subtitle: candidate.subtitle });
+    entries.push({
+      cueOffset: candidate.cueOffset,
+      subtitle: candidate.subtitle,
+      ...(candidate.annotationRepair === true ? { annotationRepair: true as const } : {}),
+    });
   }
 
   entries.sort((left, right) => left.cueOffset - right.cueOffset);
@@ -116,10 +127,20 @@ export function mergeInflightEntries(
       throw new TypeError("analysis inflight entry is invalid");
     }
     const current = merged.get(entry.cueOffset);
-    if (current && !sameSubtitle(current.subtitle, entry.subtitle)) {
+    if (current) {
+      if (
+        sameSubtitle(current.subtitle, entry.subtitle)
+        && current.annotationRepair === entry.annotationRepair
+      ) {
+        continue;
+      }
+      if (isAnnotationRepairCompletion(current, entry)) {
+        merged.set(entry.cueOffset, entry);
+        continue;
+      }
       throw new TypeError("analysis inflight entry rewrite rejected");
     }
-    if (!current) merged.set(entry.cueOffset, entry);
+    merged.set(entry.cueOffset, entry);
   }
   if (merged.size > MAX_ENTRIES) {
     throw new RangeError("analysis inflight entry limit exceeded");
@@ -138,6 +159,29 @@ export function journalSubtitles(journal: AnalysisInflightJournal): Subtitle[] {
 
 function sameSubtitle(left: Subtitle, right: Subtitle): boolean {
   return JSON.stringify(stableSubtitle(left)) === JSON.stringify(stableSubtitle(right));
+}
+
+function isAnnotationRepairCompletion(
+  current: AnalysisInflightEntry,
+  incoming: AnalysisInflightEntry,
+): boolean {
+  return current.annotationRepair === true
+    && incoming.annotationRepair !== true
+    && sameSubtitleIdentity(current.subtitle, incoming.subtitle);
+}
+
+function sameSubtitleIdentity(left: Subtitle, right: Subtitle): boolean {
+  return left.time === right.time
+    && left.endTime === right.endTime
+    && left.text === right.text
+    && left.translation === right.translation;
+}
+
+function hasEmptyAnnotations(subtitle: Subtitle): boolean {
+  return subtitle.isKeyPoint === false
+    && subtitle.highlightWords.length === 0
+    && Object.keys(subtitle.keyNotes).length === 0
+    && Object.keys(subtitle.highlightTranslations).length === 0;
 }
 
 function stableSubtitle(subtitle: Subtitle) {

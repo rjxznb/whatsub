@@ -325,7 +325,14 @@ async function resolveCueBatch(
   const requestBatch = withUniqueCueIndexes(batch, startCueOffset);
   const resolved = new Map<number, Subtitle>();
   const annotationRepairOffsets = new Set<number>();
-  seedResumePreview(resumePreview, startCueOffset, endCueOffset, requestBatch, resolved);
+  seedResumePreview(
+    resumePreview,
+    startCueOffset,
+    endCueOffset,
+    requestBatch,
+    resolved,
+    annotationRepairOffsets,
+  );
   const policy = ANALYSIS_RETRY_POLICY;
   let lastInvalid: InvalidJsonLine | null = null;
 
@@ -370,7 +377,11 @@ async function resolveCueBatch(
       const publishResolved = async () => {
         if (!dirty) return;
         dirty = false;
-        const entries = orderedResolvedEntries(requestBatch, resolved);
+        const entries = orderedResolvedEntries(
+          requestBatch,
+          resolved,
+          annotationRepairOffsets,
+        );
         await opts.onPreview?.({
           startCueOffset,
           endCueOffset,
@@ -451,7 +462,7 @@ async function finalizeResolvedBatch(
   systemPrompt: string,
   requestBatch: readonly RequestedCue[],
   resolved: Map<number, Subtitle>,
-  annotationRepairOffsets: ReadonlySet<number>,
+  annotationRepairOffsets: Set<number>,
   startCueOffset: number,
   endCueOffset: number,
 ): Promise<Subtitle[]> {
@@ -474,7 +485,7 @@ async function repairDamagedAnnotations(
   systemPrompt: string,
   requestBatch: readonly RequestedCue[],
   resolved: Map<number, Subtitle>,
-  annotationRepairOffsets: ReadonlySet<number>,
+  annotationRepairOffsets: Set<number>,
   startCueOffset: number,
   endCueOffset: number,
 ): Promise<void> {
@@ -531,24 +542,22 @@ async function repairDamagedAnnotations(
     }),
   });
 
-  let changed = false;
   for (const entry of damaged) {
     const subtitle = resolved.get(entry.cueOffset);
     const patch = patches.get(entry.cue.index);
-    if (!subtitle || !patch) continue;
-    resolved.set(entry.cueOffset, { ...subtitle, ...patch });
-    changed ||= patch.highlightWords.length > 0;
+    if (subtitle && patch) {
+      resolved.set(entry.cueOffset, { ...subtitle, ...patch });
+    }
+    annotationRepairOffsets.delete(entry.cueOffset);
   }
 
-  if (changed) {
-    const entries = orderedResolvedEntries(requestBatch, resolved);
-    await opts.onPreview?.({
-      startCueOffset,
-      endCueOffset,
-      entries,
-      subtitles: entries.map((entry) => entry.subtitle),
-    });
-  }
+  const entries = orderedResolvedEntries(requestBatch, resolved, annotationRepairOffsets);
+  await opts.onPreview?.({
+    startCueOffset,
+    endCueOffset,
+    entries,
+    subtitles: entries.map((entry) => entry.subtitle),
+  });
 }
 
 function withUniqueCueIndexes(
@@ -578,10 +587,17 @@ function withUniqueCueIndexes(
 function orderedResolvedEntries(
   batch: readonly RequestedCue[],
   resolved: ReadonlyMap<number, Subtitle>,
+  annotationRepairOffsets: ReadonlySet<number> = new Set(),
 ): AnalysisInflightEntry[] {
   return batch.flatMap((requested) => {
     const subtitle = resolved.get(requested.cueOffset);
-    return subtitle ? [{ cueOffset: requested.cueOffset, subtitle }] : [];
+    return subtitle ? [{
+      cueOffset: requested.cueOffset,
+      subtitle,
+      ...(annotationRepairOffsets.has(requested.cueOffset)
+        ? { annotationRepair: true as const }
+        : {}),
+    }] : [];
   });
 }
 
@@ -591,6 +607,7 @@ function seedResumePreview(
   endCueOffset: number,
   requestBatch: readonly RequestedCue[],
   resolved: Map<number, Subtitle>,
+  annotationRepairOffsets: Set<number>,
 ): void {
   if (!preview) return;
   if (
@@ -605,6 +622,9 @@ function seedResumePreview(
       throw new TypeError("analysis resume preview contains an invalid cue offset");
     }
     resolved.set(entry.cueOffset, entry.subtitle);
+    if (entry.annotationRepair === true) {
+      annotationRepairOffsets.add(entry.cueOffset);
+    }
   }
 }
 
@@ -647,4 +667,3 @@ function throwIfAborted(signal?: AbortSignal): void {
     throw new DOMException("The operation was aborted", "AbortError");
   }
 }
-

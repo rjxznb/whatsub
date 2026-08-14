@@ -5,10 +5,21 @@ describe("analysis prompt contract", () => {
   it("asks providers for compact generated fields and not source echoes", () => {
     const prompt = buildSystemPrompt("colloquial");
 
-    expect(prompt).toContain('"highlights"');
-    expect(prompt).toContain('"index"');
+    expect(prompt).toContain('"p"');
+    expect(prompt).toContain('"i"');
     expect(prompt).not.toContain('"endTime": number');
     expect(prompt).not.toContain('"highlightWords": string[]');
+  });
+
+  it("uses the compact streaming cue schema for every provider", () => {
+    const prompt = buildSystemPrompt("colloquial");
+
+    expect(prompt).toContain('{"i":12,"zh":');
+    expect(prompt).toContain('"p":[["catch up"');
+    expect(prompt).toContain("one to five English words");
+    expect(prompt).toContain("NEVER exceed eight English words");
+    expect(prompt).not.toContain('"isKeyPoint": boolean');
+    expect(prompt).not.toContain('"highlights": [{');
   });
 
   it("builds a repair request containing only unresolved cues", () => {

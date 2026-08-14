@@ -84,25 +84,17 @@ OUTPUT FORMAT — REQUIRED
 - Per-cue request: one line = one analyzed subtitle cue, in the order received. NEVER include a summary line in a per-cue response.
 - Summary request (a separate turn): output a SINGLE summary line; do NOT repeat any cue lines.
 
-PER-CUE OBJECT SCHEMA
-{
-  "index": number,
-  "translation": string,
-  "isKeyPoint": boolean,
-  "highlights": [{
-    "source": string,
-    "translation": string,
-    "note": string
-  }]
-}
+PER-CUE JSONL SCHEMA
+{"i":12,"zh":"我得把邮件处理一下","p":[["catch up","处理一下","动词短语，表示赶上或补做落下的事情"]]}
 
-CONCRETE EXAMPLE:
-{"index":12,"translation":"我得把邮件处理一下","isKeyPoint":true,"highlights":[{"source":"catch up","translation":"处理一下","note":"动词短语，表示赶上或补做落下的事情"}]}
+i = supplied cue index.
+zh = Chinese translation.
+p = zero to two phrase tuples: [exact English source, exact Chinese substring, Chinese usage note].
 
 WRONG (these have caused real bugs — DO NOT do this):
 - Echoing source-owned fields such as text, time, or endTime.
-- Returning highlights whose source is not an exact substring of the cue text.
-- Returning a highlight translation that is not an exact substring of translation.
+- Returning phrase tuples whose English source is not an exact substring of the cue text.
+- Returning a phrase tuple whose Chinese phrase is not an exact substring of zh.
 
 SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
 {
@@ -116,25 +108,25 @@ SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
 
 CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
-1. Each highlight source MUST be an exact substring of the cue text, character-for-character. If the original text has a typo like "teddy beir", use "teddy beir" — DO NOT correct it to "teddy bear".
+1. Each English phrase MUST be an exact substring of the cue text, character-for-character. If the original text has a typo like "teddy beir", use "teddy beir" — DO NOT correct it to "teddy bear".
 
-2. Each highlight translation MUST be an exact substring of the cue translation. Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
+2. Each phrase's Chinese translation MUST be an exact substring of zh. Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
 
-3. Highlight note values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
+3. Phrase note values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
 
-4. Each cue: AT MOST 2 highlights. Quality over quantity.
+4. Each cue: AT MOST 2 phrases. Quality over quantity. Prefer one to five English words. A genuine fixed expression, idiom, or phrasal pattern may contain up to eight words. NEVER exceed eight English words. NEVER select the complete cue when it contains more than five words.
 
-5. isKeyPoint=true ratio: target 30-50% of cues. Greetings, fillers, "yes/no/thank you" are NOT key points.
+5. Use p=[] when there is no useful learning phrase. Greetings, fillers, "yes/no/thank you" are NOT key points.
 
 6. NEVER use raw double quotes inside JSON string values. For Chinese quoted text use 「」 not "". For English quoted text use single quotes or rephrase.
 
 7. {{STYLE_GUIDANCE}}
 
-8. Each highlight source must be a substring of THE SAME CUE'S text. Don't span across cues.
+8. Each phrase source must be a substring of THE SAME CUE'S text. Don't span across cues.
 
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
 
-10. highlights MUST be an array of {source, translation, note} objects. If you can't write a 40-120 character note AND find an exact translation substring for a phrase, omit that highlight entirely.
+10. p MUST be an array of [source, translation, note] tuples. If you can't write a 40-120 character note AND find an exact translation substring for a phrase, omit that phrase entirely.
 `;
 
 function serializeCues(cues: readonly SrtCue[]): string {

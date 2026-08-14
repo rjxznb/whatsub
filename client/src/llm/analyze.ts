@@ -105,14 +105,9 @@ class ModelContentError extends ProviderProtocolError {
   }
 }
 
-const DEEPSEEK_ANALYSIS_RETRY_POLICY: RetryPolicy = {
+const ANALYSIS_RETRY_POLICY: RetryPolicy = {
   maxAttempts: 4,
   backoffMs: [500, 1500, 3500],
-};
-
-const NO_RETRY_POLICY: RetryPolicy = {
-  maxAttempts: 1,
-  backoffMs: [],
 };
 
 export function runAnalysis(opts: RunAnalysisOptions): Promise<AnalysisCheckpoint>;
@@ -300,9 +295,7 @@ function withProviderRetry<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   return retryOperation(operation, {
-    policy: opts.provider.retryProfile === "deepseek-analysis"
-      ? DEEPSEEK_ANALYSIS_RETRY_POLICY
-      : NO_RETRY_POLICY,
+    policy: ANALYSIS_RETRY_POLICY,
     isRetryable: (error) =>
       isRetryableProviderFailure(error) || error instanceof ProviderProtocolError,
     signal: opts.signal,
@@ -325,7 +318,7 @@ async function resolveCueBatch(
   const requestBatch = withUniqueCueIndexes(batch, startCueOffset);
   const resolved = new Map<number, Subtitle>();
   seedResumePreview(resumePreview, startCueOffset, endCueOffset, requestBatch, resolved);
-  const policy = retryPolicyFor(opts.provider);
+  const policy = ANALYSIS_RETRY_POLICY;
   let lastInvalid: InvalidJsonLine | null = null;
 
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
@@ -448,12 +441,6 @@ function withUniqueCueIndexes(
     }
     return { cueOffset: startCueOffset + offset, cue: uniqueCue };
   });
-}
-
-function retryPolicyFor(provider: Provider): RetryPolicy {
-  return provider.retryProfile === "deepseek-analysis"
-    ? DEEPSEEK_ANALYSIS_RETRY_POLICY
-    : NO_RETRY_POLICY;
 }
 
 function orderedResolvedEntries(

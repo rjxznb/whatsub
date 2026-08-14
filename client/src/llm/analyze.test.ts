@@ -21,12 +21,10 @@ interface StreamScript {
 
 function scriptedProvider(
   scripts: readonly StreamScript[],
-  retryProfile: Provider["retryProfile"] | null = "deepseek-analysis",
 ): Provider & { requests: ProviderRequest[] } {
   let call = 0;
   const requests: ProviderRequest[] = [];
   return {
-    ...(retryProfile === null ? {} : { retryProfile }),
     requests,
     async *stream(request) {
       requests.push(request);
@@ -151,6 +149,37 @@ describe("runAnalysis", () => {
       ],
       checkpoint: { nextCueOffset: 3, phase: "summary" },
     });
+  });
+
+  it("repairs an incomplete 50-cue response for a provider without retry metadata", async () => {
+    vi.useFakeTimers();
+    const batch = cues(50, 51);
+    const provider = scriptedProvider([
+      { chunks: batch.slice(0, 40).map((cue) => cueLine(cue.index)) },
+      { chunks: batch.slice(40).map((cue) => cueLine(cue.index)) },
+    ]);
+    const controller = new AbortController();
+    const commits: AnalysisCommit[] = [];
+
+    await runWithTimers(runAnalysis({
+      provider,
+      cues: batch,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      batchSize: 50,
+      signal: controller.signal,
+      onCommit: async (commit) => {
+        commits.push(commit);
+        controller.abort();
+      },
+    }));
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1].userPrompt).not.toContain("\n90\t");
+    expect(provider.requests[1].userPrompt).toContain("\n91\t");
+    expect(provider.requests[1].userPrompt).toContain("\n100\t");
+    expect(commits[0]).toMatchObject({ kind: "cues" });
+    expect(commits[0].kind === "cues" && commits[0].subtitles).toHaveLength(50);
   });
 
   it("awaits preview persistence before consuming the next provider chunk", async () => {
@@ -596,19 +625,25 @@ describe("runAnalysis", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("does not retry providers without the DeepSeek analysis profile", async () => {
-    const failure = new ProviderTransportError("offline", "send");
-    const provider = scriptedProvider([{ error: failure }], null);
+  it.each([
+    ["transport", new ProviderTransportError("offline", "send")],
+    ["HTTP 429", new ProviderHttpError("rate limited", 429, "", 0)],
+    ["HTTP 503", new ProviderHttpError("unavailable", 503, "", null)],
+  ])("retries %s failures for every analysis provider", async (_name, failure) => {
+    vi.useFakeTimers();
+    const provider = scriptedProvider([{ error: failure }, { chunks: [cueLine(0)] }]);
+    const controller = new AbortController();
 
-    await expect(runAnalysis({
+    await runWithTimers(runAnalysis({
       provider,
       cues: cues(1),
       previouslyAnalyzed: [],
       checkpoint: checkpoint(),
-      onCommit: async () => {},
-    })).rejects.toBe(failure);
+      signal: controller.signal,
+      onCommit: async () => controller.abort(),
+    }));
 
-    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests).toHaveLength(2);
   });
 
   it("retries malformed model content and reports unresolved indexes", async () => {
@@ -659,22 +694,10 @@ describe("runAnalysis", () => {
     warn.mockRestore();
   });
 
-  it("does not content-repair providers without the DeepSeek analysis profile", async () => {
-    const provider = scriptedProvider([{ chunks: ["not json\n"] }], null);
-
-    await expect(runAnalysis({
-      provider,
-      cues: cues(1),
-      previouslyAnalyzed: [],
-      checkpoint: checkpoint(),
-      onCommit: async () => {},
-    })).rejects.toBeInstanceOf(ProviderProtocolError);
-
-    expect(provider.requests).toHaveLength(1);
-  });
-
-  it("does not convert authentication failures into content repair", async () => {
-    const failure = new ProviderHttpError("unauthorized", 401, "unauthorized", null);
+  it.each([
+    ["authentication", new ProviderHttpError("unauthorized", 401, "", null)],
+    ["model not found", new ProviderHttpError("model not found", 404, "", null)],
+  ])("does not retry deterministic %s failures", async (_name, failure) => {
     const provider = scriptedProvider([{ error: failure }]);
 
     await expect(runAnalysis({
@@ -697,18 +720,19 @@ describe("runAnalysis", () => {
       ['{"type":"summary","keyPhrases":[{"expression":"hello"}]}\n'],
     ],
   ])("rejects %s without committing phase complete", async (_name, chunks) => {
-    const provider = scriptedProvider([{ chunks }], null);
+    vi.useFakeTimers();
+    const provider = scriptedProvider(Array.from({ length: 4 }, () => ({ chunks })));
     const commits: AnalysisCommit[] = [];
 
-    await expect(runAnalysis({
+    await expect(runWithTimers(runAnalysis({
       provider,
       cues: cues(1),
       previouslyAnalyzed: [],
       checkpoint: checkpoint("summary", 1),
       onCommit: async (commit) => { commits.push(commit); },
-    })).rejects.toBeInstanceOf(ProviderProtocolError);
+    }))).rejects.toBeInstanceOf(ProviderProtocolError);
 
-    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests).toHaveLength(4);
     expect(commits).toEqual([]);
   });
 

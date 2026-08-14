@@ -14,7 +14,12 @@ import type {
   SrtCue,
   Subtitle,
 } from "./types";
-import { validateCueOutput } from "./cueOutput";
+import {
+  validateAnnotationRepair,
+  validateCueOutput,
+  type AnnotationRepairSource,
+  type SubtitleAnnotationPatch,
+} from "./cueOutput";
 import { JsonLineParser, type InvalidJsonLine } from "./streamingJson";
 import {
   abortableDelay,
@@ -23,6 +28,7 @@ import {
   type RetryPolicy,
 } from "./retry";
 import {
+  buildAnnotationRepairPrompt,
   buildContinuationPrompt,
   buildRepairPrompt,
   buildSummaryPrompt,
@@ -317,6 +323,7 @@ async function resolveCueBatch(
 ): Promise<Subtitle[]> {
   const requestBatch = withUniqueCueIndexes(batch, startCueOffset);
   const resolved = new Map<number, Subtitle>();
+  const annotationRepairOffsets = new Set<number>();
   seedResumePreview(resumePreview, startCueOffset, endCueOffset, requestBatch, resolved);
   const policy = ANALYSIS_RETRY_POLICY;
   let lastInvalid: InvalidJsonLine | null = null;
@@ -325,7 +332,15 @@ async function resolveCueBatch(
     throwIfAborted(opts.signal);
     const requestedCues = requestBatch.filter((requested) => !resolved.has(requested.cueOffset));
     if (requestedCues.length === 0) {
-      return orderedResolvedEntries(requestBatch, resolved).map((entry) => entry.subtitle);
+      return finalizeResolvedBatch(
+        opts,
+        systemPrompt,
+        requestBatch,
+        resolved,
+        annotationRepairOffsets,
+        startCueOffset,
+        endCueOffset,
+      );
     }
     const requested = new Map(requestedCues.map((requested) => [
       requested.cue.index,
@@ -346,6 +361,9 @@ async function resolveCueBatch(
         const matched = requested.get(result.index);
         if (!matched || resolved.has(matched.cueOffset)) return;
         resolved.set(matched.cueOffset, result.subtitle);
+        if (result.needsAnnotationRepair) {
+          annotationRepairOffsets.add(matched.cueOffset);
+        }
         dirty = true;
       };
       const publishResolved = async () => {
@@ -390,7 +408,15 @@ async function resolveCueBatch(
       .filter((requested) => !resolved.has(requested.cueOffset))
       .map((requested) => requested.cue.index);
     if (unresolvedCueIndexes.length === 0) {
-      return orderedResolvedEntries(requestBatch, resolved).map((entry) => entry.subtitle);
+      return finalizeResolvedBatch(
+        opts,
+        systemPrompt,
+        requestBatch,
+        resolved,
+        annotationRepairOffsets,
+        startCueOffset,
+        endCueOffset,
+      );
     }
 
     if (streamError !== null && !isRetryableAnalysisStreamFailure(streamError)) {
@@ -417,6 +443,111 @@ async function resolveCueBatch(
   }
 
   throw new Error("unreachable cue repair state");
+}
+
+async function finalizeResolvedBatch(
+  opts: RunAnalysisOptions,
+  systemPrompt: string,
+  requestBatch: readonly RequestedCue[],
+  resolved: Map<number, Subtitle>,
+  annotationRepairOffsets: ReadonlySet<number>,
+  startCueOffset: number,
+  endCueOffset: number,
+): Promise<Subtitle[]> {
+  if (annotationRepairOffsets.size > 0) {
+    await repairDamagedAnnotations(
+      opts,
+      systemPrompt,
+      requestBatch,
+      resolved,
+      annotationRepairOffsets,
+      startCueOffset,
+      endCueOffset,
+    );
+  }
+  return orderedResolvedEntries(requestBatch, resolved).map((entry) => entry.subtitle);
+}
+
+async function repairDamagedAnnotations(
+  opts: RunAnalysisOptions,
+  systemPrompt: string,
+  requestBatch: readonly RequestedCue[],
+  resolved: Map<number, Subtitle>,
+  annotationRepairOffsets: ReadonlySet<number>,
+  startCueOffset: number,
+  endCueOffset: number,
+): Promise<void> {
+  const damaged = requestBatch.filter((entry) => annotationRepairOffsets.has(entry.cueOffset));
+  const requested = new Map<number, AnnotationRepairSource>();
+  for (const entry of damaged) {
+    const subtitle = resolved.get(entry.cueOffset);
+    if (!subtitle) continue;
+    requested.set(entry.cue.index, {
+      cue: entry.cue,
+      translation: subtitle.translation,
+    });
+  }
+  if (requested.size === 0) return;
+
+  const unresolvedCueIndexes = [...requested.keys()];
+  const patches = await retryOperation(async () => {
+    const attemptPatches = new Map<number, SubtitleAnnotationPatch>();
+    const parser = new JsonLineParser();
+    const handle = (value: unknown) => {
+      const result = validateAnnotationRepair(value, requested);
+      if (result.status === "resolved" && !attemptPatches.has(result.index)) {
+        attemptPatches.set(result.index, result.patch);
+      }
+    };
+    const ignoreInvalid = () => {};
+
+    for await (const chunk of opts.provider.stream({
+      systemPrompt,
+      userPrompt: buildAnnotationRepairPrompt(damaged.flatMap((entry) => {
+        const subtitle = resolved.get(entry.cueOffset);
+        return subtitle ? [{
+          index: entry.cue.index,
+          text: entry.cue.text,
+          translation: subtitle.translation,
+        }] : [];
+      })),
+      signal: opts.signal,
+    })) {
+      throwIfAborted(opts.signal);
+      parser.feed(chunk, handle, ignoreInvalid);
+    }
+    parser.flush(handle, ignoreInvalid);
+    throwIfAborted(opts.signal);
+    return attemptPatches;
+  }, {
+    policy: ANALYSIS_RETRY_POLICY,
+    isRetryable: isRetryableProviderFailure,
+    signal: opts.signal,
+    onRetry: (event) => opts.onRetry?.({
+      ...event,
+      kind: "transport",
+      unresolvedCueIndexes,
+    }),
+  });
+
+  let changed = false;
+  for (const entry of damaged) {
+    const subtitle = resolved.get(entry.cueOffset);
+    const patch = patches.get(entry.cue.index);
+    if (!subtitle || !patch) continue;
+    resolved.set(entry.cueOffset, { ...subtitle, ...patch });
+    changed ||= patch.highlightWords.length > 0;
+  }
+
+  if (changed) {
+    const entries = orderedResolvedEntries(requestBatch, resolved);
+    await opts.onPreview?.({
+      startCueOffset,
+      endCueOffset,
+      entries,
+      subtitles: entries.map((entry) => entry.subtitle),
+    });
+  }
 }
 
 function withUniqueCueIndexes(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildRepairPrompt, buildSystemPrompt } from "./prompts";
+import {
+  buildAnnotationRepairPrompt,
+  buildRepairPrompt,
+  buildSystemPrompt,
+} from "./prompts";
 
 describe("analysis prompt contract", () => {
   it("asks providers for compact generated fields and not source echoes", () => {
@@ -33,5 +37,19 @@ describe("analysis prompt contract", () => {
     expect(prompt).toContain("17\t1.00\t2.00");
     expect(prompt).toContain("38\t3.00\t4.00");
     expect(prompt).not.toContain("source-0");
+  });
+
+  it("builds an annotation-only repair request from accepted translations", () => {
+    const prompt = buildAnnotationRepairPrompt([{
+      index: 17,
+      text: "give it a shot",
+      translation: "试试看吧",
+    }]);
+
+    expect(prompt).toContain("give it a shot");
+    expect(prompt).toContain("试试看吧");
+    expect(prompt).toContain('{"i":12,"p":');
+    expect(prompt).toContain("Do not translate again");
+    expect(prompt).not.toContain('"zh"');
   });
 });

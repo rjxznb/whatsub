@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateCueOutput } from "./cueOutput";
+import { validateAnnotationRepair, validateCueOutput } from "./cueOutput";
 import type { SrtCue } from "./types";
 
 const source: SrtCue = {
@@ -159,5 +159,41 @@ describe("validateCueOutput", () => {
         keyNotes: { "stack questions": "first" },
       },
     });
+  });
+});
+
+describe("validateAnnotationRepair", () => {
+  it("returns a safe annotation patch without changing translation", () => {
+    const result = validateAnnotationRepair({
+      i: 54,
+      p: [["stack questions", "堆栈问题", "表示一组连续相关的问题"]],
+    }, new Map([[54, {
+      cue: source,
+      translation: "真实的堆栈问题",
+    }]]));
+
+    expect(result).toEqual({
+      status: "resolved",
+      index: 54,
+      patch: {
+        isKeyPoint: true,
+        highlightWords: ["stack questions"],
+        keyNotes: { "stack questions": "表示一组连续相关的问题" },
+        highlightTranslations: { "stack questions": "堆栈问题" },
+      },
+    });
+  });
+
+  it("rejects an overlong repair phrase", () => {
+    const longSource = "one two three four five six seven eight nine";
+    const result = validateAnnotationRepair({
+      i: 54,
+      p: [[longSource, "完整长句", "不应接受这个长句"]],
+    }, new Map([[54, {
+      cue: { ...source, text: longSource },
+      translation: "这是一个完整长句",
+    }]]));
+
+    expect(result).toMatchObject({ status: "invalid", index: 54 });
   });
 });

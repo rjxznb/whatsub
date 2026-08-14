@@ -16,6 +16,22 @@ interface HighlightCandidate {
   note: unknown;
 }
 
+export interface AnnotationRepairSource {
+  cue: SrtCue;
+  translation: string;
+}
+
+export interface SubtitleAnnotationPatch {
+  isKeyPoint: boolean;
+  highlightWords: string[];
+  keyNotes: Record<string, string>;
+  highlightTranslations: Record<string, string>;
+}
+
+export type AnnotationRepairValidation =
+  | { status: "resolved"; index: number; patch: SubtitleAnnotationPatch }
+  | { status: "invalid"; index: number | null; reason: string };
+
 /**
  * Convert one untrusted model object into a Subtitle while keeping transcript
  * identity authoritative. Invalid optional annotations are dropped; an absent
@@ -43,12 +59,59 @@ export function validateCueOutput(
     return { status: "unresolved", index, reason: "translation-missing" };
   }
   const translation = rawTranslation.trim();
+  const { candidates, annotationIntent } = annotationCandidates(value);
+  const patch = validatedAnnotationPatch(candidates, source, translation);
+
+  return {
+    status: "resolved",
+    index,
+    needsAnnotationRepair: annotationIntent && patch.highlightWords.length === 0,
+    subtitle: {
+      time: source.time,
+      endTime: source.endTime,
+      text: source.text,
+      translation,
+      ...patch,
+    },
+  };
+}
+
+export function validateAnnotationRepair(
+  value: unknown,
+  requested: ReadonlyMap<number, AnnotationRepairSource>,
+): AnnotationRepairValidation {
+  if (!isPlainObject(value)) {
+    return { status: "invalid", index: null, reason: "output-not-an-object" };
+  }
+  const index = value.i;
+  if (typeof index !== "number" || !Number.isInteger(index)) {
+    return { status: "invalid", index: null, reason: "index-missing" };
+  }
+  const source = requested.get(index);
+  if (!source) {
+    return { status: "invalid", index, reason: "index-not-requested" };
+  }
+  if (!Array.isArray(value.p)) {
+    return { status: "invalid", index, reason: "phrases-malformed" };
+  }
+  const { candidates } = annotationCandidates(value);
+  const patch = validatedAnnotationPatch(candidates, source.cue, source.translation);
+  if (value.p.length > 0 && patch.highlightWords.length === 0) {
+    return { status: "invalid", index, reason: "phrases-invalid" };
+  }
+  return { status: "resolved", index, patch };
+}
+
+function validatedAnnotationPatch(
+  candidates: readonly HighlightCandidate[],
+  source: SrtCue,
+  translation: string,
+): SubtitleAnnotationPatch {
   const highlightWords: string[] = [];
   const noteEntries: Array<[string, string]> = [];
   const translationEntries: Array<[string, string]> = [];
   const seen = new Set<string>();
 
-  const { candidates, annotationIntent } = annotationCandidates(value);
   for (const candidate of candidates) {
     const phrase = typeof candidate.source === "string" ? candidate.source.trim() : "";
     const translated = typeof candidate.translation === "string"
@@ -65,19 +128,10 @@ export function validateCueOutput(
   }
 
   return {
-    status: "resolved",
-    index,
-    needsAnnotationRepair: annotationIntent && highlightWords.length === 0,
-    subtitle: {
-      time: source.time,
-      endTime: source.endTime,
-      text: source.text,
-      translation,
-      isKeyPoint: highlightWords.length > 0,
-      highlightWords,
-      keyNotes: Object.fromEntries(noteEntries),
-      highlightTranslations: Object.fromEntries(translationEntries),
-    },
+    isKeyPoint: highlightWords.length > 0,
+    highlightWords,
+    keyNotes: Object.fromEntries(noteEntries),
+    highlightTranslations: Object.fromEntries(translationEntries),
   };
 }
 

@@ -158,6 +158,28 @@ ${serializeCues(cues)}
 One compact JSON object per cue. No markdown, prose, source-field echoes, or summary line.`;
 }
 
+export interface AnnotationRepairInput {
+  index: number;
+  text: string;
+  translation: string;
+}
+
+export function buildAnnotationRepairPrompt(
+  items: readonly AnnotationRepairInput[],
+): string {
+  const inputs = items.map((item) => JSON.stringify({
+    i: item.index,
+    text: item.text,
+    translation: item.translation,
+  })).join("\n");
+  return `Repair only the learning-phrase annotations for these already translated cues:
+${inputs}
+
+Return one line per supplied cue: {"i":12,"p":[["English phrase","中文片段","中文用法说明"]]}
+Do not translate again. Do not return zh, text, timestamps, prose, or markdown.
+Use p=[] when no useful phrase exists. Phrase sources and Chinese fragments must be exact substrings of the supplied text and translation. Prefer one to five English words and never exceed eight.`;
+}
+
 /**
  * Final-pass prompt: feeds the previously-produced per-cue analyses back to the
  * LLM and asks for a single deduplicated, transcript-wide keyPhrases summary.

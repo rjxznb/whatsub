@@ -25,10 +25,9 @@ const checkpoint: AnalysisCheckpoint = {
 };
 
 const cueJsonLine = `${JSON.stringify({
-  index: 51,
-  translation: "translation-51",
-  isKeyPoint: false,
-  highlights: [],
+  i: 51,
+  zh: "translation-51",
+  p: [],
 })}\n`;
 
 function claudeBody(text: string): string {

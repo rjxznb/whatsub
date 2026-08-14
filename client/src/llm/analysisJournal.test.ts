@@ -146,4 +146,33 @@ describe("analysis inflight journal", () => {
       { cueOffset: 50, subtitle: subtitle("changed") },
     ])).toThrow("analysis inflight entry rewrite rejected");
   });
+
+  it("permits one annotation-repair completion without permitting content rewrites", () => {
+    const pending = {
+      ...validJournal(),
+      entries: [{
+        cueOffset: 50,
+        subtitle: subtitle("first"),
+        annotationRepair: true as const,
+      }],
+    };
+    const repairedSubtitle: Subtitle = {
+      ...subtitle("first"),
+      isKeyPoint: true,
+      highlightWords: ["first"],
+      keyNotes: { first: "用于测试重点标注修复" },
+      highlightTranslations: { first: "译" },
+    };
+
+    const repaired = mergeInflightEntries(pending, [{
+      cueOffset: 50,
+      subtitle: repairedSubtitle,
+    }]);
+
+    expect(repaired.entries).toEqual([{ cueOffset: 50, subtitle: repairedSubtitle }]);
+    expect(() => mergeInflightEntries(repaired, [{
+      cueOffset: 50,
+      subtitle: { ...repairedSubtitle, translation: "被改写的翻译" },
+    }])).toThrow("analysis inflight entry rewrite rejected");
+  });
 });

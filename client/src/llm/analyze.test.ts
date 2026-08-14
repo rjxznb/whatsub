@@ -77,8 +77,7 @@ function deferred<T>() {
 }
 
 const summaryLine = `${JSON.stringify({
-  type: "summary",
-  keyPhrases: [{ expression: "hello", meaningZh: "你好", usage: "greeting" }],
+  p: [["hello", "你好", "greeting"]],
 })}\n`;
 
 const checkpoint = (
@@ -149,6 +148,137 @@ describe("runAnalysis", () => {
       ],
       checkpoint: { nextCueOffset: 3, phase: "summary" },
     });
+  });
+
+  it("repairs only damaged annotations without retranslating accepted cues", async () => {
+    const batch: SrtCue[] = [
+      {
+        index: 0,
+        time: 0,
+        endTime: 1,
+        text: "one two three four five six seven eight nine",
+      },
+      { index: 1, time: 1, endTime: 2, text: "keep short" },
+    ];
+    const provider = scriptedProvider([
+      { chunks: [
+        `${JSON.stringify({
+          i: 0,
+          zh: "这是一个完整长句",
+          p: [[batch[0].text, "完整长句", "模型错误地选择了完整句子"]],
+        })}\n`,
+        `${JSON.stringify({
+          i: 1,
+          zh: "保持简短",
+          p: [["keep short", "保持简短", "表示让内容保持精炼"]],
+        })}\n`,
+      ] },
+      { chunks: [`${JSON.stringify({
+        i: 0,
+        p: [["one two", "完整长句", "修复后只保留值得学习的短表达"]],
+      })}\n`] },
+    ]);
+    const controller = new AbortController();
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: batch,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      batchSize: 2,
+      signal: controller.signal,
+      onCommit: async (commit) => { commits.push(commit); controller.abort(); },
+    });
+
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests[1].userPrompt).toContain(batch[0].text);
+    expect(provider.requests[1].userPrompt).toContain("这是一个完整长句");
+    expect(provider.requests[1].userPrompt).not.toContain("keep short");
+    expect(provider.requests[1].userPrompt).toContain("Do not translate again");
+    expect(commits[0]).toMatchObject({
+      kind: "cues",
+      subtitles: [
+        { translation: "这是一个完整长句", highlightWords: ["one two"] },
+        { translation: "保持简短", highlightWords: ["keep short"] },
+      ],
+    });
+  });
+
+  it("keeps a valid translation when targeted annotation repair stays malformed", async () => {
+    const batch: SrtCue[] = [{
+      index: 0,
+      time: 0,
+      endTime: 1,
+      text: "one two three four five six seven eight nine",
+    }];
+    const provider = scriptedProvider([
+      { chunks: [`${JSON.stringify({
+        i: 0,
+        zh: "已经翻译成功",
+        p: [[batch[0].text, "翻译成功", "错误地选择了完整句子"]],
+      })}\n`] },
+      { chunks: ['{"i":0,"p":"still broken"}\n'] },
+    ]);
+    const controller = new AbortController();
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: batch,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      signal: controller.signal,
+      onCommit: async (commit) => { commits.push(commit); controller.abort(); },
+    });
+
+    expect(provider.requests).toHaveLength(2);
+    expect(commits[0]).toMatchObject({
+      kind: "cues",
+      subtitles: [{
+        translation: "已经翻译成功",
+        isKeyPoint: false,
+        highlightWords: [],
+      }],
+    });
+  });
+
+  it("retries a transport failure during targeted annotation repair", async () => {
+    vi.useFakeTimers();
+    const batch: SrtCue[] = [{
+      index: 0,
+      time: 0,
+      endTime: 1,
+      text: "one two three four five six seven eight nine",
+    }];
+    const failure = new ProviderTransportError("repair socket closed", "read");
+    const provider = scriptedProvider([
+      { chunks: [`${JSON.stringify({
+        i: 0,
+        zh: "已经翻译成功",
+        p: [[batch[0].text, "翻译成功", "错误地选择了完整句子"]],
+      })}\n`] },
+      { error: failure },
+      { chunks: [`${JSON.stringify({ i: 0, p: [] })}\n`] },
+    ]);
+    const controller = new AbortController();
+    const retries: AnalysisRetryEvent[] = [];
+
+    await runWithTimers(runAnalysis({
+      provider,
+      cues: batch,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      signal: controller.signal,
+      onRetry: (event) => retries.push(event),
+      onCommit: async () => controller.abort(),
+    }));
+
+    expect(provider.requests).toHaveLength(3);
+    expect(retries).toContainEqual(expect.objectContaining({
+      kind: "transport",
+      unresolvedCueIndexes: [0],
+    }));
   });
 
   it("repairs an incomplete 50-cue response for a provider without retry metadata", async () => {
@@ -569,6 +699,53 @@ describe("runAnalysis", () => {
     ]);
   });
 
+  it("continues to accept a verbose summary during migration", async () => {
+    const provider = scriptedProvider([{ chunks: [`${JSON.stringify({
+      type: "summary",
+      keyPhrases: [{ expression: "catch up", meaningZh: "补上", usage: "用于赶进度" }],
+    })}\n`] }]);
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint("summary", 1),
+      onCommit: async (commit) => { commits.push(commit); },
+    });
+
+    expect(commits[0]).toMatchObject({
+      kind: "summary",
+      keyPhrases: [{ expression: "catch up" }],
+      checkpoint: { phase: "complete" },
+    });
+  });
+
+  it("commits an empty summary when every returned expression is overlong", async () => {
+    const provider = scriptedProvider([{ chunks: [`${JSON.stringify({
+      p: [[
+        "one two three four five six seven eight nine",
+        "长句",
+        "不应保留",
+      ]],
+    })}\n`] }]);
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint("summary", 1),
+      onCommit: async (commit) => { commits.push(commit); },
+    });
+
+    expect(commits[0]).toMatchObject({
+      kind: "summary",
+      keyPhrases: [],
+      checkpoint: { phase: "complete" },
+    });
+  });
+
   it("publishes nothing when cancelled during a stream", async () => {
     const controller = new AbortController();
     const provider = scriptedProvider([{
@@ -715,10 +892,6 @@ describe("runAnalysis", () => {
     ["an empty stream", []],
     ["valid JSON without a summary", [cueLine(0)]],
     ["a summary without keyPhrases", ['{"type":"summary"}\n']],
-    [
-      "a summary with malformed keyPhrases",
-      ['{"type":"summary","keyPhrases":[{"expression":"hello"}]}\n'],
-    ],
   ])("rejects %s without committing phase complete", async (_name, chunks) => {
     vi.useFakeTimers();
     const provider = scriptedProvider(Array.from({ length: 4 }, () => ({ chunks })));

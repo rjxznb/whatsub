@@ -84,57 +84,44 @@ OUTPUT FORMAT — REQUIRED
 - Per-cue request: one line = one analyzed subtitle cue, in the order received. NEVER include a summary line in a per-cue response.
 - Summary request (a separate turn): output a SINGLE summary line; do NOT repeat any cue lines.
 
-PER-CUE OBJECT SCHEMA
-{
-  "index": number,
-  "translation": string,
-  "isKeyPoint": boolean,
-  "highlights": [{
-    "source": string,
-    "translation": string,
-    "note": string
-  }]
-}
+PER-CUE JSONL SCHEMA
+{"i":12,"zh":"我得把邮件处理一下","p":[["catch up","处理一下","动词短语，表示赶上或补做落下的事情"]]}
 
-CONCRETE EXAMPLE:
-{"index":12,"translation":"我得把邮件处理一下","isKeyPoint":true,"highlights":[{"source":"catch up","translation":"处理一下","note":"动词短语，表示赶上或补做落下的事情"}]}
+i = supplied cue index.
+zh = Chinese translation.
+p = zero to two phrase tuples: [exact English source, exact Chinese substring, Chinese usage note].
 
 WRONG (these have caused real bugs — DO NOT do this):
 - Echoing source-owned fields such as text, time, or endTime.
-- Returning highlights whose source is not an exact substring of the cue text.
-- Returning a highlight translation that is not an exact substring of translation.
+- Returning phrase tuples whose English source is not an exact substring of the cue text.
+- Returning a phrase tuple whose Chinese phrase is not an exact substring of zh.
 
-SUMMARY OBJECT SCHEMA (only when the user prompt explicitly asks for it)
-{
-  "type": "summary",
-  "keyPhrases": [{
-    "expression": string,
-    "meaningZh": string,
-    "usage": string
-  }]
-}
+SUMMARY JSONL SCHEMA (only when the user prompt explicitly asks for it)
+{"p":[["catch up","补上","用于表示赶上进度或补做遗漏事项"]]}
+
+Each summary tuple is [English expression, concise Chinese meaning, Chinese usage note].
 
 CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
-1. Each highlight source MUST be an exact substring of the cue text, character-for-character. If the original text has a typo like "teddy beir", use "teddy beir" — DO NOT correct it to "teddy bear".
+1. Each English phrase MUST be an exact substring of the cue text, character-for-character. If the original text has a typo like "teddy beir", use "teddy beir" — DO NOT correct it to "teddy bear".
 
-2. Each highlight translation MUST be an exact substring of the cue translation. Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
+2. Each phrase's Chinese translation MUST be an exact substring of zh. Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
 
-3. Highlight note values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
+3. Phrase note values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
 
-4. Each cue: AT MOST 2 highlights. Quality over quantity.
+4. Each cue: AT MOST 2 phrases. Quality over quantity. Prefer one to five English words. A genuine fixed expression, idiom, or phrasal pattern may contain up to eight words. NEVER exceed eight English words. NEVER select the complete cue when it contains more than five words.
 
-5. isKeyPoint=true ratio: target 30-50% of cues. Greetings, fillers, "yes/no/thank you" are NOT key points.
+5. Use p=[] when there is no useful learning phrase. Greetings, fillers, "yes/no/thank you" are NOT key points.
 
 6. NEVER use raw double quotes inside JSON string values. For Chinese quoted text use 「」 not "". For English quoted text use single quotes or rephrase.
 
 7. {{STYLE_GUIDANCE}}
 
-8. Each highlight source must be a substring of THE SAME CUE'S text. Don't span across cues.
+8. Each phrase source must be a substring of THE SAME CUE'S text. Don't span across cues.
 
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
 
-10. highlights MUST be an array of {source, translation, note} objects. If you can't write a 40-120 character note AND find an exact translation substring for a phrase, omit that highlight entirely.
+10. p MUST be an array of [source, translation, note] tuples. If you can't write a 40-120 character note AND find an exact translation substring for a phrase, omit that phrase entirely.
 `;
 
 function serializeCues(cues: readonly SrtCue[]): string {
@@ -166,6 +153,28 @@ ${serializeCues(cues)}
 One compact JSON object per cue. No markdown, prose, source-field echoes, or summary line.`;
 }
 
+export interface AnnotationRepairInput {
+  index: number;
+  text: string;
+  translation: string;
+}
+
+export function buildAnnotationRepairPrompt(
+  items: readonly AnnotationRepairInput[],
+): string {
+  const inputs = items.map((item) => JSON.stringify({
+    i: item.index,
+    text: item.text,
+    translation: item.translation,
+  })).join("\n");
+  return `Repair only the learning-phrase annotations for these already translated cues:
+${inputs}
+
+Return one line per supplied cue: {"i":12,"p":[["English phrase","中文片段","中文用法说明"]]}
+Do not translate again. Do not return zh, text, timestamps, prose, or markdown.
+Use p=[] when no useful phrase exists. Phrase sources and Chinese fragments must be exact substrings of the supplied text and translation. Prefer one to five English words and never exceed eight.`;
+}
+
 /**
  * Final-pass prompt: feeds the previously-produced per-cue analyses back to the
  * LLM and asks for a single deduplicated, transcript-wide keyPhrases summary.
@@ -191,15 +200,18 @@ ${compact}
 
 Now produce ONE single JSON line: the GLOBAL keyPhrases summary across the entire transcript.
 
-Schema (this exact "type":"summary" envelope):
-{"type":"summary","keyPhrases":[{"expression":"...","meaningZh":"...","usage":"..."}, ...]}
+Schema:
+{"p":[["catch up","补上","用于表示赶上进度或补做遗漏事项"]]}
+
+Each p tuple is [English expression, concise Chinese meaning, Chinese usage note].
 
 Rules:
 - Deduplicate by expression (case-insensitive). Pick the most natural canonical form.
 - Drop trivial fillers, greetings, function words; keep idioms, phrasal verbs, vocabulary worth reviewing.
+- Prefer one to five English words. A genuine fixed expression may contain up to eight words; never exceed eight.
 - Aim for 8-20 entries depending on transcript size.
-- meaningZh: 8-25 Chinese characters; concise gloss.
-- usage: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.
+- Chinese meaning: 8-25 Chinese characters; concise gloss.
+- Chinese usage note: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.
 
 Output exactly one JSON object on one line. No fences, no prose, no other lines.`;
 }

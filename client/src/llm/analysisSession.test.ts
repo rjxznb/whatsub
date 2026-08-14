@@ -333,6 +333,162 @@ describe("immutable analysis sessions", () => {
     expect(order).toEqual(["disk", "ui"]);
   });
 
+  it("persists a translation preview and then upgrades only its repaired annotations", async () => {
+    const oneCue: SrtCue[] = [{
+      index: 1,
+      time: 0,
+      endTime: 1,
+      text: "one two three four five six seven eight nine",
+    }];
+    const fingerprint = await fingerprintTranscript(oneCue);
+    const initial: CheckpointedAnalysis = {
+      subtitles: [],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: fingerprint,
+        nextCueOffset: 0,
+        phase: "cues",
+        revision: 0,
+      },
+    };
+    const savedInflight: AnalysisInflightJournal[] = [];
+    const savedCanonical: CheckpointedAnalysis[] = [];
+    mockInvoke.mockImplementation(async (command, args) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-annotation-upgrade", analysis: initial, inflight: null };
+      }
+      if (command === "save_analysis_inflight") {
+        savedInflight.push((args as { journal: AnalysisInflightJournal }).journal);
+        return { status: "applied", revision: 0 };
+      }
+      if (command === "save_analysis_session") {
+        savedCanonical.push((args as { analysis: CheckpointedAnalysis }).analysis);
+        return { status: "applied", revision: 1 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    let request = 0;
+    const provider: Provider = {
+      async *stream() {
+        request += 1;
+        if (request === 1) {
+          yield `${JSON.stringify({
+            i: 1,
+            zh: "已经翻译成功",
+            p: [[oneCue[0].text, "翻译成功", "错误地选中了完整句子"]],
+          })}\n`;
+          return;
+        }
+        yield `${JSON.stringify({
+          i: 1,
+          p: [["one two", "翻译成功", "修复后保留的短语"]],
+        })}\n`;
+      },
+    };
+    const controller = new AbortController();
+    const session = await openAnalysisSession("annotation-upgrade", oneCue);
+
+    await executeAnalysisSession({
+      session,
+      provider,
+      cues: oneCue,
+      style: "colloquial",
+      signal: controller.signal,
+      onCommitted: () => controller.abort(),
+    });
+
+    expect(savedInflight).toHaveLength(2);
+    expect(savedInflight[0].entries[0]).toMatchObject({ annotationRepair: true });
+    expect(savedInflight[1].entries[0]).toMatchObject({
+      subtitle: { translation: "已经翻译成功", highlightWords: ["one two"] },
+    });
+    expect(savedInflight[1].entries[0]).not.toHaveProperty("annotationRepair");
+    expect(savedCanonical[0].subtitles[0]).toMatchObject({
+      translation: "已经翻译成功",
+      highlightWords: ["one two"],
+    });
+  });
+
+  it("restores pending annotation repair from an inflight journal", async () => {
+    const oneCue: SrtCue[] = [{
+      index: 1,
+      time: 0,
+      endTime: 1,
+      text: "one two three four five six seven eight nine",
+    }];
+    const generation = await fingerprintTranscript(oneCue);
+    const initial: CheckpointedAnalysis = {
+      subtitles: [],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: generation,
+        nextCueOffset: 0,
+        phase: "cues",
+        revision: 0,
+      },
+    };
+    const inflight: AnalysisInflightJournal = {
+      version: 1,
+      journalId: "journal-repair-resume",
+      transcriptGeneration: generation,
+      transcriptFingerprint: generation,
+      analysisStyle: "colloquial",
+      baseRevision: 0,
+      startCueOffset: 0,
+      endCueOffset: 1,
+      entries: [{
+        cueOffset: 0,
+        subtitle: {
+          time: 0,
+          endTime: 1,
+          text: oneCue[0].text,
+          translation: "已经翻译成功",
+          isKeyPoint: false,
+          highlightWords: [],
+          keyNotes: {},
+          highlightTranslations: {},
+        },
+        annotationRepair: true,
+      }],
+    };
+    const prompts: string[] = [];
+    mockInvoke.mockImplementation(async (command) => {
+      if (command === "begin_analysis_session") {
+        return { lease: "lease-repair-resume", analysis: initial, inflight };
+      }
+      if (command === "save_analysis_inflight") {
+        return { status: "applied", revision: 0 };
+      }
+      if (command === "save_analysis_session") {
+        return { status: "applied", revision: 1 };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const provider: Provider = {
+      async *stream(request) {
+        prompts.push(request.userPrompt);
+        yield `${JSON.stringify({ i: 1, p: [] })}\n`;
+      },
+    };
+    const controller = new AbortController();
+    const session = await openAnalysisSession("annotation-repair-resume", oneCue);
+
+    await executeAnalysisSession({
+      session,
+      provider,
+      cues: oneCue,
+      style: "colloquial",
+      signal: controller.signal,
+      onCommitted: () => controller.abort(),
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Repair only the learning-phrase annotations");
+    expect(prompts[0]).not.toContain("Subtitle cues (tab-separated");
+  });
+
   it("reuses 23 durable entries and commits all 50 once", async () => {
     const longCues: SrtCue[] = Array.from({ length: 50 }, (_, index) => ({
       index: index + 1,

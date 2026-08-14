@@ -1,14 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { buildRepairPrompt, buildSystemPrompt } from "./prompts";
+import {
+  buildAnnotationRepairPrompt,
+  buildRepairPrompt,
+  buildSummaryPrompt,
+  buildSystemPrompt,
+} from "./prompts";
+import type { Subtitle } from "./types";
 
 describe("analysis prompt contract", () => {
   it("asks providers for compact generated fields and not source echoes", () => {
     const prompt = buildSystemPrompt("colloquial");
 
-    expect(prompt).toContain('"highlights"');
-    expect(prompt).toContain('"index"');
+    expect(prompt).toContain('"p"');
+    expect(prompt).toContain('"i"');
     expect(prompt).not.toContain('"endTime": number');
     expect(prompt).not.toContain('"highlightWords": string[]');
+  });
+
+  it("uses the compact streaming cue schema for every provider", () => {
+    const prompt = buildSystemPrompt("colloquial");
+
+    expect(prompt).toContain('{"i":12,"zh":');
+    expect(prompt).toContain('"p":[["catch up"');
+    expect(prompt).toContain("one to five English words");
+    expect(prompt).toContain("NEVER exceed eight English words");
+    expect(prompt).not.toContain('"isKeyPoint": boolean');
+    expect(prompt).not.toContain('"highlights": [{');
+    expect(prompt).not.toContain('"type": "summary"');
+    expect(prompt).not.toContain('"keyPhrases": [{');
   });
 
   it("builds a repair request containing only unresolved cues", () => {
@@ -22,5 +41,38 @@ describe("analysis prompt contract", () => {
     expect(prompt).toContain("17\t1.00\t2.00");
     expect(prompt).toContain("38\t3.00\t4.00");
     expect(prompt).not.toContain("source-0");
+  });
+
+  it("builds an annotation-only repair request from accepted translations", () => {
+    const prompt = buildAnnotationRepairPrompt([{
+      index: 17,
+      text: "give it a shot",
+      translation: "试试看吧",
+    }]);
+
+    expect(prompt).toContain("give it a shot");
+    expect(prompt).toContain("试试看吧");
+    expect(prompt).toContain('{"i":12,"p":');
+    expect(prompt).toContain("Do not translate again");
+    expect(prompt).not.toContain('"zh"');
+  });
+
+  it("requests a compact global phrase summary with the same length boundary", () => {
+    const subtitle: Subtitle = {
+      time: 0,
+      endTime: 1,
+      text: "give it a shot",
+      translation: "试试看",
+      isKeyPoint: true,
+      highlightWords: ["give it a shot"],
+      keyNotes: { "give it a shot": "用于鼓励别人尝试" },
+      highlightTranslations: { "give it a shot": "试试看" },
+    };
+    const prompt = buildSummaryPrompt([subtitle]);
+
+    expect(prompt).toContain('{"p":[["catch up"');
+    expect(prompt).toContain("one to five English words");
+    expect(prompt).toContain("never exceed eight");
+    expect(prompt).not.toContain('"type":"summary"');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateCueOutput } from "./cueOutput";
+import { validateAnnotationRepair, validateCueOutput } from "./cueOutput";
 import type { SrtCue } from "./types";
 
 const source: SrtCue = {
@@ -37,6 +37,7 @@ describe("validateCueOutput", () => {
     expect(result).toEqual({
       status: "resolved",
       index: 54,
+      needsAnnotationRepair: false,
       subtitle: {
         time: 157.46,
         endTime: 162.5,
@@ -46,6 +47,61 @@ describe("validateCueOutput", () => {
         highlightWords: ["stack questions"],
         keyNotes: { "stack questions": "表示一组连续相关的问题" },
         highlightTranslations: { "stack questions": "堆栈问题" },
+      },
+    });
+  });
+
+  it("accepts compact tuples and derives isKeyPoint", () => {
+    const result = validateCueOutput({
+      i: 54,
+      zh: "真实的堆栈问题",
+      p: [["stack questions", "堆栈问题", "表示一组连续相关的问题"]],
+    }, requested);
+
+    expect(result).toMatchObject({
+      status: "resolved",
+      needsAnnotationRepair: false,
+      subtitle: {
+        translation: "真实的堆栈问题",
+        isKeyPoint: true,
+        highlightWords: ["stack questions"],
+      },
+    });
+  });
+
+  it("recovers the previous highlightWords maps safely", () => {
+    const result = validateCueOutput({
+      index: 54,
+      translation: "真实的堆栈问题",
+      isKeyPoint: true,
+      highlightWords: ["stack questions"],
+      keyNotes: { "stack questions": "表示一组连续相关的问题" },
+      highlightTranslations: { "stack questions": "堆栈问题" },
+    }, requested);
+
+    expect(result).toMatchObject({
+      status: "resolved",
+      needsAnnotationRepair: false,
+      subtitle: { highlightWords: ["stack questions"] },
+    });
+  });
+
+  it("preserves translation and requests annotation repair for an overlong phrase", () => {
+    const longSource = "actual stack questions one two three four five six";
+    const longRequested = new Map([[54, { ...source, text: longSource }]]);
+    const result = validateCueOutput({
+      i: 54,
+      zh: "这是一个完整长句",
+      p: [[longSource, "完整长句", "模型错误地选中了整句"]],
+    }, longRequested);
+
+    expect(result).toMatchObject({
+      status: "resolved",
+      needsAnnotationRepair: true,
+      subtitle: {
+        translation: "这是一个完整长句",
+        isKeyPoint: false,
+        highlightWords: [],
       },
     });
   });
@@ -103,5 +159,41 @@ describe("validateCueOutput", () => {
         keyNotes: { "stack questions": "first" },
       },
     });
+  });
+});
+
+describe("validateAnnotationRepair", () => {
+  it("returns a safe annotation patch without changing translation", () => {
+    const result = validateAnnotationRepair({
+      i: 54,
+      p: [["stack questions", "堆栈问题", "表示一组连续相关的问题"]],
+    }, new Map([[54, {
+      cue: source,
+      translation: "真实的堆栈问题",
+    }]]));
+
+    expect(result).toEqual({
+      status: "resolved",
+      index: 54,
+      patch: {
+        isKeyPoint: true,
+        highlightWords: ["stack questions"],
+        keyNotes: { "stack questions": "表示一组连续相关的问题" },
+        highlightTranslations: { "stack questions": "堆栈问题" },
+      },
+    });
+  });
+
+  it("rejects an overlong repair phrase", () => {
+    const longSource = "one two three four five six seven eight nine";
+    const result = validateAnnotationRepair({
+      i: 54,
+      p: [[longSource, "完整长句", "不应接受这个长句"]],
+    }, new Map([[54, {
+      cue: { ...source, text: longSource },
+      translation: "这是一个完整长句",
+    }]]));
+
+    expect(result).toMatchObject({ status: "invalid", index: 54 });
   });
 });

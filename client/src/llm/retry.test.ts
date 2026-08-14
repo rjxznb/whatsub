@@ -72,6 +72,16 @@ describe("retryOperation", () => {
     expect(isRetryableProviderFailure(error)).toBe(true);
   });
 
+  it("retries an ambiguous quota_exceeded code when the provider identifies a rate limit", () => {
+    const error = new ProviderHttpError(
+      "rate limited",
+      429,
+      '{"error":{"type":"rate_limit_error","code":"quota_exceeded"}}',
+      null,
+    );
+    expect(isRetryableProviderFailure(error)).toBe(true);
+  });
+
   it("does not retry authentication, relay quota, or protocol failures", async () => {
     const failures = [
       new ProviderHttpError("unauthorized", 401, "", null),

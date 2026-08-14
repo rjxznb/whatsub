@@ -88,7 +88,9 @@ const PERMANENT_QUOTA_CODES = new Set([
   "billing_hard_limit_reached",
   "insufficient_balance",
   "insufficient_quota",
-  "quota_exceeded",
+  // Do not include generic `quota_exceeded`: some vendors use it for a
+  // transient rate quota. Managed-relay quota walls are already marked by
+  // `upsell`, so only unambiguous direct-provider billing codes belong here.
 ]);
 
 /** Returns true only for provider errors where a repeated request can succeed. */

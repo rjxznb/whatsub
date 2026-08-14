@@ -23,6 +23,8 @@ const MAX_INFLIGHT_ENTRY_BYTES: usize = 256 * 1024;
 pub struct AnalysisInflightEntry {
     pub cue_offset: usize,
     pub subtitle: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation_repair: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1146,11 +1148,39 @@ fn journal_is_monotonic(
     let incoming_by_offset = incoming
         .entries
         .iter()
-        .map(|entry| (entry.cue_offset, &entry.subtitle))
+        .map(|entry| (entry.cue_offset, entry))
         .collect::<HashMap<_, _>>();
     previous.entries.iter().all(|entry| {
-        incoming_by_offset.get(&entry.cue_offset).copied() == Some(&entry.subtitle)
+        let Some(next) = incoming_by_offset.get(&entry.cue_offset).copied() else {
+            return false;
+        };
+        entry == next
+            || (entry.annotation_repair == Some(true)
+                && next.annotation_repair.is_none()
+                && same_subtitle_identity(&entry.subtitle, &next.subtitle))
     })
+}
+
+fn same_subtitle_identity(previous: &Value, incoming: &Value) -> bool {
+    ["time", "endTime", "text", "translation"]
+        .iter()
+        .all(|key| previous.get(key).is_some() && previous.get(key) == incoming.get(key))
+}
+
+fn has_empty_annotations(subtitle: &Value) -> bool {
+    subtitle.get("isKeyPoint") == Some(&Value::Bool(false))
+        && subtitle
+            .get("highlightWords")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        && subtitle
+            .get("keyNotes")
+            .and_then(Value::as_object)
+            .is_some_and(serde_json::Map::is_empty)
+        && subtitle
+            .get("highlightTranslations")
+            .and_then(Value::as_object)
+            .is_some_and(serde_json::Map::is_empty)
 }
 
 fn load_matching_inflight(
@@ -1246,6 +1276,13 @@ fn validate_inflight(journal: &AnalysisInflightJournal) -> AppResult<()> {
         if !entry.subtitle.is_object() {
             return Err(AppError::InvalidInput(
                 "analysis inflight subtitle must be an object".to_string(),
+            ));
+        }
+        if entry.annotation_repair == Some(false)
+            || (entry.annotation_repair == Some(true) && !has_empty_annotations(&entry.subtitle))
+        {
+            return Err(AppError::InvalidInput(
+                "analysis inflight annotationRepair is invalid".to_string(),
             ));
         }
         if serde_json::to_vec(entry)?.len() > MAX_INFLIGHT_ENTRY_BYTES {
@@ -1578,10 +1615,11 @@ mod tests {
                 "text": text,
                 "translation": format!("{text}-translated"),
                 "isKeyPoint": false,
-                "highlightWords": {},
+                "highlightWords": [],
                 "keyNotes": {},
                 "highlightTranslations": {}
             }),
+            annotation_repair: None,
         }
     }
 
@@ -1620,6 +1658,58 @@ mod tests {
             load_inflight_best_effort(&dir.analysis_path()),
             Some(expected)
         );
+    }
+
+    #[test]
+    fn inflight_round_trip_accepts_pending_annotation_repair() {
+        let mut value = serde_json::to_value(inflight_journal(
+            "repair-journal",
+            0,
+            vec![inflight_entry(0, "first")],
+        ))
+        .unwrap();
+        value["entries"][0]["annotationRepair"] = json!(true);
+
+        let parsed: AnalysisInflightJournal = serde_json::from_value(value).unwrap();
+        let encoded = serde_json::to_value(parsed).unwrap();
+
+        assert_eq!(encoded["entries"][0]["annotationRepair"], json!(true));
+    }
+
+    #[test]
+    fn inflight_rejects_invalid_annotation_repair_markers() {
+        let mut false_marker =
+            inflight_journal("repair-journal", 0, vec![inflight_entry(0, "first")]);
+        false_marker.entries[0].annotation_repair = Some(false);
+        assert!(validate_inflight(&false_marker).is_err());
+
+        let mut annotated = inflight_journal("repair-journal", 0, vec![inflight_entry(0, "first")]);
+        annotated.entries[0].annotation_repair = Some(true);
+        annotated.entries[0].subtitle["isKeyPoint"] = json!(true);
+        annotated.entries[0].subtitle["highlightWords"] = json!(["first"]);
+        annotated.entries[0].subtitle["keyNotes"] = json!({ "first": "note" });
+        annotated.entries[0].subtitle["highlightTranslations"] = json!({ "first": "译文" });
+        assert!(validate_inflight(&annotated).is_err());
+    }
+
+    #[test]
+    fn inflight_monotonicity_allows_only_annotation_repair_completion() {
+        let mut pending = inflight_journal("repair-journal", 0, vec![inflight_entry(0, "first")]);
+        pending.entries[0].annotation_repair = Some(true);
+
+        let mut repaired = pending.clone();
+        repaired.entries[0].annotation_repair = None;
+        repaired.entries[0].subtitle["isKeyPoint"] = json!(true);
+        repaired.entries[0].subtitle["highlightWords"] = json!(["first"]);
+        repaired.entries[0].subtitle["keyNotes"] = json!({ "first": "note" });
+        repaired.entries[0].subtitle["highlightTranslations"] = json!({ "first": "译文" });
+
+        assert!(journal_is_monotonic(Some(&pending), &repaired));
+
+        let mut rewritten = repaired.clone();
+        rewritten.entries[0].subtitle["translation"] = json!("changed translation");
+        assert!(!journal_is_monotonic(Some(&pending), &rewritten));
+        assert!(!journal_is_monotonic(Some(&repaired), &pending));
     }
 
     #[test]

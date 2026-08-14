@@ -14,6 +14,7 @@ import type {
   SrtCue,
   Subtitle,
 } from "./types";
+import { validateSummaryOutput } from "./summaryOutput";
 import {
   validateAnnotationRepair,
   validateCueOutput,
@@ -254,7 +255,7 @@ async function runTransactionalAnalysis(
       let attemptKeyPhrases: KeyPhrase[] | null = null;
       let invalidLine: InvalidJsonLine | null = null;
       const handle = (obj: unknown) => {
-        const summary = parseSummary(obj);
+        const summary = validateSummaryOutput(obj);
         if (summary) attemptKeyPhrases = summary;
       };
       const invalid = (failure: InvalidJsonLine) => { invalidLine = failure; };
@@ -647,26 +648,3 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function parseSummary(obj: unknown): KeyPhrase[] | null {
-  if (!obj || typeof obj !== "object") return null;
-  const output = obj as Record<string, unknown>;
-  if (
-    output.type !== "summary"
-    || !Array.isArray(output.keyPhrases)
-    || !output.keyPhrases.every(isKeyPhrase)
-  ) {
-    return null;
-  }
-  return output.keyPhrases;
-}
-
-function isKeyPhrase(value: unknown): value is KeyPhrase {
-  return isPlainObject(value)
-    && typeof value.expression === "string"
-    && typeof value.meaningZh === "string"
-    && typeof value.usage === "string";
-}

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildAnnotationRepairPrompt,
   buildRepairPrompt,
+  buildSummaryPrompt,
   buildSystemPrompt,
 } from "./prompts";
+import type { Subtitle } from "./types";
 
 describe("analysis prompt contract", () => {
   it("asks providers for compact generated fields and not source echoes", () => {
@@ -51,5 +53,24 @@ describe("analysis prompt contract", () => {
     expect(prompt).toContain('{"i":12,"p":');
     expect(prompt).toContain("Do not translate again");
     expect(prompt).not.toContain('"zh"');
+  });
+
+  it("requests a compact global phrase summary with the same length boundary", () => {
+    const subtitle: Subtitle = {
+      time: 0,
+      endTime: 1,
+      text: "give it a shot",
+      translation: "试试看",
+      isKeyPoint: true,
+      highlightWords: ["give it a shot"],
+      keyNotes: { "give it a shot": "用于鼓励别人尝试" },
+      highlightTranslations: { "give it a shot": "试试看" },
+    };
+    const prompt = buildSummaryPrompt([subtitle]);
+
+    expect(prompt).toContain('{"p":[["catch up"');
+    expect(prompt).toContain("one to five English words");
+    expect(prompt).toContain("never exceed eight");
+    expect(prompt).not.toContain('"type":"summary"');
   });
 });

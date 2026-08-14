@@ -205,15 +205,18 @@ ${compact}
 
 Now produce ONE single JSON line: the GLOBAL keyPhrases summary across the entire transcript.
 
-Schema (this exact "type":"summary" envelope):
-{"type":"summary","keyPhrases":[{"expression":"...","meaningZh":"...","usage":"..."}, ...]}
+Schema:
+{"p":[["catch up","补上","用于表示赶上进度或补做遗漏事项"]]}
+
+Each p tuple is [English expression, concise Chinese meaning, Chinese usage note].
 
 Rules:
 - Deduplicate by expression (case-insensitive). Pick the most natural canonical form.
 - Drop trivial fillers, greetings, function words; keep idioms, phrasal verbs, vocabulary worth reviewing.
+- Prefer one to five English words. A genuine fixed expression may contain up to eight words; never exceed eight.
 - Aim for 8-20 entries depending on transcript size.
-- meaningZh: 8-25 Chinese characters; concise gloss.
-- usage: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.
+- Chinese meaning: 8-25 Chinese characters; concise gloss.
+- Chinese usage note: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.
 
 Output exactly one JSON object on one line. No fences, no prose, no other lines.`;
 }

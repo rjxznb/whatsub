@@ -77,8 +77,7 @@ function deferred<T>() {
 }
 
 const summaryLine = `${JSON.stringify({
-  type: "summary",
-  keyPhrases: [{ expression: "hello", meaningZh: "你好", usage: "greeting" }],
+  p: [["hello", "你好", "greeting"]],
 })}\n`;
 
 const checkpoint = (
@@ -700,6 +699,53 @@ describe("runAnalysis", () => {
     ]);
   });
 
+  it("continues to accept a verbose summary during migration", async () => {
+    const provider = scriptedProvider([{ chunks: [`${JSON.stringify({
+      type: "summary",
+      keyPhrases: [{ expression: "catch up", meaningZh: "补上", usage: "用于赶进度" }],
+    })}\n`] }]);
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint("summary", 1),
+      onCommit: async (commit) => { commits.push(commit); },
+    });
+
+    expect(commits[0]).toMatchObject({
+      kind: "summary",
+      keyPhrases: [{ expression: "catch up" }],
+      checkpoint: { phase: "complete" },
+    });
+  });
+
+  it("commits an empty summary when every returned expression is overlong", async () => {
+    const provider = scriptedProvider([{ chunks: [`${JSON.stringify({
+      p: [[
+        "one two three four five six seven eight nine",
+        "长句",
+        "不应保留",
+      ]],
+    })}\n`] }]);
+    const commits: AnalysisCommit[] = [];
+
+    await runAnalysis({
+      provider,
+      cues: cues(1),
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint("summary", 1),
+      onCommit: async (commit) => { commits.push(commit); },
+    });
+
+    expect(commits[0]).toMatchObject({
+      kind: "summary",
+      keyPhrases: [],
+      checkpoint: { phase: "complete" },
+    });
+  });
+
   it("publishes nothing when cancelled during a stream", async () => {
     const controller = new AbortController();
     const provider = scriptedProvider([{
@@ -846,10 +892,6 @@ describe("runAnalysis", () => {
     ["an empty stream", []],
     ["valid JSON without a summary", [cueLine(0)]],
     ["a summary without keyPhrases", ['{"type":"summary"}\n']],
-    [
-      "a summary with malformed keyPhrases",
-      ['{"type":"summary","keyPhrases":[{"expression":"hello"}]}\n'],
-    ],
   ])("rejects %s without committing phase complete", async (_name, chunks) => {
     vi.useFakeTimers();
     const provider = scriptedProvider(Array.from({ length: 4 }, () => ({ chunks })));

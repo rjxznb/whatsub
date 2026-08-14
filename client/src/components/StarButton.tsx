@@ -47,6 +47,7 @@ export function StarButton({
           cueText,
         });
       }}
+      aria-label={saved ? "已收藏，点击移除" : "收藏到我的词汇本"}
       title={saved ? "已收藏 · 点击移除" : "收藏到我的词汇本"}
       className={
         "flex h-6 w-6 items-center justify-center rounded-full transition-colors " +

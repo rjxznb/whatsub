@@ -395,7 +395,7 @@ export function SubtitleList({
                 // for the common drag-down-out-of-the-cue gesture).
                 style={{ userSelect: "contain", WebkitUserSelect: "contain" } as unknown as React.CSSProperties}
               >
-                {renderEnglishWithHighlights(s, vocabMap)}
+                {renderEnglishWithHighlights(s, vocabMap, { videoId, videoTitle })}
               </div>
               {/* Chinese translation: not selectable. The vocab-save flow
                   (selection bubble) operates on English source words only,
@@ -651,13 +651,23 @@ function EditableRow({
 export function renderEnglishWithHighlights(
   s: Subtitle,
   vocabMap: Map<string, VocabHighlightInfo>,
+  context: { videoId: string; videoTitle: string } = { videoId: "", videoTitle: "" },
 ): ReactNode {
   // Pass 1: LLM highlightWords (yellow + keyNote tooltip).
   const llmWords = [...s.highlightWords].sort(
     (a, b) => s.text.indexOf(a) - s.text.indexOf(b)
   );
   const tokens = sliceWithSpans(s.text, llmWords, (w) => (
-    <HighlightWord key={`${w}-${s.text.indexOf(w)}`} word={w} note={s.keyNotes[w]} />
+    <HighlightWord
+      key={`${w}-${s.text.indexOf(w)}`}
+      word={w}
+      meaningZh={s.highlightTranslations[w]}
+      note={s.keyNotes[w]}
+      videoId={context.videoId}
+      videoTitle={context.videoTitle}
+      cueTime={s.time}
+      cueText={s.text}
+    />
   ));
 
   // Pass 2: in each plain-text token, find vocab matches (case-insensitive,

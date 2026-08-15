@@ -145,6 +145,13 @@ pub async fn auth_verify_code<R: Runtime>(
     }
 }
 
+fn build_me_request(client: &Client, token: &str) -> reqwest::RequestBuilder {
+    client
+        .get(format!("{}/auth/me", SERVER_BASE))
+        .header("Authorization", format!("Bearer {}", token))
+        .header("X-Whatsub-Client", "desktop")
+}
+
 #[tauri::command]
 pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, String> {
     let Some(auth) = auth::get_auth(&app) else {
@@ -165,9 +172,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
         });
     }
     let client = http_client()?;
-    let resp = client
-        .get(format!("{}/auth/me", SERVER_BASE))
-        .header("Authorization", format!("Bearer {}", auth.session_token))
+    let resp = build_me_request(&client, &auth.session_token)
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -266,5 +271,22 @@ pub async fn auth_from_license<R: Runtime>(
         Ok(AuthResult { ok: true, reason: None })
     } else {
         Ok(AuthResult { ok: false, reason: Some(map_reason(&body_val)) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn me_request_identifies_desktop_client() {
+        let request = build_me_request(&reqwest::Client::new(), "TOK")
+            .build()
+            .expect("request builds");
+        assert_eq!(
+            request.headers().get("X-Whatsub-Client").unwrap(),
+            "desktop",
+        );
+        assert_eq!(request.headers().get("Authorization").unwrap(), "Bearer TOK");
     }
 }

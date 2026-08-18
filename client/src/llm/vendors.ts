@@ -1,5 +1,20 @@
 import type { LlmProvider } from "../types/settings";
 
+/**
+ * Model IDs checked against vendor documentation on 2026-08-18:
+ * OpenAI https://platform.openai.com/docs/models.md
+ * Anthropic https://docs.anthropic.com/en/docs/about-claude/models
+ * Google https://ai.google.dev/gemini-api/docs/models
+ * DeepSeek https://api-docs.deepseek.com/
+ * Moonshot https://platform.moonshot.cn/docs/intro
+ * Zhipu https://docs.bigmodel.cn/cn/guide/models
+ * Alibaba https://www.alibabacloud.com/help/en/model-studio/models
+ * MiniMax https://platform.minimaxi.com/document/
+ *
+ * Preview, audio/image/embedding-only, and retired IDs are intentionally
+ * omitted. These are suggestions, not a remote capability check: users may
+ * still type a provider-specific deployment ID.
+ */
 /** A vendor preset bundles protocol + baseUrl + suggested models so the user
  *  picks "DeepSeek" instead of having to know it's OpenAI-compatible at
  *  https://api.deepseek.com/v1 with model `deepseek-v4-flash`. */
@@ -49,7 +64,17 @@ export const VENDORS: VendorPreset[] = [
     name: "OpenAI",
     protocol: "openai-compatible",
     baseUrl: "https://api.openai.com/v1",
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    models: [
+      "gpt-5.1",
+      "gpt-5",
+      "gpt-5-mini",
+      "gpt-5-nano",
+      "gpt-4.1",
+      "gpt-4.1-mini",
+      "gpt-4.1-nano",
+      "gpt-4o",
+      "gpt-4o-mini",
+    ],
     keyConsoleUrl: "https://platform.openai.com/api-keys",
     note: "需要科学上网，效果稳定，一个视频几毛到一块多",
   },
@@ -58,7 +83,15 @@ export const VENDORS: VendorPreset[] = [
     name: "Kimi (Moonshot)",
     protocol: "openai-compatible",
     baseUrl: "https://api.moonshot.cn/v1",
-    models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    models: [
+      "kimi-k3",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-k2-thinking",
+      "moonshot-v1-8k",
+      "moonshot-v1-32k",
+      "moonshot-v1-128k",
+    ],
     keyConsoleUrl: "https://platform.moonshot.cn/console/api-keys",
     note: "国内直连，价格友好，长视频也能一口气读完",
   },
@@ -67,7 +100,7 @@ export const VENDORS: VendorPreset[] = [
     name: "智谱 GLM",
     protocol: "openai-compatible",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    models: ["glm-4-plus", "glm-4", "glm-4-flash"],
+    models: ["glm-5", "glm-4.6", "glm-4-plus", "glm-4-flash"],
     keyConsoleUrl: "https://open.bigmodel.cn/usercenter/apikeys",
     note: "清华系出品，国内直连，flash 模型有免费额度可以白嫖 🎁",
   },
@@ -76,7 +109,14 @@ export const VENDORS: VendorPreset[] = [
     name: "阿里 Qwen (DashScope)",
     protocol: "openai-compatible",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    models: ["qwen-plus", "qwen-max", "qwen-turbo", "qwen3-coder-plus"],
+    models: [
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-flash",
+      "qwen3-coder-plus",
+      "qwen-plus",
+      "qwen-max",
+    ],
     keyConsoleUrl: "https://bailian.console.aliyun.com/",
     note: "阿里出品，国内直连，turbo 版本几分钱一个视频",
   },
@@ -85,8 +125,15 @@ export const VENDORS: VendorPreset[] = [
     name: "MiniMax",
     protocol: "openai-compatible",
     baseUrl: "https://api.minimaxi.com/v1",
-    models: ["MiniMax-M2", "MiniMax-Text-01", "abab6.5s-chat"],
-    keyConsoleUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+    models: [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.5",
+      "MiniMax-M2.1",
+      "MiniMax-Text-01",
+    ],
+    keyConsoleUrl:
+      "https://platform.minimaxi.com/user-center/basic-information/interface-key",
     note: "国内直连，海螺 AI 同款厂商，文本模型免费额度比较大",
   },
   {
@@ -95,8 +142,9 @@ export const VENDORS: VendorPreset[] = [
     protocol: "openai-compatible",
     baseUrl: "https://api.siliconflow.cn/v1",
     models: [
-      "deepseek-ai/DeepSeek-V3",
-      "Qwen/Qwen2.5-72B-Instruct",
+      "deepseek-ai/DeepSeek-V4",
+      "Qwen/Qwen3-Next-80B-A3B-Instruct",
+      "Qwen/Qwen3-30B-A3B-Instruct-2507",
       "01-ai/Yi-1.5-34B-Chat",
     ],
     keyConsoleUrl: "https://cloud.siliconflow.cn/account/ak",
@@ -107,7 +155,7 @@ export const VENDORS: VendorPreset[] = [
     name: "Ollama 本地",
     protocol: "openai-compatible",
     baseUrl: "http://localhost:11434/v1",
-    models: ["llama3", "mistral", "qwen2", "gemma2"],
+    models: ["llama3.3", "mistral-large", "qwen3:32b", "gemma3:27b"],
     note: "完全在你电脑上跑，不联网不花钱，需要先在 ollama.ai 装好 Ollama 并 pull 一个模型",
   },
   {
@@ -116,6 +164,9 @@ export const VENDORS: VendorPreset[] = [
     protocol: "claude",
     baseUrl: "",
     models: [
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-opus-4-8",
       "claude-opus-4-7",
       "claude-sonnet-4-6",
       "claude-haiku-4-5-20251001",
@@ -128,7 +179,13 @@ export const VENDORS: VendorPreset[] = [
     name: "Gemini (Google 原生)",
     protocol: "gemini",
     baseUrl: "",
-    models: ["gemini-2.5-pro", "gemini-2.5-flash"],
+    models: [
+      "gemini-3.7-flash",
+      "gemini-3.5-flash",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+    ],
     keyConsoleUrl: "https://aistudio.google.com/apikey",
     note: "需要科学上网，flash 版本有不少免费额度，pro 版本更聪明",
   },
@@ -143,17 +200,18 @@ export const VENDORS: VendorPreset[] = [
 ];
 
 /** Fallback inference for legacy settings without an explicit vendorId. */
-export function inferVendorId(
-  protocol: LlmProvider,
-  baseUrl: string
-): string {
+export function inferVendorId(protocol: LlmProvider, baseUrl: string): string {
   if (protocol === "claude") return "claude";
   if (protocol === "gemini") return "gemini";
   // openai-compatible — match by baseUrl host.
   const url = baseUrl.toLowerCase().trim();
   if (!url) return "deepseek"; // default for first launch
   for (const v of VENDORS) {
-    if (v.protocol === "openai-compatible" && v.baseUrl && url === v.baseUrl.toLowerCase()) {
+    if (
+      v.protocol === "openai-compatible" &&
+      v.baseUrl &&
+      url === v.baseUrl.toLowerCase()
+    ) {
       return v.id;
     }
   }

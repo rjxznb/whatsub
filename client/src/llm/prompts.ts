@@ -121,7 +121,9 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
 
-10. p MUST be an array containing zero or one [source, translation, note] tuple. If you can't write a 25 to 90 Chinese character note AND find an exact translation substring for a phrase, omit that phrase entirely.
+10. The numeric i value is authoritative. Copy the translation for the cue with that exact i; never move a translation, phrase, or note from one cue to another. Before emitting each line, verify that its zh answers that same cue's English text, not the previous or next cue.
+
+11. p MUST be an array containing zero or one [source, translation, note] tuple. If you can't write a 25 to 90 Chinese character note AND find an exact translation substring for a phrase, omit that phrase entirely.
 `;
 
 function serializeCues(cues: readonly SrtCue[]): string {
@@ -198,6 +200,23 @@ ${inputs}
 Return one line per supplied cue: {"i":12,"p":[["English phrase","中文片段","中文用法说明"]]}
 Do not translate again. Do not return zh, text, timestamps, prose, or markdown.
 Use p=[] when no useful phrase exists. Phrase sources and Chinese fragments must be exact substrings of the supplied text and translation.
+${compactAllowance(options)}`;
+}
+
+export function buildAnnotationFillPrompt(
+  items: readonly AnnotationRepairInput[],
+  options: CompactPromptOptions,
+): string {
+  const inputs = items.map((item) => JSON.stringify({
+    i: item.index,
+    text: item.text,
+    translation: item.translation,
+  })).join("\n");
+  return `The first analysis pass was too sparse for these already translated subtitle cues. Re-scan every cue and add a learning phrase when a genuine reusable expression exists:
+${inputs}
+
+Return one line per supplied cue: {"i":12,"p":[["English phrase","中文片段","中文用法说明"]]}
+Use p=[] only when the cue truly has no reusable learning expression. Do not translate again. Phrase sources and Chinese fragments must be exact substrings of the supplied text and translation.
 ${compactAllowance(options)}`;
 }
 

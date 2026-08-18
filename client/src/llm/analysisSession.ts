@@ -536,6 +536,7 @@ export async function executeAnalysisSession(options: {
   provider: Provider;
   cues: readonly SrtCue[];
   style: TranslationStyle;
+  batchSize?: number;
   signal?: AbortSignal;
   onCommitted?: (analysis: CheckpointedAnalysis, commit: AnalysisCommit) => void;
   onPreview?: (
@@ -551,6 +552,7 @@ export async function executeAnalysisSession(options: {
     cues: options.cues,
     previouslyAnalyzed: committed.subtitles,
     checkpoint: committed.checkpoint,
+    batchSize: options.batchSize,
     style: options.style,
     signal: options.signal,
     onRetry: options.onRetry,

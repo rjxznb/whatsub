@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAnnotationRepairPrompt,
+  buildAnnotationFillPrompt,
   buildContinuationPrompt,
   buildRepairPrompt,
   buildSummaryPrompt,
@@ -79,6 +80,17 @@ describe("analysis prompt contract", () => {
     expect(prompt).toContain("one to four English words");
     expect(prompt).toContain("25-90 Unicode code points");
     expect(prompt).not.toContain('"type":"summary"');
+  });
+
+  it("asks sparse batches to rescan translated cues for missing annotations", () => {
+    const prompt = buildAnnotationFillPrompt([{
+      index: 17,
+      text: "we need to catch up",
+      translation: "我们得补上进度",
+    }], { maxHighlightedCues: 2 });
+    expect(prompt).toContain("first analysis pass was too sparse");
+    expect(prompt).toContain("we need to catch up");
+    expect(prompt).toContain("Use p=[] only when the cue truly has no reusable learning expression");
   });
 
   it.each([

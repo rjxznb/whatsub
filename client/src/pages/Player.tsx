@@ -359,6 +359,7 @@ export function Player() {
         provider,
         cues,
         style,
+        batchSize: 25,
         signal: localController.signal,
         onCommitted: (persisted) => {
           if (!stillOwnsSession()) return;

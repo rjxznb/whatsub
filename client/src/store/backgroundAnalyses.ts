@@ -243,6 +243,7 @@ async function driveAnalysis(runtime: BgRuntime): Promise<void> {
       provider: getProvider(useSettings.getState().settings),
       cues,
       style: runtime.style,
+      batchSize: 25,
       signal: runtime.controller.signal,
       onCommitted: (analysis) => {
         if (runtimes.get(runtime.videoId) !== runtime) return;

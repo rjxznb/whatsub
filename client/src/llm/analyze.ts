@@ -30,6 +30,7 @@ import {
 } from "./retry";
 import {
   buildAnnotationRepairPrompt,
+  buildAnnotationFillPrompt,
   buildContinuationPrompt,
   buildRepairPrompt,
   buildSummaryPrompt,
@@ -354,6 +355,7 @@ async function resolveCueBatch(
         resolved,
         annotationRepairOffsets,
         highlightBudget,
+        attempt === 1 && resumePreview === null,
         startCueOffset,
         endCueOffset,
       );
@@ -439,6 +441,7 @@ async function resolveCueBatch(
         resolved,
         annotationRepairOffsets,
         highlightBudget,
+        attempt === 1 && resumePreview === null,
         startCueOffset,
         endCueOffset,
       );
@@ -477,6 +480,7 @@ async function finalizeResolvedBatch(
   resolved: Map<number, Subtitle>,
   annotationRepairOffsets: Set<number>,
   highlightBudget: HighlightBudget,
+  allowAnnotationFill: boolean,
   startCueOffset: number,
   endCueOffset: number,
 ): Promise<Subtitle[]> {
@@ -492,7 +496,106 @@ async function finalizeResolvedBatch(
       endCueOffset,
     );
   }
+  const target = Math.ceil(compactHighlightCapacity(requestBatch.length) * 0.6);
+  if (allowAnnotationFill && requestBatch.length >= 10 && highlightBudget.used < target) {
+    await fillMissingAnnotations(
+      opts,
+      systemPrompt,
+      requestBatch,
+      resolved,
+      highlightBudget,
+      target,
+      startCueOffset,
+      endCueOffset,
+    );
+  }
   return orderedResolvedEntries(requestBatch, resolved).map((entry) => entry.subtitle);
+}
+
+async function fillMissingAnnotations(
+  opts: RunAnalysisOptions,
+  systemPrompt: string,
+  requestBatch: readonly RequestedCue[],
+  resolved: Map<number, Subtitle>,
+  highlightBudget: HighlightBudget,
+  target: number,
+  startCueOffset: number,
+  endCueOffset: number,
+): Promise<void> {
+  const candidates = requestBatch.flatMap((entry) => {
+    const subtitle = resolved.get(entry.cueOffset);
+    return subtitle && subtitle.highlightWords.length === 0
+      ? [{
+          cue: entry.cue,
+          index: entry.cue.index,
+          text: entry.cue.text,
+          translation: subtitle.translation,
+        }]
+      : [];
+  });
+  if (candidates.length === 0 || highlightBudget.used >= target) return;
+
+  const requested = new Map(candidates.map((item) => [item.index, {
+    cue: item.cue,
+    translation: item.translation,
+  } satisfies AnnotationRepairSource]));
+  let patches: Map<number, SubtitleAnnotationPatch>;
+  try {
+    patches = await retryOperation(async () => {
+      const attemptPatches = new Map<number, SubtitleAnnotationPatch>();
+      const parser = new JsonLineParser();
+      const handle = (value: unknown) => {
+        const result = validateAnnotationRepair(value, requested);
+        if (result.status === "resolved" && !attemptPatches.has(result.index)) {
+          attemptPatches.set(result.index, result.patch);
+        }
+      };
+      for await (const chunk of opts.provider.stream({
+        systemPrompt,
+        userPrompt: buildAnnotationFillPrompt(candidates, {
+          maxHighlightedCues: Math.max(0, target - highlightBudget.used),
+        }),
+        signal: opts.signal,
+      })) {
+        throwIfAborted(opts.signal);
+        parser.feed(chunk, handle);
+      }
+      parser.flush(handle);
+      throwIfAborted(opts.signal);
+      return attemptPatches;
+    }, {
+      policy: ANALYSIS_RETRY_POLICY,
+      isRetryable: isRetryableProviderFailure,
+      signal: opts.signal,
+      onRetry: (event) => opts.onRetry?.({
+        ...event,
+        kind: "transport",
+        unresolvedCueIndexes: candidates.map((item) => item.index),
+      }),
+    });
+  } catch (error) {
+    if (opts.signal?.aborted || isAbortError(error)) throw error;
+    console.warn("Optional annotation fill failed; keeping the first-pass batch", error);
+    return;
+  }
+
+  for (const entry of requestBatch) {
+    const subtitle = resolved.get(entry.cueOffset);
+    const patch = patches.get(entry.cue.index);
+    if (!subtitle || subtitle.highlightWords.length > 0 || !patch) continue;
+    const acceptedPatch = patch.isKeyPoint && !highlightBudget.accept()
+      ? emptyAnnotationPatch()
+      : patch;
+    resolved.set(entry.cueOffset, { ...subtitle, ...acceptedPatch });
+  }
+
+  const entries = orderedResolvedEntries(requestBatch, resolved);
+  await opts.onPreview?.({
+    startCueOffset,
+    endCueOffset,
+    entries,
+    subtitles: entries.map((entry) => entry.subtitle),
+  });
 }
 
 async function repairDamagedAnnotations(

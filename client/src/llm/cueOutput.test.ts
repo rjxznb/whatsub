@@ -10,6 +10,7 @@ const source: SrtCue = {
 };
 
 const requested = new Map([[source.index, source]]);
+const validNote = "表示一组连续相关的问题，常用于技术讨论、面试沟通以及排查复杂系统故障的具体语境。";
 
 describe("validateCueOutput", () => {
   it("assembles source identity locally and keeps only valid highlights", () => {
@@ -21,7 +22,7 @@ describe("validateCueOutput", () => {
         {
           source: "stack questions",
           translation: "堆栈问题",
-          note: "表示一组连续相关的问题",
+          note: validNote,
         },
         {
           source: "not in source",
@@ -45,7 +46,7 @@ describe("validateCueOutput", () => {
         translation: "真实的堆栈问题",
         isKeyPoint: true,
         highlightWords: ["stack questions"],
-        keyNotes: { "stack questions": "表示一组连续相关的问题" },
+        keyNotes: { "stack questions": validNote },
         highlightTranslations: { "stack questions": "堆栈问题" },
       },
     });
@@ -55,7 +56,7 @@ describe("validateCueOutput", () => {
     const result = validateCueOutput({
       i: 54,
       zh: "真实的堆栈问题",
-      p: [["stack questions", "堆栈问题", "表示一组连续相关的问题"]],
+      p: [["stack questions", "堆栈问题", validNote]],
     }, requested);
 
     expect(result).toMatchObject({
@@ -75,7 +76,7 @@ describe("validateCueOutput", () => {
       translation: "真实的堆栈问题",
       isKeyPoint: true,
       highlightWords: ["stack questions"],
-      keyNotes: { "stack questions": "表示一组连续相关的问题" },
+      keyNotes: { "stack questions": validNote },
       highlightTranslations: { "stack questions": "堆栈问题" },
     }, requested);
 
@@ -147,8 +148,8 @@ describe("validateCueOutput", () => {
       index: 54,
       translation: "真实的堆栈问题",
       highlights: [
-        { source: "stack questions", translation: "堆栈问题", note: "first" },
-        { source: "stack questions", translation: "堆栈问题", note: "second" },
+        { source: "stack questions", translation: "堆栈问题", note: validNote },
+        { source: "stack questions", translation: "堆栈问题", note: `${validNote}补充` },
       ],
     }, requested);
 
@@ -156,7 +157,7 @@ describe("validateCueOutput", () => {
       status: "resolved",
       subtitle: {
         highlightWords: ["stack questions"],
-        keyNotes: { "stack questions": "first" },
+        keyNotes: { "stack questions": validNote },
       },
     });
   });
@@ -166,7 +167,7 @@ describe("validateAnnotationRepair", () => {
   it("returns a safe annotation patch without changing translation", () => {
     const result = validateAnnotationRepair({
       i: 54,
-      p: [["stack questions", "堆栈问题", "表示一组连续相关的问题"]],
+      p: [["stack questions", "堆栈问题", validNote]],
     }, new Map([[54, {
       cue: source,
       translation: "真实的堆栈问题",
@@ -178,7 +179,7 @@ describe("validateAnnotationRepair", () => {
       patch: {
         isKeyPoint: true,
         highlightWords: ["stack questions"],
-        keyNotes: { "stack questions": "表示一组连续相关的问题" },
+        keyNotes: { "stack questions": validNote },
         highlightTranslations: { "stack questions": "堆栈问题" },
       },
     });

@@ -36,6 +36,7 @@ import {
   buildSystemPrompt,
   buildUserPrompt,
 } from "./prompts";
+import { compactHighlightCapacity, HighlightBudget } from "./phraseRules";
 
 export type AnalysisCommit =
   | {
@@ -333,6 +334,12 @@ async function resolveCueBatch(
     resolved,
     annotationRepairOffsets,
   );
+  const resumedHighlightCount = [...resolved.values()]
+    .filter((subtitle) => subtitle.isKeyPoint).length;
+  const highlightBudget = new HighlightBudget(
+    compactHighlightCapacity(requestBatch.length),
+    resumedHighlightCount,
+  );
   const policy = ANALYSIS_RETRY_POLICY;
   let lastInvalid: InvalidJsonLine | null = null;
 
@@ -346,6 +353,7 @@ async function resolveCueBatch(
         requestBatch,
         resolved,
         annotationRepairOffsets,
+        highlightBudget,
         startCueOffset,
         endCueOffset,
       );
@@ -368,7 +376,10 @@ async function resolveCueBatch(
         if (result.status !== "resolved") return;
         const matched = requested.get(result.index);
         if (!matched || resolved.has(matched.cueOffset)) return;
-        resolved.set(matched.cueOffset, result.subtitle);
+        const subtitle = result.subtitle.isKeyPoint && !highlightBudget.accept()
+          ? withoutAnnotation(result.subtitle)
+          : result.subtitle;
+        resolved.set(matched.cueOffset, subtitle);
         if (result.needsAnnotationRepair) {
           annotationRepairOffsets.add(matched.cueOffset);
         }
@@ -391,11 +402,12 @@ async function resolveCueBatch(
       };
       const invalid = (failure: InvalidJsonLine) => { lastInvalid = failure; };
       const promptCues = requestedCues.map((requested) => requested.cue);
+      const promptOptions = { maxHighlightedCues: highlightBudget.remaining };
       const userPrompt = attempt === 1
         ? (startCueOffset === 0
-          ? buildUserPrompt(promptCues)
-          : buildContinuationPrompt(promptCues))
-        : buildRepairPrompt(promptCues);
+          ? buildUserPrompt(promptCues, promptOptions)
+          : buildContinuationPrompt(promptCues, promptOptions))
+        : buildRepairPrompt(promptCues, promptOptions);
 
       for await (const chunk of opts.provider.stream({
         systemPrompt,
@@ -426,6 +438,7 @@ async function resolveCueBatch(
         requestBatch,
         resolved,
         annotationRepairOffsets,
+        highlightBudget,
         startCueOffset,
         endCueOffset,
       );
@@ -463,6 +476,7 @@ async function finalizeResolvedBatch(
   requestBatch: readonly RequestedCue[],
   resolved: Map<number, Subtitle>,
   annotationRepairOffsets: Set<number>,
+  highlightBudget: HighlightBudget,
   startCueOffset: number,
   endCueOffset: number,
 ): Promise<Subtitle[]> {
@@ -473,6 +487,7 @@ async function finalizeResolvedBatch(
       requestBatch,
       resolved,
       annotationRepairOffsets,
+      highlightBudget,
       startCueOffset,
       endCueOffset,
     );
@@ -486,6 +501,7 @@ async function repairDamagedAnnotations(
   requestBatch: readonly RequestedCue[],
   resolved: Map<number, Subtitle>,
   annotationRepairOffsets: Set<number>,
+  highlightBudget: HighlightBudget,
   startCueOffset: number,
   endCueOffset: number,
 ): Promise<void> {
@@ -522,7 +538,7 @@ async function repairDamagedAnnotations(
           text: entry.cue.text,
           translation: subtitle.translation,
         }] : [];
-      })),
+      }), { maxHighlightedCues: highlightBudget.remaining }),
       signal: opts.signal,
     })) {
       throwIfAborted(opts.signal);
@@ -546,7 +562,10 @@ async function repairDamagedAnnotations(
     const subtitle = resolved.get(entry.cueOffset);
     const patch = patches.get(entry.cue.index);
     if (subtitle && patch) {
-      resolved.set(entry.cueOffset, { ...subtitle, ...patch });
+      const acceptedPatch = patch.isKeyPoint && !highlightBudget.accept()
+        ? emptyAnnotationPatch()
+        : patch;
+      resolved.set(entry.cueOffset, { ...subtitle, ...acceptedPatch });
     }
     annotationRepairOffsets.delete(entry.cueOffset);
   }
@@ -558,6 +577,19 @@ async function repairDamagedAnnotations(
     entries,
     subtitles: entries.map((entry) => entry.subtitle),
   });
+}
+
+function emptyAnnotationPatch(): SubtitleAnnotationPatch {
+  return {
+    isKeyPoint: false,
+    highlightWords: [],
+    keyNotes: {},
+    highlightTranslations: {},
+  };
+}
+
+function withoutAnnotation(subtitle: Subtitle): Subtitle {
+  return { ...subtitle, ...emptyAnnotationPatch() };
 }
 
 function withUniqueCueIndexes(

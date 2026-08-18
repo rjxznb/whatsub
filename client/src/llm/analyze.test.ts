@@ -55,6 +55,14 @@ const cueLine = (index: number, translation = `translation-${index}`) =>
     highlights: [],
   })}\n`;
 
+const validUsage = "表示在已有基础上继续推进某件事情，常用于工作、学习或日常安排中强调持续行动的自然语境。";
+
+const highlightedCueLine = (cue: SrtCue) => `${JSON.stringify({
+  i: cue.index,
+  zh: `翻译${cue.index}`,
+  p: [[cue.text, `翻译${cue.index}`, validUsage]],
+})}\n`;
+
 const subtitleFromCue = (cue: SrtCue, translation = `translation-${cue.index}`): Subtitle => ({
   time: cue.time,
   endTime: cue.endTime,
@@ -170,12 +178,12 @@ describe("runAnalysis", () => {
         `${JSON.stringify({
           i: 1,
           zh: "保持简短",
-          p: [["keep short", "保持简短", "表示让内容保持精炼"]],
+          p: [],
         })}\n`,
       ] },
       { chunks: [`${JSON.stringify({
         i: 0,
-        p: [["one two", "完整长句", "修复后只保留值得学习的短表达"]],
+        p: [["one two", "完整长句", validUsage]],
       })}\n`] },
     ]);
     const controller = new AbortController();
@@ -200,7 +208,7 @@ describe("runAnalysis", () => {
       kind: "cues",
       subtitles: [
         { translation: "这是一个完整长句", highlightWords: ["one two"] },
-        { translation: "保持简短", highlightWords: ["keep short"] },
+        { translation: "保持简短", highlightWords: [] },
       ],
     });
   });
@@ -310,6 +318,65 @@ describe("runAnalysis", () => {
     expect(provider.requests[1].userPrompt).toContain("\n100\t");
     expect(commits[0]).toMatchObject({ kind: "cues" });
     expect(commits[0].kind === "cues" && commits[0].subtitles).toHaveLength(50);
+  });
+
+  it.each([[50, 20], [13, 6]])(
+    "limits a %i-cue batch to %i highlighted cues",
+    async (cueCount, expectedHighlights) => {
+      const batch = cues(cueCount).map((cue) => ({ ...cue, text: `phrase${cue.index}` }));
+      const provider = scriptedProvider([{ chunks: batch.map(highlightedCueLine) }]);
+      const controller = new AbortController();
+      const commits: AnalysisCommit[] = [];
+
+      await runAnalysis({
+        provider,
+        cues: batch,
+        previouslyAnalyzed: [],
+        checkpoint: checkpoint(),
+        batchSize: cueCount,
+        signal: controller.signal,
+        onCommit: async (commit) => { commits.push(commit); controller.abort(); },
+      });
+
+      const subtitles = commits[0].kind === "cues" ? commits[0].subtitles : [];
+      expect(subtitles).toHaveLength(cueCount);
+      expect(subtitles.filter((subtitle) => subtitle.isKeyPoint)).toHaveLength(expectedHighlights);
+      expect(provider.requests[0].userPrompt).toContain(
+        `At most ${expectedHighlights} cues in this request may have a non-empty p array`,
+      );
+    },
+  );
+
+  it("shares the remaining highlight allowance with a missing-cue continuation", async () => {
+    vi.useFakeTimers();
+    const batch = cues(18).map((cue) => ({ ...cue, text: `phrase${cue.index}` }));
+    const provider = scriptedProvider([
+      {
+        chunks: [
+          ...batch.slice(0, 3).map(highlightedCueLine),
+          ...batch.slice(3, 8).map((cue) => cueLine(cue.index, `翻译${cue.index}`)),
+        ],
+      },
+      { chunks: batch.slice(8).map(highlightedCueLine) },
+    ]);
+    const controller = new AbortController();
+    const commits: AnalysisCommit[] = [];
+
+    await runWithTimers(runAnalysis({
+      provider,
+      cues: batch,
+      previouslyAnalyzed: [],
+      checkpoint: checkpoint(),
+      batchSize: 18,
+      signal: controller.signal,
+      onCommit: async (commit) => { commits.push(commit); controller.abort(); },
+    }));
+
+    const subtitles = commits[0].kind === "cues" ? commits[0].subtitles : [];
+    expect(subtitles.filter((subtitle) => subtitle.isKeyPoint)).toHaveLength(8);
+    expect(provider.requests[1].userPrompt).toContain(
+      "At most 5 cues in this request may have a non-empty p array",
+    );
   });
 
   it("awaits preview persistence before consuming the next provider chunk", async () => {
@@ -804,7 +871,9 @@ describe("runAnalysis", () => {
 
   it.each([
     ["transport", new ProviderTransportError("offline", "send")],
+    ["HTTP 408", new ProviderHttpError("timeout", 408, "", null)],
     ["HTTP 429", new ProviderHttpError("rate limited", 429, "", 0)],
+    ["HTTP 500", new ProviderHttpError("server error", 500, "", null)],
     ["HTTP 503", new ProviderHttpError("unavailable", 503, "", null)],
   ])("retries %s failures for every analysis provider", async (_name, failure) => {
     vi.useFakeTimers();
@@ -872,8 +941,19 @@ describe("runAnalysis", () => {
   });
 
   it.each([
+    ["bad request", new ProviderHttpError("bad request", 400, "", null)],
     ["authentication", new ProviderHttpError("unauthorized", 401, "", null)],
+    ["forbidden", new ProviderHttpError("forbidden", 403, "", null)],
     ["model not found", new ProviderHttpError("model not found", 404, "", null)],
+    [
+      "permanent quota",
+      new ProviderHttpError(
+        "insufficient balance",
+        429,
+        JSON.stringify({ error: { code: "insufficient_balance" } }),
+        null,
+      ),
+    ],
   ])("does not retry deterministic %s failures", async (_name, failure) => {
     const provider = scriptedProvider([{ error: failure }]);
 

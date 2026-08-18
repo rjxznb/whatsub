@@ -382,7 +382,7 @@ describe("immutable analysis sessions", () => {
         }
         yield `${JSON.stringify({
           i: 1,
-          p: [["one two", "翻译成功", "修复后保留的短语"]],
+          p: [["one two", "翻译成功", "表示从较长句子中提取出的固定表达，常用于工作、学习和日常交流中描述连续动作的语境。"]],
         })}\n`;
       },
     };

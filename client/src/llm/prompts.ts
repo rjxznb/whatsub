@@ -89,7 +89,7 @@ PER-CUE JSONL SCHEMA
 
 i = supplied cue index.
 zh = Chinese translation.
-p = zero to two phrase tuples: [exact English source, exact Chinese substring, Chinese usage note].
+p = zero or one phrase tuple: [exact English source, exact Chinese substring, Chinese usage note].
 
 WRONG (these have caused real bugs — DO NOT do this):
 - Echoing source-owned fields such as text, time, or endTime.
@@ -107,11 +107,11 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
 2. Each phrase's Chinese translation MUST be an exact substring of zh. Do NOT use "和……结合" or "以……闻名" — these are templates with ellipses, NOT substrings of any real translation.
 
-3. Phrase note values: 40-120 Chinese characters each. Aim for 60-80. Explain meaning + usage context, not just translation.
+3. Phrase note values: 25 to 90 Chinese characters each. Explain meaning + usage context substantively, not just translation.
 
-4. Each cue: AT MOST 2 phrases. Quality over quantity. Prefer one to five English words. A genuine fixed expression, idiom, or phrasal pattern may contain up to eight words. NEVER exceed eight English words. NEVER select the complete cue when it contains more than five words.
+4. Each cue: AT MOST 1 phrase. It must contain one to four English words.
 
-5. Use p=[] when there is no useful learning phrase. Greetings, fillers, "yes/no/thank you" are NOT key points.
+5. Select reusable learner-worthy chunks: phrasal verbs, fixed collocations, common collocations, idioms, pragmatic spoken expressions, discourse expressions, or easily misunderstood uses. A familiar expression still qualifies when its combination or conversational use is worth reusing. Omit greetings, fillers, names, numbers, function words, ordinary literal noun phrases, and simple compositional sentences. Use p=[] whenever there is no useful learning phrase.
 
 6. NEVER use raw double quotes inside JSON string values. For Chinese quoted text use 「」 not "". For English quoted text use single quotes or rephrase.
 
@@ -121,7 +121,7 @@ CRITICAL RULES (these have caused bugs in the past — follow them strictly):
 
 9. Output one JSON object per line. No multi-line objects. No leading/trailing whitespace beyond the newline separator.
 
-10. p MUST be an array of [source, translation, note] tuples. If you can't write a 40-120 character note AND find an exact translation substring for a phrase, omit that phrase entirely.
+10. p MUST be an array containing zero or one [source, translation, note] tuple. If you can't write a 25 to 90 Chinese character note AND find an exact translation substring for a phrase, omit that phrase entirely.
 `;
 
 function serializeCues(cues: readonly SrtCue[]): string {
@@ -130,27 +130,51 @@ function serializeCues(cues: readonly SrtCue[]): string {
     .join("\n");
 }
 
-export function buildUserPrompt(cues: readonly SrtCue[]): string {
+export interface CompactPromptOptions {
+  maxHighlightedCues: number;
+}
+
+function compactAllowance(options: CompactPromptOptions): string {
+  const limit = Math.max(0, Math.floor(options.maxHighlightedCues));
+  const density = limit === 0
+    ? "No highlight slots remain, so return p=[] for every cue."
+    : `Actively scan every cue for reusable learning expressions. When enough genuinely useful candidates exist, use most of the available allowance (roughly 60% to 100%; with an allowance of 20, usually select 12 to 20 cues). Do not leave an obvious reusable phrase unannotated merely to be conservative, but never invent or lower quality to fill the allowance.`;
+  return `At most ${limit} cues in this request may have a non-empty p array. This is a hard ceiling, not a quota. ${density} Each selected phrase must contain one to four English words and its substantive Chinese usage note must contain 25 to 90 Chinese characters.`;
+}
+
+export function buildUserPrompt(
+  cues: readonly SrtCue[],
+  options: CompactPromptOptions,
+): string {
   const cuesJson = serializeCues(cues);
   return `Subtitle cues (tab-separated: index<TAB>start<TAB>end<TAB>JSON-encoded text):
 ${cuesJson}
 
-Produce one JSON-line per cue in order. Per-cue lines ONLY — do NOT emit a summary line; the summary will be requested separately.`;
+Produce one JSON-line per cue in order. Per-cue lines ONLY — do NOT emit a summary line; the summary will be requested separately.
+${compactAllowance(options)}`;
 }
 
-export function buildContinuationPrompt(cues: readonly SrtCue[]): string {
+export function buildContinuationPrompt(
+  cues: readonly SrtCue[],
+  options: CompactPromptOptions,
+): string {
   const cuesJson = serializeCues(cues);
   return `Continuing analysis. Next batch:
 ${cuesJson}
 
-One JSON object per cue. Do NOT emit a summary line.`;
+One JSON object per cue. Do NOT emit a summary line.
+${compactAllowance(options)}`;
 }
 
-export function buildRepairPrompt(cues: readonly SrtCue[]): string {
+export function buildRepairPrompt(
+  cues: readonly SrtCue[],
+  options: CompactPromptOptions,
+): string {
   return `The following subtitle cues are still unresolved. Return exactly one JSON object for every supplied index and no other indexes:
 ${serializeCues(cues)}
 
-One compact JSON object per cue. No markdown, prose, source-field echoes, or summary line.`;
+One compact JSON object per cue. No markdown, prose, source-field echoes, or summary line.
+${compactAllowance(options)}`;
 }
 
 export interface AnnotationRepairInput {
@@ -161,6 +185,7 @@ export interface AnnotationRepairInput {
 
 export function buildAnnotationRepairPrompt(
   items: readonly AnnotationRepairInput[],
+  options: CompactPromptOptions,
 ): string {
   const inputs = items.map((item) => JSON.stringify({
     i: item.index,
@@ -172,7 +197,8 @@ ${inputs}
 
 Return one line per supplied cue: {"i":12,"p":[["English phrase","中文片段","中文用法说明"]]}
 Do not translate again. Do not return zh, text, timestamps, prose, or markdown.
-Use p=[] when no useful phrase exists. Phrase sources and Chinese fragments must be exact substrings of the supplied text and translation. Prefer one to five English words and never exceed eight.`;
+Use p=[] when no useful phrase exists. Phrase sources and Chinese fragments must be exact substrings of the supplied text and translation.
+${compactAllowance(options)}`;
 }
 
 /**
@@ -208,10 +234,10 @@ Each p tuple is [English expression, concise Chinese meaning, Chinese usage note
 Rules:
 - Deduplicate by expression (case-insensitive). Pick the most natural canonical form.
 - Drop trivial fillers, greetings, function words; keep idioms, phrasal verbs, vocabulary worth reviewing.
-- Prefer one to five English words. A genuine fixed expression may contain up to eight words; never exceed eight.
+- Each expression must contain one to four English words.
 - Aim for 8-20 entries depending on transcript size.
 - Chinese meaning: 8-25 Chinese characters; concise gloss.
-- Chinese usage note: 30-80 Chinese characters; how/when it's used, optionally a tiny example or context cue.
+- Chinese usage note: 25-90 Unicode code points; substantively explain how and when it is used.
 
 Output exactly one JSON object on one line. No fences, no prose, no other lines.`;
 }

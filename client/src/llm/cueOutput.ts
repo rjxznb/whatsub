@@ -107,31 +107,30 @@ function validatedAnnotationPatch(
   source: SrtCue,
   translation: string,
 ): SubtitleAnnotationPatch {
-  const highlightWords: string[] = [];
-  const noteEntries: Array<[string, string]> = [];
-  const translationEntries: Array<[string, string]> = [];
-  const seen = new Set<string>();
-
   for (const candidate of candidates) {
     const phrase = typeof candidate.source === "string" ? candidate.source.trim() : "";
     const translated = typeof candidate.translation === "string"
       ? candidate.translation.trim()
       : "";
     const note = typeof candidate.note === "string" ? candidate.note.trim() : "";
-    if (!phrase || !translated || !note || seen.has(phrase)) continue;
+    if (!phrase || !translated || !note) continue;
     if (!source.text.includes(phrase) || !translation.includes(translated)) continue;
     if (!isAllowedLearningPhrase(phrase, source.text)) continue;
-    seen.add(phrase);
-    highlightWords.push(phrase);
-    noteEntries.push([phrase, note]);
-    translationEntries.push([phrase, translated]);
+    const noteLength = Array.from(note).length;
+    if (noteLength < 25 || noteLength > 90) continue;
+    return {
+      isKeyPoint: true,
+      highlightWords: [phrase],
+      keyNotes: { [phrase]: note },
+      highlightTranslations: { [phrase]: translated },
+    };
   }
 
   return {
-    isKeyPoint: highlightWords.length > 0,
-    highlightWords,
-    keyNotes: Object.fromEntries(noteEntries),
-    highlightTranslations: Object.fromEntries(translationEntries),
+    isKeyPoint: false,
+    highlightWords: [],
+    keyNotes: {},
+    highlightTranslations: {},
   };
 }
 

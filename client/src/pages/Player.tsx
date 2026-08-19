@@ -47,6 +47,7 @@ import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
 import { LessonResumeBanner } from "../components/tutor/LessonResumeBanner";
 import { notify, confirmDialog } from "../store/appDialog";
+import { trackFunnel } from "../analytics/funnel";
 
 type Tab = "subtitles" | "keyPhrases";
 
@@ -356,6 +357,7 @@ export function Player() {
         ? (session.analysis.checkpoint.nextCueOffset / cues.length) * 100
         : 100,
     );
+    trackFunnel("analysis_started", { managed: settings.vendorId === "whatsub-managed" });
     try {
       // Switching from a client provider to the managed relay can leave this
       // Player holding the old local lease. The relay owns a fresh server job,
@@ -399,6 +401,7 @@ export function Player() {
         return;
       }
       if (completed.checkpoint.phase === "complete") {
+        trackFunnel("analysis_completed");
         await invoke("library_set_status", {
           id: videoId,
           status: "ready",
@@ -427,6 +430,7 @@ export function Player() {
         cues.length,
       );
       analysis.setError(msg, upsell, "analysis", quotaError);
+      trackFunnel("analysis_failed", { error: msg.slice(0, 100) });
       await invoke("library_set_status", {
         id: videoId,
         status: "failed",
@@ -444,6 +448,7 @@ export function Player() {
     // taking the next AI checkpoint revision.  This prevents two candidates
     // from being built from the same revision.
     analysis.setPhase("analyzing");
+    trackFunnel("analysis_submitted");
     const run = manualSaveTailRef.current.then(driveForegroundAnalysis);
     analysisRunRef.current = run;
     const clear = () => {

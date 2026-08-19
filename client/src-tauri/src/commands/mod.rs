@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod analytics;
 pub mod analysis;
 pub mod analysis_store;
 pub mod auth;

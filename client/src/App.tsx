@@ -25,6 +25,9 @@ import { useAuth } from "./store/auth";
 import { useLibrary } from "./store/library";
 import { startImportQueuePolling } from "./store/importQueue";
 import "./App.css";
+import { trackFunnel } from "./analytics/funnel";
+
+let funnelOpened = false;
 
 /**
  * Starts the import-queue poll loop once the user is authenticated.
@@ -38,6 +41,16 @@ function ImportQueuePoller() {
       startImportQueuePolling();
     }
   }, [status]);
+  return null;
+}
+
+function FunnelAppOpened() {
+  useEffect(() => {
+    if (!funnelOpened) {
+      funnelOpened = true;
+      trackFunnel("app_opened");
+    }
+  }, []);
   return null;
 }
 
@@ -130,6 +143,7 @@ function App() {
       <LicenseGate>
         <LicenseSessionGate>
           <BrowserRouter>
+            <FunnelAppOpened />
             <BackendListener />
             <LibraryRefreshListener />
             <ImportQueuePoller />

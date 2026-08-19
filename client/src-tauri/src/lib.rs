@@ -28,6 +28,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
+            commands::analytics::analytics_event_http,
             commands::settings::settings_path_string,
             commands::library::library_list,
             commands::library::library_get,

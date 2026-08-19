@@ -106,6 +106,10 @@ function mergeSubtitleBatch(
   };
 }
 
+function isManagedNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.message === "托管解析失败：not_found";
+}
+
 export async function executeManagedAnalysis(options: ManagedAnalysisOptions): Promise<CheckpointedAnalysis> {
   // Imported SRT files may use one-based, sparse, or repeated cue numbers.
   // Managed jobs identify results by array position, so normalize only the
@@ -143,11 +147,30 @@ export async function executeManagedAnalysis(options: ManagedAnalysisOptions): P
   let resumeCount = 0;
   while (true) {
     if (options.signal?.aborted) throw new DOMException("aborted", "AbortError");
-    const page = await request<ManagedResults>(
-      `/jobs/${encodeURIComponent(active.jobId)}/results?afterBatch=${cursor}`,
-      { method: "GET" },
-      options.signal,
-    );
+    let page: ManagedResults;
+    try {
+      page = await request<ManagedResults>(
+        `/jobs/${encodeURIComponent(active.jobId)}/results?afterBatch=${cursor}`,
+        { method: "GET" },
+        options.signal,
+      );
+    } catch (error) {
+      // Older servers returned not_found after finalizing a desktop-only job
+      // because it had no cloud Library result_entry_id. If every submitted
+      // cue is already durably present locally, preserve that complete result.
+      if (isManagedNotFoundError(error) && current.subtitles.length >= options.cues.length) {
+        return options.session.save({
+          ...current,
+          checkpoint: {
+            ...current.checkpoint,
+            phase: "complete",
+            nextCueOffset: options.cues.length,
+            revision: current.checkpoint.revision + 1,
+          },
+        });
+      }
+      throw error;
+    }
     for (const batch of page.batches) {
       const expectedStart = current.subtitles.length;
       const submittedStart = batch.batchIndex * 50;

@@ -107,22 +107,23 @@ function mergeSubtitleBatch(
 }
 
 export async function executeManagedAnalysis(options: ManagedAnalysisOptions): Promise<CheckpointedAnalysis> {
-  const id = youtubeId(options.entry.source.type === "url" ? options.entry.source.url : "");
-  if (!id) throw new Error("托管解析目前只支持 YouTube 视频");
   if (!Number.isInteger(options.entry.durationSec) || options.entry.durationSec <= 0) {
     throw new Error("无法确认视频时长，暂时不能提交托管解析");
   }
+  const sourceUrl = options.entry.source.type === "url" ? options.entry.source.url : "";
+  const id = youtubeId(sourceUrl) ?? "";
 
   const job = await request<ManagedJob>("/jobs", {
     method: "POST",
     body: JSON.stringify({
       idempotencyKey: `desktop:${options.entry.id}:${options.session.transcriptGeneration}`,
       youtubeId: id,
-      sourceUrl: options.entry.source.type === "url" ? options.entry.source.url : `https://www.youtube.com/watch?v=${id}`,
+      sourceUrl,
       title: options.entry.title,
       durationSec: Math.round(options.entry.durationSec),
       cues: options.cues,
       transcriptSrt: asSrt(options.cues),
+      persistLibraryEntry: false,
     }),
   }, options.signal);
 

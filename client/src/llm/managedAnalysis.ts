@@ -107,7 +107,13 @@ function mergeSubtitleBatch(
 }
 
 export async function executeManagedAnalysis(options: ManagedAnalysisOptions): Promise<CheckpointedAnalysis> {
-  if (!Number.isInteger(options.entry.durationSec) || options.entry.durationSec <= 0) {
+  const cueDurationSec = options.cues.reduce(
+    (maximum, cue) => Number.isFinite(cue.endTime) ? Math.max(maximum, cue.endTime) : maximum,
+    0,
+  );
+  const mediaDurationSec = options.entry.durationSec;
+  const durationSec = Math.ceil(Math.max(mediaDurationSec, cueDurationSec));
+  if (!Number.isFinite(mediaDurationSec) || mediaDurationSec <= 0 || durationSec <= 0) {
     throw new Error("无法确认视频时长，暂时不能提交托管解析");
   }
   const sourceUrl = options.entry.source.type === "url" ? options.entry.source.url : "";
@@ -120,7 +126,7 @@ export async function executeManagedAnalysis(options: ManagedAnalysisOptions): P
       youtubeId: id,
       sourceUrl,
       title: options.entry.title,
-      durationSec: Math.round(options.entry.durationSec),
+      durationSec,
       cues: options.cues,
       transcriptSrt: asSrt(options.cues),
       persistLibraryEntry: false,

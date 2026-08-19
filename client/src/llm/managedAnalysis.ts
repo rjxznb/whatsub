@@ -123,7 +123,6 @@ export async function executeManagedAnalysis(options: ManagedAnalysisOptions): P
       durationSec: Math.round(options.entry.durationSec),
       cues: options.cues,
       transcriptSrt: asSrt(options.cues),
-      thumbData: null,
     }),
   }, options.signal);
 

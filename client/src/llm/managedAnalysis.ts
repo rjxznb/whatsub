@@ -107,6 +107,10 @@ function mergeSubtitleBatch(
 }
 
 export async function executeManagedAnalysis(options: ManagedAnalysisOptions): Promise<CheckpointedAnalysis> {
+  // Imported SRT files may use one-based, sparse, or repeated cue numbers.
+  // Managed jobs identify results by array position, so normalize only the
+  // submitted identity while preserving text and timing verbatim.
+  const submittedCues = options.cues.map((cue, index) => ({ ...cue, index }));
   const cueDurationSec = options.cues.reduce(
     (maximum, cue) => Number.isFinite(cue.endTime) ? Math.max(maximum, cue.endTime) : maximum,
     0,
@@ -127,8 +131,8 @@ export async function executeManagedAnalysis(options: ManagedAnalysisOptions): P
       sourceUrl,
       title: options.entry.title,
       durationSec,
-      cues: options.cues,
-      transcriptSrt: asSrt(options.cues),
+      cues: submittedCues,
+      transcriptSrt: asSrt(submittedCues),
       persistLibraryEntry: false,
     }),
   }, options.signal);

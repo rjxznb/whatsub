@@ -332,9 +332,11 @@ export function Player() {
 
   const driveForegroundAnalysis = async () => {
     if (!videoId) return;
-    const cues = cuesRef.current;
-    const session = sessionRef.current;
-    if (!cues || !session) return;
+    const initialCues = cuesRef.current;
+    const initialSession = sessionRef.current;
+    if (!initialCues || !initialSession) return;
+    let cues: SrtCue[] = initialCues;
+    let session: PersistedAnalysisSession = initialSession;
     const stillOwnsSession = () =>
       ownsForegroundAnalysis(videoId, session, sessionRef.current);
     if (session.analysis.checkpoint.phase === "complete") {
@@ -344,6 +346,9 @@ export function Player() {
 
     const localController = new AbortController();
     abortRef.current = localController;
+    const entry = library.videos.find((v) => v.id === videoId);
+    const style = entry?.analysisStyle ?? "colloquial";
+    const provider = getProvider(settings);
     analysis.setRetryMessage(null);
     analysis.setPhase(
       "analyzing",
@@ -351,10 +356,23 @@ export function Player() {
         ? (session.analysis.checkpoint.nextCueOffset / cues.length) * 100
         : 100,
     );
-    const provider = getProvider(settings);
-    const entry = library.videos.find((v) => v.id === videoId);
-    const style = entry?.analysisStyle ?? "colloquial";
     try {
+      // Switching from a client provider to the managed relay can leave this
+      // Player holding the old local lease. The relay owns a fresh server job,
+      // so discard the old checkpoint/inflight state before the first save.
+      if (settings.vendorId === "whatsub-managed") {
+        await session.close().catch(() => {});
+        const fresh = await openStoredAnalysisSession(videoId, {
+          reset: true,
+          style,
+        });
+        if (!fresh) throw new Error("找不到 transcript.srt — 无法启动托管解析");
+        cues = fresh.cues;
+        session = fresh.session;
+        cuesRef.current = cues;
+        sessionRef.current = session;
+        analysis.setCommittedAnalysis(session.analysis, cues.length);
+      }
       const onCommitted = (persisted: CheckpointedAnalysis) => {
         if (!stillOwnsSession()) return;
         analysis.setCommittedAnalysis(persisted, cues.length);

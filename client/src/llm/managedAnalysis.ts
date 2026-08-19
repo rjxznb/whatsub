@@ -186,6 +186,22 @@ export async function executeManagedAnalysis(options: ManagedAnalysisOptions): P
       options.onCommitted?.(current);
       cursor = batch.batchIndex;
     }
+    // A completed results page is authoritative for desktop-only jobs. They
+    // intentionally have no cloud Library result_entry_id, so waiting for a
+    // second /jobs/:id status read can leave the UI spinning after every cue
+    // has already been durably saved locally.
+    if (page.status === "completed" && current.subtitles.length >= options.cues.length) {
+      return options.session.save({
+        ...current,
+        keyPhrases: page.keyPhrases ?? current.keyPhrases,
+        checkpoint: {
+          ...current.checkpoint,
+          phase: "complete",
+          nextCueOffset: options.cues.length,
+          revision: current.checkpoint.revision + 1,
+        },
+      });
+    }
     try {
       active = await request<ManagedJob>(
         `/jobs/${encodeURIComponent(active.jobId)}`,

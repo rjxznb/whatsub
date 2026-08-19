@@ -186,11 +186,28 @@ export async function executeManagedAnalysis(options: ManagedAnalysisOptions): P
       options.onCommitted?.(current);
       cursor = batch.batchIndex;
     }
-    active = await request<ManagedJob>(
-      `/jobs/${encodeURIComponent(active.jobId)}`,
-      { method: "GET" },
-      options.signal,
-    );
+    try {
+      active = await request<ManagedJob>(
+        `/jobs/${encodeURIComponent(active.jobId)}`,
+        { method: "GET" },
+        options.signal,
+      );
+    } catch (error) {
+      // The same legacy desktop-only finalization race can affect the status
+      // request after all cue and summary data has already been delivered.
+      if (isManagedNotFoundError(error) && current.subtitles.length >= options.cues.length) {
+        return options.session.save({
+          ...current,
+          checkpoint: {
+            ...current.checkpoint,
+            phase: "complete",
+            nextCueOffset: options.cues.length,
+            revision: current.checkpoint.revision + 1,
+          },
+        });
+      }
+      throw error;
+    }
     if (active.status === "failed" || active.status === "paused_quota" || active.status === "cancelled") {
       if (active.status === "failed" && [
         "upstream_unavailable",

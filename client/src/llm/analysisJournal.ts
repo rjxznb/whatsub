@@ -165,9 +165,17 @@ function isAnnotationRepairCompletion(
   current: AnalysisInflightEntry,
   incoming: AnalysisInflightEntry,
 ): boolean {
-  return current.annotationRepair === true
-    && incoming.annotationRepair !== true
-    && sameSubtitleIdentity(current.subtitle, incoming.subtitle);
+  if (incoming.annotationRepair === true || !sameSubtitleIdentity(current.subtitle, incoming.subtitle)) {
+    return false;
+  }
+  // The optional fill pass can discover a phrase after the first preview was
+  // already journaled without an annotationRepair marker. It is still a
+  // monotonic annotation-only upgrade as long as cue identity and translation
+  // remain unchanged.
+  return current.annotationRepair === true || (
+    hasEmptyAnnotations(current.subtitle)
+    && !hasEmptyAnnotations(incoming.subtitle)
+  );
 }
 
 function sameSubtitleIdentity(left: Subtitle, right: Subtitle): boolean {

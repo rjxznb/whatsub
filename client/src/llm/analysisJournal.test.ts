@@ -175,4 +175,17 @@ describe("analysis inflight journal", () => {
       subtitle: { ...repairedSubtitle, translation: "被改写的翻译" },
     }])).toThrow("analysis inflight entry rewrite rejected");
   });
+
+  it("permits a fill pass to add annotations to an already previewed cue", () => {
+    const pending = validJournal();
+    const filled: Subtitle = {
+      ...subtitle("first"),
+      isKeyPoint: true,
+      highlightWords: ["first"],
+      keyNotes: { first: "用于测试重点标注补充" },
+      highlightTranslations: { first: "译" },
+    };
+    expect(mergeInflightEntries(pending, [{ cueOffset: 50, subtitle: filled }]).entries)
+      .toEqual([{ cueOffset: 50, subtitle: filled }]);
+  });
 });

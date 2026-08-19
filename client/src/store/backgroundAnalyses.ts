@@ -8,6 +8,7 @@ import {
   StaleAnalysisSessionError,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
+import { executeManagedAnalysis } from "../llm/managedAnalysis";
 import type { AnalysisPreview } from "../llm/analyze";
 import { analysisRetryMessage } from "../llm/analysisRetryMessage";
 import { getProvider } from "../llm/providers";
@@ -233,33 +234,54 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
 }
 
 async function driveAnalysis(runtime: BgRuntime): Promise<void> {
-  const session = runtime.session;
-  const cues = runtime.cues;
+  let session = runtime.session;
+  let cues = runtime.cues;
   if (!session || !cues || runtime.controller.signal.aborted) return;
 
   try {
-    const completed = await executeAnalysisSession({
-      session,
-      provider: getProvider(useSettings.getState().settings),
-      cues,
-      style: runtime.style,
-      batchSize: 25,
-      signal: runtime.controller.signal,
-      onCommitted: (analysis) => {
-        if (runtimes.get(runtime.videoId) !== runtime) return;
-        publishAnalysis(runtime, analysis, "analyzing");
-      },
-      onPreview: (committed, preview) => {
-        publishPreview(runtime, committed, preview);
-      },
-      onRetry: (event) => {
-        if (runtimes.get(runtime.videoId) !== runtime) return;
-        updateJob(runtime.videoId, (job) => ({
-          ...job,
-          retryMessage: analysisRetryMessage(event),
-        }));
-      },
-    });
+    const settings = useSettings.getState().settings;
+    if (
+      settings.vendorId === "whatsub-managed"
+      && (session.analysis.checkpoint.nextCueOffset > 0 || session.inflight !== null)
+    ) {
+      await session.close();
+      const fresh = await openStoredAnalysisSession(runtime.videoId, {
+        reset: true,
+        style: runtime.style,
+      });
+      if (!fresh) throw new Error("找不到 transcript.srt — 无法启动托管解析");
+      session = fresh.session;
+      cues = fresh.cues;
+      runtime.session = session;
+      runtime.cues = cues;
+    }
+    const entry = useLibrary.getState().library.videos.find((v) => v.id === runtime.videoId);
+    const completed = settings.vendorId === "whatsub-managed"
+      ? await executeManagedAnalysis({
+          entry: entry!, cues, style: runtime.style, session,
+          signal: runtime.controller.signal,
+          onCommitted: (analysis) => publishAnalysis(runtime, analysis, "analyzing"),
+        })
+      : await executeAnalysisSession({
+          session,
+          provider: getProvider(settings),
+          cues,
+          style: runtime.style,
+          batchSize: 25,
+          signal: runtime.controller.signal,
+          onCommitted: (analysis) => {
+            if (runtimes.get(runtime.videoId) !== runtime) return;
+            publishAnalysis(runtime, analysis, "analyzing");
+          },
+          onPreview: (committed, preview) => publishPreview(runtime, committed, preview),
+          onRetry: (event) => {
+            if (runtimes.get(runtime.videoId) !== runtime) return;
+            updateJob(runtime.videoId, (job) => ({
+              ...job,
+              retryMessage: analysisRetryMessage(event),
+            }));
+          },
+        });
 
     if (runtime.controller.signal.aborted || runtime.disposition !== "background") return;
     if (completed.checkpoint.phase !== "complete") return;
@@ -359,6 +381,7 @@ async function reopenStaleSessionAndContinue(runtime: BgRuntime): Promise<void> 
     if (runtime.controller.signal.aborted || runtime.disposition !== "background") return;
 
     const stored = await openStoredAnalysisSession(runtime.videoId, {
+      reset: useSettings.getState().settings.vendorId === "whatsub-managed",
       style: runtime.style,
     });
     if (!stored) throw new Error("找不到 transcript.srt — 无法恢复解析进度");

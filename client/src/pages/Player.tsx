@@ -29,6 +29,7 @@ import {
   openStoredAnalysisSession,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
+import { executeManagedAnalysis } from "../llm/managedAnalysis";
 import { analysisRetryMessage } from "../llm/analysisRetryMessage";
 import { getProvider } from "../llm/providers";
 import { RelayError } from "../llm/providers/relayErrors";
@@ -40,7 +41,7 @@ import {
 } from "../store/backgroundAnalyses";
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
-import type { AnalysisResult, SrtCue } from "../llm/types";
+import type { AnalysisResult, CheckpointedAnalysis, SrtCue } from "../llm/types";
 import { useTutorRuntime } from "../store/tutorRuntime";
 import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
@@ -354,26 +355,25 @@ export function Player() {
     const entry = library.videos.find((v) => v.id === videoId);
     const style = entry?.analysisStyle ?? "colloquial";
     try {
-      const completed = await executeAnalysisSession({
-        session,
-        provider,
-        cues,
-        style,
-        batchSize: 25,
-        signal: localController.signal,
-        onCommitted: (persisted) => {
-          if (!stillOwnsSession()) return;
-          analysis.setCommittedAnalysis(persisted, cues.length);
-        },
-        onPreview: (committed, preview) => {
-          if (!stillOwnsSession()) return;
-          analysis.setAnalysisPreview(committed, preview, cues.length);
-        },
-        onRetry: (event) => {
-          if (!stillOwnsSession()) return;
-          analysis.setRetryMessage(analysisRetryMessage(event));
-        },
-      });
+      const onCommitted = (persisted: CheckpointedAnalysis) => {
+        if (!stillOwnsSession()) return;
+        analysis.setCommittedAnalysis(persisted, cues.length);
+      };
+      const completed = settings.vendorId === "whatsub-managed"
+        ? await executeManagedAnalysis({ entry: entry!, cues, style, session, signal: localController.signal, onCommitted })
+        : await executeAnalysisSession({
+            session, provider, cues, style, batchSize: 25,
+            signal: localController.signal,
+            onCommitted,
+            onPreview: (committed, preview) => {
+              if (!stillOwnsSession()) return;
+              analysis.setAnalysisPreview(committed, preview, cues.length);
+            },
+            onRetry: (event) => {
+              if (!stillOwnsSession()) return;
+              analysis.setRetryMessage(analysisRetryMessage(event));
+            },
+          });
       if (!stillOwnsSession()) return;
       analysis.setRetryMessage(null);
       if (localController.signal.aborted || completed.checkpoint.phase !== "complete") {
@@ -610,6 +610,7 @@ export function Player() {
       let stored;
       try {
         stored = await openStoredAnalysisSession(videoId, {
+          reset: settings.vendorId === "whatsub-managed",
           style: entry?.analysisStyle ?? "colloquial",
         });
       } catch (error) {

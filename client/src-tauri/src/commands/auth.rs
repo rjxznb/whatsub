@@ -795,11 +795,6 @@ mod tests {
         assert_eq!(*attempts.borrow(), 1);
         assert!(delays.borrow().is_empty());
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
     fn me_request_identifies_desktop_client() {

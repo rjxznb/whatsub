@@ -41,4 +41,11 @@ describe('auth error mapping', () => {
       );
     },
   );
+
+  it.each(['toString', 'constructor', '__proto__'])(
+    'returns the safe business fallback for inherited reason %s',
+    (reason) => {
+      expect(authReasonToChinese(reason)).toBe('登录失败，请稍后重试。');
+    },
+  );
 });

@@ -7,6 +7,11 @@ on:
         description: GitHub Release tag to mirror
         required: true
         type: string
+      manifest_only:
+        description: Publish a GitCode-hosted manifest that keeps GitHub asset URLs
+        required: false
+        type: boolean
+        default: false
     secrets:
       GITCODE_TOKEN:
         required: true
@@ -16,6 +21,11 @@ on:
         description: GitHub Release tag to mirror
         required: true
         type: string
+      manifest_only:
+        description: Publish a GitCode-hosted manifest that keeps GitHub asset URLs
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -45,6 +55,7 @@ jobs:
       - name: Mirror release assets and manifest
         env:
           REQUESTED_TAG: ${{ inputs.tag }}
+          MANIFEST_ONLY: ${{ inputs.manifest_only }}
           GH_TOKEN: ${{ github.token }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
@@ -100,6 +111,21 @@ jobs:
             if [ "$published" != published ]; then
               echo "::error::GitHub Release $tag is draft or unpublished"
               exit 1
+            fi
+          }
+
+          publish_manifest() {
+            local manifest_path="$1"
+            rm -rf mirror
+            git -c credential.helper="store --file=$CREDENTIAL_FILE" clone --branch main \
+              https://gitcode.com/rjxznb/whatsub-release.git mirror
+            cp "$manifest_path" mirror/latest.json
+            git -C mirror config user.name 'whatsub-release-bot'
+            git -C mirror config user.email 'whatsub-release-bot@users.noreply.github.com'
+            if ! git -C mirror diff --quiet -- latest.json; then
+              git -C mirror add latest.json
+              git -C mirror commit -m "release: mirror $tag to GitCode"
+              git -C mirror -c credential.helper="store --file=$CREDENTIAL_FILE" push origin HEAD:main
             fi
           }
 
@@ -319,15 +345,27 @@ jobs:
           rm -rf work mirror
           mkdir -p work/releases work/uploads work/assets
           require_published_github_release
-          # Promotion is independent of updater URLs: both platforms may be carried from older tags.
-          promote_requested_release "$tag"
           current_assets_dir="work/current-$(hash_value "$tag")"
           mkdir -p "$current_assets_dir"
+
+          if [ "$MANIFEST_ONLY" = true ]; then
+            gh release download "$tag" --repo "$source_repo" --dir "$current_assets_dir" \
+              --pattern latest.json
+            latest_file="$current_assets_dir/latest.json"
+            test -f "$latest_file" || { echo "::error::GitHub Release $tag has no latest.json"; exit 1; }
+            cp "$latest_file" work/source-latest.json
+            publish_manifest work/source-latest.json
+            exit 0
+          fi
+
           gh release download "$tag" --repo "$source_repo" --dir "$current_assets_dir"
           gh release view "$tag" --repo "$source_repo" --json assets > work/current-assets.json
           latest_file="$current_assets_dir/latest.json"
           test -f "$latest_file" || { echo "::error::GitHub Release $tag has no latest.json"; exit 1; }
           cp "$latest_file" work/source-latest.json
+
+          # Promotion is independent of updater URLs: both platforms may be carried from older tags.
+          promote_requested_release "$tag"
 
           node scripts/gitcode-mirror-plan.mjs \
             work/source-latest.json work/current-assets.json "$tag" work/assets.json
@@ -366,16 +404,7 @@ jobs:
             }
           done < <(jq -c '.[]' work/assets.json)
 
-          git -c credential.helper="store --file=$CREDENTIAL_FILE" clone --branch main \
-            https://gitcode.com/rjxznb/whatsub-release.git mirror
-          cp work/latest.json mirror/latest.json
-          git -C mirror config user.name 'whatsub-release-bot'
-          git -C mirror config user.email 'whatsub-release-bot@users.noreply.github.com'
-          if ! git -C mirror diff --quiet -- latest.json; then
-            git -C mirror add latest.json
-            git -C mirror commit -m "release: mirror $tag to GitCode"
-            git -C mirror -c credential.helper="store --file=$CREDENTIAL_FILE" push origin HEAD:main
-          fi
+          publish_manifest work/latest.json
 
       - name: Remove temporary GitCode credential file
         if: always()

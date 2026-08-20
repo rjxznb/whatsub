@@ -961,5 +961,6 @@ jobs:
     uses: ./.github/workflows/mirror-gitcode.yml
     with:
       tag: ${{ needs.publish.outputs.tag }}
+      manifest_only: true
     secrets:
       GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}

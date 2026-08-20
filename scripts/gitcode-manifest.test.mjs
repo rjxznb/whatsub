@@ -126,6 +126,7 @@ test('release workflow publishes before mirroring GitCode and skips both in dry 
   assert.match(workflow, /if:\s*\$\{\{\s*!inputs\.dry_run\s*&&\s*needs\.publish\.result\s*==\s*'success'\s*\}\}/);
   assert.match(workflow, /uses:\s*\.\/\.github\/workflows\/mirror-gitcode\.yml/);
   assert.match(workflow, /tag:\s*\$\{\{\s*needs\.publish\.outputs\.tag\s*\}\}/);
+  assert.match(workflow, /manifest_only:\s*true/);
   assert.match(workflow, /GITCODE_TOKEN:\s*\$\{\{\s*secrets\.GITCODE_TOKEN\s*\}\}/);
   assert.doesNotMatch(workflow, /Mirror to JiHu GitLab/);
   assert.doesNotMatch(workflow, /GITLAB_TOKEN/);
@@ -298,6 +299,45 @@ test('GitCode mirror retries large uploads with a fresh signed URL', async () =>
   const freshUploadRequest = workflow.indexOf('upload_response="work/uploads/', retryLoop);
   assert.ok(retryLoop >= 0 && freshUploadRequest > retryLoop,
     'each retry must request a fresh GitCode upload URL');
+});
+
+test('GitCode mirror can publish the GitHub-backed updater manifest without large assets', async () => {
+  const workflow = await readFile(
+    new URL('../.github/workflows/mirror-gitcode.yml', import.meta.url),
+    'utf8',
+  );
+
+  for (const required of [
+    'manifest_only:',
+    'MANIFEST_ONLY: ${{ inputs.manifest_only }}',
+    'publish_manifest work/source-latest.json',
+    'if [ "$MANIFEST_ONLY" = true ]; then',
+    '--pattern latest.json',
+  ]) {
+    assert.match(workflow, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  const manifestOnlyBlock = workflow.match(
+    /if \[ "\$MANIFEST_ONLY" = true \]; then\r?\n[\s\S]*?\r?\n\s*fi/,
+  )?.[0];
+  assert.ok(manifestOnlyBlock, 'workflow must define a manifest-only branch');
+  assert.match(
+    manifestOnlyBlock,
+    /publish_manifest work\/source-latest\.json\r?\n\s*exit 0/,
+    'manifest-only mode must exit immediately after publishing the manifest',
+  );
+  assert.doesNotMatch(manifestOnlyBlock, /promote_requested_release|upload_asset|gitcode-manifest/);
+
+  assert.ok(
+    workflow.indexOf('if [ "$MANIFEST_ONLY" = true ]; then')
+      < workflow.indexOf('promote_requested_release "$tag"'),
+    'manifest-only mode must bypass GitCode release uploads',
+  );
+  assert.ok(
+    workflow.indexOf('if [ "$MANIFEST_ONLY" = true ]; then')
+      < workflow.indexOf('gh release download "$tag" --repo "$source_repo" --dir "$current_assets_dir"'),
+    'manifest-only mode must not download the large release assets',
+  );
 });
 
 test('GitCode mirror keeps an existing attachment when its public bytes verify', async () => {

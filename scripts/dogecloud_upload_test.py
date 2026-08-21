@@ -35,6 +35,24 @@ class DogeCloudUploadTests(unittest.TestCase):
             "https://download.eversay.cc",
         )
 
+    def test_s3_config_falls_back_for_old_botocore(self):
+        calls = []
+
+        def old_config(**kwargs):
+            calls.append(kwargs)
+            if "request_checksum_calculation" in kwargs:
+                raise TypeError(
+                    "Got unexpected keyword argument 'request_checksum_calculation'"
+                )
+            return kwargs
+
+        config = dogecloud_upload.build_s3_config(old_config)
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(config["signature_version"], "s3v4")
+        self.assertEqual(config["s3"], {"addressing_style": "virtual"})
+        self.assertNotIn("request_checksum_calculation", config)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,6 +67,27 @@ def request_temp_token(
     return {"credentials": data["Credentials"], "bucket": buckets[0]}
 
 
+def build_s3_config(config_class):
+    """Build an S3 config compatible with both old and new botocore releases."""
+    base = {
+        "signature_version": "s3v4",
+        "s3": {"addressing_style": "virtual"},
+    }
+    try:
+        return config_class(
+            **base,
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        )
+    except TypeError as error:
+        # Ubuntu's system botocore predates the checksum controls. That version
+        # also predates automatic flexible checksums, so the base config is the
+        # equivalent safe behavior rather than a loss of validation.
+        if "request_checksum_calculation" not in str(error):
+            raise
+        return config_class(**base)
+
+
 def upload_file(
     local_path: Path,
     object_key: str,
@@ -90,12 +111,7 @@ def upload_file(
         aws_secret_access_key=credentials["secretAccessKey"],
         aws_session_token=credentials["sessionToken"],
         endpoint_url=bucket_info["s3Endpoint"],
-        config=Config(
-            signature_version="s3v4",
-            s3={"addressing_style": "virtual"},
-            request_checksum_calculation="when_required",
-            response_checksum_validation="when_required",
-        ),
+        config=build_s3_config(Config),
     )
 
     extra = {"CacheControl": cache_control}

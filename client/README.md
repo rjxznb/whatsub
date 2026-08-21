@@ -8,13 +8,13 @@
 
 > 不需要总盯版本号 —— 装上之后会自动检测更新,bottom-right 弹 toast 提示。
 
-| 平台 | 下载(**GitCode 优先**) | 下载(GitHub 备用) | 说明 |
+| 平台 | 国内下载（多吉云 CDN） | 下载(GitHub 备用) | 说明 |
 |------|---------------------|--------------------|------|
-| Windows 10/11 x64 | [whatsub_0.1.53_x64-setup.exe](https://gitcode.com/rjxznb/whatsub-release/releases/download/v0.1.53/whatsub_0.1.53_x64-setup.exe) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.53/whatsub_0.1.53_x64-setup.exe) | NSIS 安装包,双击装到当前用户、无需管理员权限。**老版本(v0.1.22 及以前的 .msi 用户)请先在「程序和功能」里卸载老的 whatsub,再装新的 .exe** —— 两个安装系统的注册表入口不互通 |
-| macOS Apple Silicon | [whatsub_0.1.53_aarch64.dmg](https://gitcode.com/rjxznb/whatsub-release/releases/download/v0.1.53/whatsub_0.1.53_aarch64.dmg) | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/download/v0.1.53/whatsub_0.1.53_aarch64.dmg) | 已 Apple Developer ID 签名 + 公证,双击 .dmg → **务必拖进 Applications 文件夹再打开**(直接从下载目录打开会触发 macOS App Translocation,自动更新会写不进去) |
+| Windows 10/11 x64 | 应用内更新自动走 `download.eversay.cc` | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/latest) | NSIS 安装包,双击装到当前用户、无需管理员权限。**老版本(v0.1.22 及以前的 .msi 用户)请先在「程序和功能」里卸载老的 whatsub,再装新的 .exe** —— 两个安装系统的注册表入口不互通 |
+| macOS Apple Silicon | 应用内更新自动走 `download.eversay.cc` | [GitHub](https://github.com/rjxznb/whatsub-releases/releases/latest) | 已 Apple Developer ID 签名 + 公证,双击 .dmg → **务必拖进 Applications 文件夹再打开**(直接从下载目录打开会触发 macOS App Translocation,自动更新会写不进去) |
 | Intel Mac | — | — | 暂不支持 |
 
-> 应用内自动更新和 yt-dlp 更新都优先尝试 GitCode；GitHub 是故障回退。稳定的应用更新清单为 [GitCode latest.json](https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main)。
+> 应用内自动更新和 yt-dlp 更新都优先尝试多吉云 CDN；GitHub 是故障回退。稳定的应用更新清单为 [DogeCloud latest.json](https://download.eversay.cc/latest.json)。
 
 ## 主要功能
 
@@ -25,7 +25,7 @@
 - **任意 LLM**:DeepSeek / OpenAI / Kimi / Claude / Gemini / 智谱 / Qwen / SiliconFlow / Ollama,10 个预设 + 自定义
 - **多站点视频导入**:内置 yt-dlp,支持 YouTube / B 站 / Instagram / X / TikTok 等;可选画质(480p / 720p / 1080p / 原画)
 - **可视化 cookies 登录**:启动你电脑上的 Edge / Chrome 在独立 profile 里登录目标站点,whatsub 通过 CDP 抓 cookies。会员视频 / 年龄限制 / 私有视频都能下载
-- **yt-dlp 自动检查更新**(0.1.98+):启动时静默检查有没有新版 yt-dlp,有就弹提示、点「更新」一键装好(GitCode 优先,GitHub 兜底);也可 Settings → 更新 yt-dlp 手动更新。YouTube 哪天换 player JS 不用等 whatsub 发版
+- **yt-dlp 自动检查更新**(0.1.98+):启动时静默检查有没有新版 yt-dlp,有就弹提示、点「更新」一键装好(多吉云 CDN 优先,GitHub 兜底);也可 Settings → 更新 yt-dlp 手动更新。YouTube 哪天换 player JS 不用等 whatsub 发版
 - **长视频字幕更准**(0.1.97+):超过 20 分钟的视频自动启用 VAD 智能分段,跳过音乐/静音段 —— 修复长片时间轴漂移、字幕反复乱码的问题,全自动无需设置
 - **字幕导出**:英文 / 中文 / 双语 SRT,或将带高亮的字幕烧录进视频导出 MP4(可选 高 / 标准 / 流畅 三档画质),也支持都不勾字幕直接流复制原视频
 - **词汇本**:⭐ 收藏重点短语,跨视频汇总,CSV 导出,深链跳回原片对应字幕段

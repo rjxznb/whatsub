@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: 'Which platforms to build & publish'
+        description: 'Which platforms to build (publishing requires both)'
         type: choice
         options:
           - both
@@ -791,10 +791,10 @@ jobs:
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────
-  # Publish runs as long as at least one platform built. Platforms whose
-  # build was skipped have their entry carried over from the latest existing
-  # release on the releases repo, so latest.json stays complete for users on
-  # the un-rebuilt platform.
+  # A static Tauri manifest has one top-level version shared by all platforms.
+  # Therefore a public release is promoted only when both platform artifacts
+  # were built from this exact source/version. Single-platform runs remain
+  # useful for dry-run testing but never publish an inconsistent manifest.
   publish:
     needs: [build-windows, build-macos]
     outputs:
@@ -802,22 +802,24 @@ jobs:
     if: |
       !inputs.dry_run &&
       !cancelled() &&
-      (needs.build-windows.result == 'success' || needs.build-macos.result == 'success')
+      needs.build-windows.result == 'success' &&
+      needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # GitHub publish plus several hundred MB of DogeCloud multipart uploads.
+    timeout-minutes: 30
     steps:
       - name: Checkout (need tauri.conf.json for version)
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Download Windows artifact
-        if: needs.build-windows.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: windows-bundle
           path: dist/windows
 
       - name: Download macOS artifact
-        if: needs.build-macos.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: macos-bundle
@@ -833,8 +835,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
           NOTES: ${{ inputs.release_notes }}
-          BUILT_WIN: ${{ needs.build-windows.result == 'success' }}
-          BUILT_MAC: ${{ needs.build-macos.result == 'success' }}
         run: |
           set -e
           VERSION=$(jq -r .version client/src-tauri/tauri.conf.json)
@@ -845,35 +845,14 @@ jobs:
           # GitHub asset URLs replace spaces with dots.
           urlify() { basename "$1" | sed 's/ /./g'; }
 
-          # ── Locate fresh artifacts (only those whose build ran) ─────
-          EXE=""; EXE_SIG=""; DMG=""; APP_TARGZ=""; APP_SIG=""
-          if [ "$BUILT_WIN" = "true" ]; then
-            EXE=$(find dist/windows -name "*-setup.exe" -type f | head -1)
-            EXE_SIG=$(find dist/windows -name "*-setup.exe.sig" -type f | head -1)
-            [ -f "$EXE" ] && [ -f "$EXE_SIG" ] || { echo "::error::Windows artifact incomplete"; exit 1; }
-          fi
-          if [ "$BUILT_MAC" = "true" ]; then
-            DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
-            APP_TARGZ=$(find dist/macos -name "*.app.tar.gz" -type f | head -1)
-            APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
-            [ -f "$DMG" ] && [ -f "$APP_TARGZ" ] && [ -f "$APP_SIG" ] || { echo "::error::macOS artifact incomplete"; exit 1; }
-          fi
-          echo "BUILT_WIN=$BUILT_WIN EXE=$EXE"
-          echo "BUILT_MAC=$BUILT_MAC DMG=$DMG APP_TARGZ=$APP_TARGZ"
-
-          # ── For platforms NOT built this run, fetch the carry-over entry
-          #    from the most recent existing release's latest.json ──────
-          PREV_LATEST=""
-          PREV_TAG=$(gh release list --repo "$REPO" --limit 5 \
-                       --json tagName,isDraft,isPrerelease \
-                       --jq 'map(select(.isDraft==false and .isPrerelease==false)) | .[0].tagName // ""')
-          if [ -n "$PREV_TAG" ]; then
-            PREV_LATEST=$(gh release download "$PREV_TAG" --repo "$REPO" \
-                          --pattern "latest.json" -O - 2>/dev/null || echo "")
-            echo "Carry-over base: $PREV_TAG"
-          else
-            echo "No previous release found — fresh manifest."
-          fi
+          # ── Locate fresh artifacts from this exact run/version ──────
+          EXE=$(find dist/windows -name "*-setup.exe" -type f | head -1)
+          EXE_SIG=$(find dist/windows -name "*-setup.exe.sig" -type f | head -1)
+          DMG=$(find dist/macos -name "*.dmg" -type f | head -1)
+          APP_TARGZ=$(find dist/macos -name "*.app.tar.gz" -type f | head -1)
+          APP_SIG=$(find dist/macos -name "*.app.tar.gz.sig" -type f | head -1)
+          [ -f "$EXE" ] && [ -f "$EXE_SIG" ] || { echo "::error::Windows artifact incomplete"; exit 1; }
+          [ -f "$DMG" ] && [ -f "$APP_TARGZ" ] && [ -f "$APP_SIG" ] || { echo "::error::macOS artifact incomplete"; exit 1; }
 
           # ── Create or reuse this release tag ───────────────────────
           if ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
@@ -882,64 +861,25 @@ jobs:
               --notes "$NOTES"
           fi
 
-          # ── Upload only the freshly-built assets (--clobber to overwrite
-          #    same-name assets if re-running this platform) ───────────
-          UPLOAD_LIST=()
-          [ -n "$EXE" ]       && UPLOAD_LIST+=("$EXE" "$EXE_SIG")
-          [ -n "$APP_TARGZ" ] && UPLOAD_LIST+=("$DMG" "$APP_TARGZ" "$APP_SIG")
-          if [ ${#UPLOAD_LIST[@]} -gt 0 ]; then
-            gh release upload "$TAG" "${UPLOAD_LIST[@]}" --repo "$REPO" --clobber
-          fi
+          gh release upload "$TAG" \
+            "$EXE" "$EXE_SIG" "$DMG" "$APP_TARGZ" "$APP_SIG" \
+            --repo "$REPO" --clobber
 
-          # ── Build platform entries for latest.json ──────────────────
-          # If we built it: use this run's signature + URL anchored to $TAG.
-          # If we didn't build it but the existing release ALSO has it, use
-          # that entry (carry over from $TAG). Otherwise, fall back to PREV.
-          win_entry=""
-          if [ -n "$EXE" ]; then
-            url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$EXE")"
-            sig=$(cat "$EXE_SIG")
-            win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
-          else
-            # Try the current $TAG release first (e.g. previously published Win at this tag);
-            # fall back to the previous release.
-            cur=$(gh release download "$TAG" --repo "$REPO" --pattern "latest.json" -O - 2>/dev/null || echo "")
-            for src in "$cur" "$PREV_LATEST"; do
-              if [ -n "$src" ]; then
-                e=$(echo "$src" | jq -c '.platforms["windows-x86_64"] // empty')
-                if [ -n "$e" ]; then win_entry="$e"; break; fi
-              fi
-            done
-          fi
+          # ── Build both platform entries from this exact run ──────────
+          url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$EXE")"
+          sig=$(cat "$EXE_SIG")
+          win_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
+          url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$APP_TARGZ")"
+          sig=$(cat "$APP_SIG")
+          mac_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
 
-          mac_entry=""
-          if [ -n "$APP_TARGZ" ]; then
-            url="https://github.com/$REPO/releases/download/$TAG/$(urlify "$APP_TARGZ")"
-            sig=$(cat "$APP_SIG")
-            mac_entry=$(jq -nc --arg s "$sig" --arg u "$url" '{signature:$s, url:$u}')
-          else
-            cur=$(gh release download "$TAG" --repo "$REPO" --pattern "latest.json" -O - 2>/dev/null || echo "")
-            for src in "$cur" "$PREV_LATEST"; do
-              if [ -n "$src" ]; then
-                e=$(echo "$src" | jq -c '.platforms["darwin-aarch64"] // empty')
-                if [ -n "$e" ]; then mac_entry="$e"; break; fi
-              fi
-            done
-          fi
-
-          # ── Assemble manifest. Both entries optional; at least one will
-          #    exist because we required at least one build to succeed. ──
           MANIFEST=$(jq -n \
             --arg version "$VERSION" \
             --arg notes "$NOTES" \
             --arg now "$NOW" \
-            '{version:$version, notes:$notes, pub_date:$now, platforms:{}}')
-          if [ -n "$win_entry" ]; then
-            MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$win_entry" '.platforms["windows-x86_64"] = $e')
-          fi
-          if [ -n "$mac_entry" ]; then
-            MANIFEST=$(echo "$MANIFEST" | jq --argjson e "$mac_entry" '.platforms["darwin-aarch64"] = $e')
-          fi
+            --argjson win "$win_entry" \
+            --argjson mac "$mac_entry" \
+            '{version:$version, notes:$notes, pub_date:$now, platforms:{"windows-x86_64":$win,"darwin-aarch64":$mac}}')
           echo "$MANIFEST" > latest.json
 
           echo "=== latest.json ==="
@@ -947,20 +887,100 @@ jobs:
 
           gh release upload "$TAG" latest.json --repo "$REPO" --clobber
 
-          # Notice line — shows which platforms went out in this run
-          PLATS=""
-          [ -n "$win_entry" ] && PLATS="$PLATS windows-x86_64"
-          [ -n "$mac_entry" ] && PLATS="$PLATS darwin-aarch64"
-          echo "::notice::Published $TAG (manifest covers:$PLATS)"
+          echo "::notice::Published $TAG (windows-x86_64 darwin-aarch64)"
 
-      # ───────────────────────────────────────────────────────────────
+      - name: Install DogeCloud upload dependency
+        run: python -m pip install --disable-pip-version-check boto3
 
-  mirror-gitcode:
-    needs: publish
-    if: ${{ !inputs.dry_run && needs.publish.result == 'success' }}
-    uses: ./.github/workflows/mirror-gitcode.yml
-    with:
-      tag: ${{ needs.publish.outputs.tag }}
-      manifest_only: true
-    secrets:
-      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+      - name: Publish mainland CDN assets and promote latest.json
+        env:
+          DOGECLOUD_ACCESS_KEY: ${{ secrets.DOGECLOUD_ACCESS_KEY }}
+          DOGECLOUD_SECRET_KEY: ${{ secrets.DOGECLOUD_SECRET_KEY }}
+          DOGECLOUD_BUCKET: ${{ secrets.DOGECLOUD_BUCKET }}
+          DOGECLOUD_DOWNLOAD_DOMAIN: ${{ secrets.DOGECLOUD_DOWNLOAD_DOMAIN }}
+          TAG: ${{ steps.publish-release.outputs.tag }}
+          BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test -n "$DOGECLOUD_ACCESS_KEY"
+          test -n "$DOGECLOUD_SECRET_KEY"
+          test -n "$DOGECLOUD_BUCKET"
+          test -n "$DOGECLOUD_DOWNLOAD_DOMAIN"
+
+          node scripts/dogecloud-manifest.mjs \
+            latest.json doge-latest.json doge-assets.json \
+            "$DOGECLOUD_DOWNLOAD_DOMAIN" "$TAG" "$BUILD_ID"
+
+          verify_object() {
+            local local_path=$1 key=$2 expected_size headers status content_range
+            expected_size=$(stat -c%s "$local_path")
+            headers=$(mktemp)
+            for attempt in 1 2 3 4 5 6; do
+              status=$(curl --proto '=https' --proto-redir '=https' \
+                --silent --show-error --location --range 0-0 \
+                --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
+                "${DOGECLOUD_DOWNLOAD_DOMAIN%/}/$key") || true
+              content_range=$(awk 'tolower($0) ~ /^content-range:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' "$headers")
+              if [ "$status" = 206 ] && [ "$content_range" = "bytes 0-0/$expected_size" ]; then
+                rm -f "$headers"
+                return 0
+              fi
+              sleep 5
+            done
+            rm -f "$headers"
+            echo "::error::CDN object verification failed for $key (HTTP $status, Content-Range $content_range)"
+            return 1
+          }
+
+          # Upload this run's original build outputs directly. Never re-download
+          # a just-clobbered GitHub asset URL: its CDN may still return old bytes.
+          while IFS= read -r row; do
+            platform=$(jq -r '.platform' <<<"$row")
+            key=$(jq -r '.key' <<<"$row")
+            case "$platform" in
+              windows-x86_64) local_path=$(find dist/windows -name '*-setup.exe' -type f | head -1) ;;
+              darwin-aarch64) local_path=$(find dist/macos -name '*.app.tar.gz' -type f | head -1) ;;
+              *) echo "::error::Unexpected updater platform: $platform"; exit 1 ;;
+            esac
+            [ -f "$local_path" ] || { echo "::error::Missing local artifact for $platform"; exit 1; }
+            python scripts/dogecloud_upload.py "$local_path" "$key"
+            verify_object "$local_path" "$key"
+          done < <(jq -c '.[]' doge-assets.json)
+
+          # DMG is a manual-install asset rather than a Tauri updater asset.
+          # Publish it when macOS was built in this run.
+          while IFS= read -r dmg; do
+            [ -n "$dmg" ] || continue
+            key="app/$TAG/$BUILD_ID/$(basename "$dmg")"
+            python scripts/dogecloud_upload.py "$dmg" "$key"
+            verify_object "$dmg" "$key"
+          done < <(find dist/macos -name '*.dmg' -type f 2>/dev/null || true)
+
+          # Atomic promotion: clients only see the new version after all files
+          # above are publicly reachable with the exact expected sizes.
+          python scripts/dogecloud_upload.py doge-latest.json latest.json \
+            --cache-control 'no-cache, max-age=60' --content-type application/json
+
+      - name: Verify public DogeCloud CDN release
+        env:
+          DOMAIN: ${{ secrets.DOGECLOUD_DOWNLOAD_DOMAIN }}
+        run: |
+          set -euo pipefail
+          domain=${DOMAIN%/}
+          for attempt in 1 2 3 4 5 6; do
+            remote=$(mktemp)
+            if curl --proto '=https' --proto-redir '=https' \
+              --fail --silent --show-error --location \
+              -o "$remote" \
+              "$domain/latest.json?ci=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$attempt"; then
+              jq -S . "$remote" > remote-normalized.json
+              jq -S . doge-latest.json > local-normalized.json
+              if cmp -s remote-normalized.json local-normalized.json; then
+                rm -f "$remote"
+                break
+              fi
+            fi
+            rm -f "$remote"
+            [ "$attempt" = 6 ] && { echo "::error::CDN latest.json was not promoted"; exit 1; }
+            sleep 5
+          done

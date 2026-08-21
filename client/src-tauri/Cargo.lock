@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "client"
-version = "0.1.110"
+version = "0.1.111"
 dependencies = [
  "base64 0.22.1",
  "chrono",

@@ -125,19 +125,23 @@ pub async fn yt_dlp_get_status(app: AppHandle) -> Result<YtDlpStatus, String> {
 
 #[tauri::command]
 pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
-    let (primary, fallback) = if cfg!(target_os = "windows") {
-        (
-            "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe",
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
-        )
-    } else if cfg!(target_os = "macos") {
-        (
-            "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos",
-            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
-        )
-    } else {
+    let is_windows = cfg!(target_os = "windows");
+    if !is_windows && !cfg!(target_os = "macos") {
         return Err("当前操作系统不支持 yt-dlp 自动更新".into());
-    };
+    }
+
+    // Resolve one immutable upstream version first. DogeCloud and GitHub then
+    // serve byte-identical filenames under that version rather than mutable
+    // `latest` paths that CDN edges could cache inconsistently.
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client build: {e}"))?;
+    let manifest = fetch_update_manifest(&client)
+        .await
+        .ok_or_else(|| "无法获取 yt-dlp 最新版本信息".to_string())?;
+    let (primary, fallback) = yt_dlp_download_urls(&manifest.version, is_windows);
 
     let final_path = appdata_yt_dlp_path().ok_or_else(|| "无法定位 AppData 目录".to_string())?;
     let bin_dir = final_path
@@ -155,17 +159,12 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     ));
 
     // 120s total timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
-    // GitCode mirror is primary (mainland CN); GitHub is fallback. A short
-    // connect_timeout bounds the worst case: if the GitCode primary hangs at
+    // DogeCloud CDN is primary (mainland CN); GitHub is fallback. A short
+    // connect_timeout bounds the worst case: if the CDN primary hangs at
     // connect, we fall back to GitHub in ~15s instead of waiting the full 120s.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("HTTP client build: {e}"))?;
-    let bytes = match download_bytes(&client, primary).await {
+    let bytes = match download_bytes(&client, &primary).await {
         Ok(b) => b,
-        Err(primary_err) => download_bytes(&client, fallback)
+        Err(primary_err) => download_bytes(&client, &fallback)
             .await
             .map_err(|fb_err| format!("主源失败({primary_err}); 备用源失败({fb_err})"))?,
     };
@@ -199,13 +198,28 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     })
 }
 
-/// GitCode-hosted version manifest URL, followed by the official upstream
+/// DogeCloud-hosted version manifest URL, followed by the official upstream
 /// GitHub Release API fallback. The fixed `yt-dlp` tag is not the app latest.
 const YTDLP_MANIFEST_URLS: [&str; 2] = [
-    "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json",
+    "https://download.eversay.cc/yt-dlp/yt-dlp-version.json",
     "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
 ];
 const YTDLP_MANIFEST_USER_AGENT: &str = "whatsub/yt-dlp-updater";
+
+fn yt_dlp_download_urls(version: &str, windows: bool) -> (String, String) {
+    let filename = if windows { "yt-dlp.exe" } else { "yt-dlp_macos" };
+    (
+        format!("https://download.eversay.cc/yt-dlp/{version}/{filename}"),
+        format!("https://github.com/yt-dlp/yt-dlp/releases/download/{version}/{filename}"),
+    )
+}
+
+fn valid_ytdlp_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.split('.').all(|part| {
+            !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
 
 fn ytdlp_manifest_client() -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
@@ -255,7 +269,7 @@ async fn download_update_manifest(
         .await
         .map_err(|_| ())?;
 
-    if url == YTDLP_MANIFEST_URLS[0] {
+    let manifest = if url == YTDLP_MANIFEST_URLS[0] {
         serde_json::from_slice(&bytes).map_err(|_| ())
     } else {
         let release: GitHubYtDlpRelease = serde_json::from_slice(&bytes).map_err(|_| ())?;
@@ -263,7 +277,19 @@ async fn download_update_manifest(
             version: release.tag_name,
             notes: release.body,
         })
+    }?;
+    valid_ytdlp_version(&manifest.version)
+        .then_some(manifest)
+        .ok_or(())
+}
+
+async fn fetch_update_manifest(client: &reqwest::Client) -> Option<YtDlpManifest> {
+    for url in YTDLP_MANIFEST_URLS {
+        if let Ok(candidate) = download_update_manifest(client, url).await {
+            return Some(candidate);
+        }
     }
+    None
 }
 
 /// True when dotted-numeric `latest` is strictly newer than `current`
@@ -301,14 +327,7 @@ pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, Stri
         Ok(c) => c,
         Err(_) => return Ok(none(&current)),
     };
-    let mut manifest = None;
-    for url in YTDLP_MANIFEST_URLS {
-        if let Ok(candidate) = download_update_manifest(&client, url).await {
-            manifest = Some(candidate);
-            break;
-        }
-    }
-    let Some(manifest) = manifest else {
+    let Some(manifest) = fetch_update_manifest(&client).await else {
         return Ok(none(&current));
     };
     let has_update = is_newer(&manifest.version, &current);
@@ -322,7 +341,10 @@ pub async fn yt_dlp_check_update(app: AppHandle) -> Result<YtDlpUpdateInfo, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{is_newer, ytdlp_manifest_request, YTDLP_MANIFEST_URLS};
+    use super::{
+        is_newer, valid_ytdlp_version, yt_dlp_download_urls, ytdlp_manifest_request,
+        YTDLP_MANIFEST_URLS,
+    };
     use reqwest::header::USER_AGENT;
 
     #[test]
@@ -338,51 +360,31 @@ mod tests {
     }
 
     #[test]
-    fn yt_dlp_runtime_sources_prefer_gitcode_before_official_github() {
-        let source = include_str!("yt_dlp.rs");
-        let update_sources = source
-            .split("pub async fn yt_dlp_update()")
-            .nth(1)
-            .and_then(|section| section.split("let final_path").next())
-            .expect("yt-dlp update source selection must remain present");
-        let manifest_sources = source
-            .split("const YTDLP_MANIFEST_URLS")
-            .nth(1)
-            .and_then(|section| section.split("#[derive(Serialize, Clone)]").next())
-            .expect("yt-dlp manifest source selection must remain present");
-
-        for (gitcode, github) in [
+    fn yt_dlp_runtime_sources_prefer_dogecloud_before_official_github() {
+        assert_eq!(
+            yt_dlp_download_urls("2026.08.20", true),
             (
-                "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe",
-                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
-            ),
-            (
-                "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos",
-                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos",
-            ),
-        ] {
-            assert!(
-                update_sources.find(gitcode).is_some_and(|gitcode_index| {
-                    update_sources
-                        .find(github)
-                        .is_some_and(|github_index| gitcode_index < github_index)
-                }),
-                "GitCode source must precede the official GitHub fallback",
-            );
-        }
-
-        let gitcode_manifest = "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json";
-        let github_manifest = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
-        assert!(
-            manifest_sources
-                .find(gitcode_manifest)
-                .is_some_and(|gitcode_index| {
-                    manifest_sources
-                        .find(github_manifest)
-                        .is_some_and(|github_index| gitcode_index < github_index)
-                }),
-            "GitCode manifest must precede the official GitHub fallback",
+                "https://download.eversay.cc/yt-dlp/2026.08.20/yt-dlp.exe".to_string(),
+                "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.20/yt-dlp.exe".to_string(),
+            )
         );
+        assert_eq!(
+            yt_dlp_download_urls("2026.08.20", false),
+            (
+                "https://download.eversay.cc/yt-dlp/2026.08.20/yt-dlp_macos".to_string(),
+                "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.20/yt-dlp_macos".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn yt_dlp_version_rejects_path_and_url_injection() {
+        assert!(valid_ytdlp_version("2026.08.20"));
+        assert!(valid_ytdlp_version("2026.08.20.1"));
+        assert!(!valid_ytdlp_version(""));
+        assert!(!valid_ytdlp_version("latest"));
+        assert!(!valid_ytdlp_version("../latest"));
+        assert!(!valid_ytdlp_version("2026.08.20?x=1"));
     }
 
     #[test]

@@ -1,21 +1,22 @@
-# Manually refreshing the GitCode yt-dlp mirror
+# Refreshing the DogeCloud yt-dlp mirror
 
-The desktop app checks the fixed GitCode `yt-dlp` release tag and prompts users to
-update. The three stable mirror URLs are:
+The desktop app checks the DogeCloud CDN manifest and prompts users to
+update. The manifest URL is stable, while binaries are immutable and versioned:
 
-- `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json`
-- `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe`
-- `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos`
+- `https://download.eversay.cc/yt-dlp/yt-dlp-version.json`
+- `https://download.eversay.cc/yt-dlp/<version>/yt-dlp.exe`
+- `https://download.eversay.cc/yt-dlp/<version>/yt-dlp_macos`
 
-The binary and version-manifest requests use GitCode first and the official yt-dlp
-GitHub URLs as their fallback. The fixed `yt-dlp` tag is not the app's latest release.
+The binary and version-manifest requests use DogeCloud first and official yt-dlp
+GitHub endpoints as fallback.
 
 ## The easy way: run the mirror workflow
 
-GitHub → Actions → **Mirror yt-dlp to GitCode** → Run workflow (optional `notes`
+GitHub → Actions → **Mirror yt-dlp to DogeCloud** → Run workflow (optional `notes`
 shown in the in-app prompt). It pulls the official latest from GitHub, uploads
-all three assets to the `yt-dlp` tag, and verifies the public URLs — ~1 min,
-no local downloads or tokens needed (uses the repo's `GITCODE_TOKEN` secret).
+both binaries, then promotes the small version manifest last and verifies all
+three public CDN URLs. No local downloads or tokens are needed; it uses the four
+`DOGECLOUD_*` repository secrets.
 Still read the compatibility checklist below first.
 
 ## The manual way (fallback if CI is unavailable)
@@ -29,14 +30,14 @@ Still read the compatibility checklist below first.
    ```json
    { "version": "2026.07.01", "notes": "修复 YouTube 下载" }
    ```
-4. Upload all THREE assets to the `yt-dlp` release tag on
-   `rjxznb/whatsub-release` (overwrite/clobber the existing ones), so the
-   fixed download URLs keep pointing at the new files.
+4. Export the four `DOGECLOUD_*` variables, install `boto3`, and use
+   `scripts/dogecloud_upload.py` to upload both binaries under their version directory first. Upload
+   `yt-dlp-version.json` last with `--cache-control 'no-cache, max-age=60'`.
 
 After either path, verify every public asset anonymously. Use an HTTP GET with
 `Range: bytes=0-0`; do not use `HEAD`. Each request must return exactly `206` and
 `Content-Range: bytes 0-0/<positive-size>`. Retry the workflow after transient
-upstream or GitCode failures; its replacement upload is safe to rerun. If an asset
+upstream or DogeCloud failures; its replacement upload is safe to rerun. If an asset
 was partially refreshed, rerun the workflow to backfill all three assets—do not
 create a new app version for a yt-dlp mirror repair.
 

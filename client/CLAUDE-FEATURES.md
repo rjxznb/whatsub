@@ -96,27 +96,27 @@ Pre-Plan-D server builds returned only `{ mine }`. Both Rust (`#[serde(default)]
 
 ## Release workflow
 
-**Three repositories, canonical GitHub plus GitCode mirror:**
+**Private source, canonical GitHub release, and mainland CDN:**
 - Source: `rjxznb/whatsub` (private)
 - Canonical release: `rjxznb/whatsub-releases` on GitHub (public)
-- Release mirror: `rjxznb/whatsub-release` on GitCode (public)
+- Mainland distribution: DogeCloud object storage + `https://download.eversay.cc`
 
 **Updater endpoints** in `tauri.conf.json`, tried in order:
-1. `https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main` — GitCode first
+1. `https://download.eversay.cc/latest.json` — DogeCloud first
 2. `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json` — GitHub fallback
 
-GitHub remains the release source of truth. The reusable `.github/workflows/mirror-gitcode.yml` mirrors its published release assets and writes GitCode's stable `main/latest.json` with GitCode asset URLs. Same minisign key for both—signature bytes remain identical; only each platform URL is rewritten.
+GitHub remains the release source of truth. The `publish` job then uploads versioned updater assets to DogeCloud and promotes DogeCloud's stable `latest.json` last. Same minisign key for both—signature bytes remain identical; only each platform URL is rewritten.
 
-Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. Cross-repository publication to canonical GitHub uses the existing `RELEASES_REPO_TOKEN`. `GITCODE_TOKEN` is the only GitCode credential and the only secret passed to `mirror-gitcode.yml`: create a GitCode PAT with minimum `api` scope, copy it when first shown (it is shown once), and store it as the private repository's Actions secret.
+Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. Cross-repository publication to canonical GitHub uses `RELEASES_REPO_TOKEN`. DogeCloud uses the four repository secrets `DOGECLOUD_ACCESS_KEY`, `DOGECLOUD_SECRET_KEY`, `DOGECLOUD_BUCKET`, and `DOGECLOUD_DOWNLOAD_DOMAIN`; permanent credentials only request narrowly scoped temporary upload tokens.
 
 ### Per-release
 
 1. Bump version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (must match).
 2. Commit + push to `main`.
-3. GH Actions → **Release** → Run workflow. Inputs: `targets` (both/windows/macos, single-platform iterates with the other carried over), `release_notes`, `whisper_tag`, `vulkan_sdk_version` (bump if LunarG 404s an old version), `node_version`, `yt_dlp_tag` (default `latest`; pin to e.g. `2026.03.17` when chasing an upstream regression), `dry_run`. `dry_run=true` publishes neither GitHub nor GitCode.
+3. GH Actions → **Release** → Run workflow. Inputs: `targets` (both/windows/macos; single-platform is for dry-run diagnostics only), `release_notes`, `whisper_tag`, `vulkan_sdk_version` (bump if LunarG 404s an old version), `node_version`, `yt_dlp_tag` (default `latest`; pin to e.g. `2026.03.17` when chasing an upstream regression), `dry_run`. A public release requires both platform builds from the same version; `dry_run=true` publishes neither GitHub nor DogeCloud.
 4. ~5–25 min depending on cache hit. Windows produces NSIS `*-setup.exe` plus `*-setup.exe.sig`; macOS produces `.dmg`, `.app.tar.gz`, and `.app.tar.gz.sig`. The `.dmg` is notarized + stapled in CI, and `.app.tar.gz` is repackaged from the stapled `.app` so auto-updater serves the notarized version. The five release assets are uploaded before `latest.json`.
 
-If GitHub publish succeeds but the mirror fails, manually dispatch **Mirror releases to GitCode** with the same tag to retry/backfill. Verify each anonymous GitCode asset with `GET Range: bytes=0-0`: success is exactly HTTP `206` and `Content-Range: bytes 0-0/<positive-size>`; never use `HEAD`. GitCode's attachment UI has been verified at a 2 GB maximum.
+If GitHub publish succeeds but DogeCloud upload fails, rerun **Release** with the same version/tag; GitHub uses `--clobber` and DogeCloud object writes are idempotent. The CDN manifest is uploaded last, so a failed run leaves the previous public version intact. Verify public assets with an anonymous range GET.
 
 CI caches whisper sidecar+DLLs, Vulkan SDK, node sidecar, and cargo target (`Swatinem/rust-cache@v2`). Warm rebuild ~5–8 min Win + 2–3 min Mac (cold = 25 + 5).
 
@@ -135,10 +135,9 @@ Updater state lives in a module-level zustand store in `useUpdater.ts` (not comp
 - **Never delete a release users installed from** — breaks signature chain for subsequent updates.
 - **Never commit `*-setup.exe`, `.dmg`, `.app.tar.gz`, or their `.sig` files** — release assets only.
 
-### JiHu migration history
+### Mirror migration history
 
-JiHu was the former mirror. Its active updater instructions were retired. To move
-older clients forward, invalidate the stale JiHu manifest so those clients fall
-through to their existing GitHub endpoint. Some mainland users on those old clients
-may need one manual install from GitHub before they receive the GitCode-first
-updater configuration.
+JiHu and GitCode were former mirrors. Their active updater instructions are retired.
+Already-installed old clients cannot have hard-coded endpoints changed remotely;
+they must reach their existing GitHub fallback once (or manually install a current
+version) before they receive the DogeCloud-first updater configuration.

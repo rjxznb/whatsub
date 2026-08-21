@@ -336,8 +336,8 @@ export function Player() {
     const initialCues = cuesRef.current;
     const initialSession = sessionRef.current;
     if (!initialCues || !initialSession) return;
-    let cues: SrtCue[] = initialCues;
-    let session: PersistedAnalysisSession = initialSession;
+    const cues: SrtCue[] = initialCues;
+    const session: PersistedAnalysisSession = initialSession;
     const stillOwnsSession = () =>
       ownsForegroundAnalysis(videoId, session, sessionRef.current);
     if (session.analysis.checkpoint.phase === "complete") {
@@ -359,28 +359,19 @@ export function Player() {
     );
     trackFunnel("analysis_started", { managed: settings.vendorId === "whatsub-managed" });
     try {
-      // Switching from a client provider to the managed relay can leave this
-      // Player holding the old local lease. The relay owns a fresh server job,
-      // so discard the old checkpoint/inflight state before the first save.
-      if (settings.vendorId === "whatsub-managed") {
-        await session.close().catch(() => {});
-        const fresh = await openStoredAnalysisSession(videoId, {
-          reset: true,
-          style,
-        });
-        if (!fresh) throw new Error("找不到 transcript.srt — 无法启动托管解析");
-        cues = fresh.cues;
-        session = fresh.session;
-        cuesRef.current = cues;
-        sessionRef.current = session;
-        analysis.setCommittedAnalysis(session.analysis, cues.length);
-      }
       const onCommitted = (persisted: CheckpointedAnalysis) => {
         if (!stillOwnsSession()) return;
         analysis.setCommittedAnalysis(persisted, cues.length);
       };
+      const onManagedPreview = (committed: CheckpointedAnalysis, preview: import("../llm/analyze").AnalysisPreview | null) => {
+        if (!stillOwnsSession()) return;
+        analysis.setAnalysisPreview(committed, preview, cues.length);
+      };
       const completed = settings.vendorId === "whatsub-managed"
-        ? await executeManagedAnalysis({ entry: entry!, cues, style, session, signal: localController.signal, onCommitted })
+        ? await executeManagedAnalysis({
+            entry: entry!, cues, style, session, signal: localController.signal, onCommitted,
+            onPreview: onManagedPreview,
+          })
         : await executeAnalysisSession({
             session, provider, cues, style, batchSize: 25,
             signal: localController.signal,
@@ -633,7 +624,6 @@ export function Player() {
       let stored;
       try {
         stored = await openStoredAnalysisSession(videoId, {
-          reset: settings.vendorId === "whatsub-managed",
           style: entry?.analysisStyle ?? "colloquial",
         });
       } catch (error) {

@@ -234,34 +234,23 @@ async function driveRetranscribeThenAnalyze(runtime: BgRuntime): Promise<void> {
 }
 
 async function driveAnalysis(runtime: BgRuntime): Promise<void> {
-  let session = runtime.session;
-  let cues = runtime.cues;
+  const session = runtime.session;
+  const cues = runtime.cues;
   if (!session || !cues || runtime.controller.signal.aborted) return;
 
   try {
     const settings = useSettings.getState().settings;
-    if (
-      settings.vendorId === "whatsub-managed"
-      && (session.analysis.checkpoint.nextCueOffset > 0 || session.inflight !== null)
-    ) {
-      await session.close();
-      const fresh = await openStoredAnalysisSession(runtime.videoId, {
-        reset: true,
-        style: runtime.style,
-      });
-      if (!fresh) throw new Error("找不到 transcript.srt — 无法启动托管解析");
-      session = fresh.session;
-      cues = fresh.cues;
-      runtime.session = session;
-      runtime.cues = cues;
-    }
-    const entry = useLibrary.getState().library.videos.find((v) => v.id === runtime.videoId);
     const completed = settings.vendorId === "whatsub-managed"
-      ? await executeManagedAnalysis({
-          entry: entry!, cues, style: runtime.style, session,
-          signal: runtime.controller.signal,
-          onCommitted: (analysis) => publishAnalysis(runtime, analysis, "analyzing"),
-        })
+      ? await (() => {
+          const entry = useLibrary.getState().library?.videos?.find((v) => v.id === runtime.videoId);
+          if (!entry) throw new Error("找不到视频库条目，无法启动托管解析");
+          return executeManagedAnalysis({
+            entry, cues, style: runtime.style, session,
+            signal: runtime.controller.signal,
+            onCommitted: (analysis) => publishAnalysis(runtime, analysis, "analyzing"),
+            onPreview: (analysis, preview) => publishPreview(runtime, analysis, preview),
+          });
+        })()
       : await executeAnalysisSession({
           session,
           provider: getProvider(settings),
@@ -381,7 +370,6 @@ async function reopenStaleSessionAndContinue(runtime: BgRuntime): Promise<void> 
     if (runtime.controller.signal.aborted || runtime.disposition !== "background") return;
 
     const stored = await openStoredAnalysisSession(runtime.videoId, {
-      reset: useSettings.getState().settings.vendorId === "whatsub-managed",
       style: runtime.style,
     });
     if (!stored) throw new Error("找不到 transcript.srt — 无法恢复解析进度");

@@ -29,9 +29,10 @@ have to manually reinstall.
 
 ## Release flow
 
-One workflow (`.github/workflows/release.yml`) builds both Windows and macOS,
-publishes the canonical GitHub Release, uploads versioned files to DogeCloud,
-then promotes the DogeCloud `latest.json` only after every binary succeeds.
+One workflow (`.github/workflows/release.yml`) builds both Windows and macOS and
+publishes the canonical GitHub Release. DogeCloud publication is deliberately a
+manual domestic upload because GitHub-hosted runners cannot reliably transfer
+large files into mainland object storage.
 
 ```
                 ┌─ build-windows (windows-latest, ~25 min)
@@ -56,9 +57,10 @@ dispatch  ──────┤     → pnpm tauri build --bundles nsis
                             (windows-x86_64 + darwin-aarch64)
                                        │
                                        ▼
-                          DogeCloud CDN publish
-                          → upload versioned updater assets
-                          → upload latest.json last
+                          local mainland upload
+                          → upload 3 binaries to app/vX.Y.Z/manual/
+                          → verify public URLs
+                          → upload dogecloud-latest.json as latest.json last
 ```
 
 ### 1. Bump the version (3 places must match)
@@ -88,7 +90,7 @@ GitHub UI → **Actions** → **Release** → **Run workflow**. Inputs:
 | `vulkan_sdk_version` | `1.4.341.0` | LunarG Vulkan SDK for the Windows whisper-cli build |
 | `ffmpeg_url_macos` | `https://www.osxexperts.net/ffmpeg711arm.zip` | Static arm64 ffmpeg |
 | `ffmpeg_url_windows` | `https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip` | Static Windows ffmpeg (zip must contain `bin/ffmpeg.exe`) |
-| `dry_run` | `false` | If `true`: produce artifacts only; neither GitHub nor DogeCloud publishes |
+| `dry_run` | `false` | If `true`: produce artifacts only; GitHub Release is not published |
 
 Total wall time ~25 min (Windows is the slow one — Vulkan SDK install +
 whisper.cpp Vulkan build + Tauri NSIS setup bundling). Cost: ~25 min Windows
@@ -98,16 +100,15 @@ release out of the 2000/month free quota.
 ### 3. Test before publishing (optional but recommended)
 
 For the first run, or when changing whisper.cpp / SDK versions, set
-`dry_run=true`. The build jobs run; neither GitHub nor DogeCloud receives a release
-or manifest update. The publish job is skipped, and you
+`dry_run=true`. The build jobs run; GitHub receives no release or manifest update.
+The publish job is skipped, and you
 can download the artifacts from the workflow run page → `windows-bundle`
 and `macos-bundle`. Install the Windows `*-setup.exe` / macOS `.dmg` on real
 machines to verify.
 
 If everything looks good, re-trigger with `dry_run=false`; do not invent a new
-app version merely to retry a failed publish. A failed DogeCloud upload is safe to
-rerun with the same version/tag: versioned objects are overwritten and the public
-manifest remains on the prior version until the final promotion succeeds.
+app version merely to retry a failed GitHub publish. A partial manual DogeCloud
+upload is safe because the stable root manifest is uploaded last.
 
 ### 4. What the publish job does
 
@@ -121,8 +122,22 @@ Runs only when `dry_run=false` and both build jobs succeeded. On
    and `.app.tar.gz.sig`
 4. Assembles `latest.json` from scratch — both platforms in one call,
     with raw `.sig` text content (Tauri 2 spec, jq-escaped) — and uploads
-5. Rewrites updater URLs to `https://download.eversay.cc/app/vX.Y.Z/<run-id>/...`, uploads
-   all updater files, and publishes `https://download.eversay.cc/latest.json` last.
+5. Generates and attaches `dogecloud-latest.json`, with updater URLs under
+   `https://download.eversay.cc/app/vX.Y.Z/manual/`. CI does not upload it.
+
+### 5. Publish DogeCloud manually
+
+From the GitHub Release, download these files without modifying them:
+
+- Windows `*-setup.exe`
+- macOS `.app.tar.gz`
+- macOS `.dmg`
+- `dogecloud-latest.json`
+
+In the DogeCloud bucket, create `app/vX.Y.Z/manual/` and upload the first three
+files with their original names. Confirm every CDN URL downloads successfully.
+Only then upload `dogecloud-latest.json` to the bucket root and name it
+`latest.json`. This final step atomically exposes the new mainland version.
 
 ### 5. Verify
 
@@ -140,11 +155,11 @@ the exact partial response:
 
 ```bash
 curl -sS -o /dev/null -D - -H 'Range: bytes=0-0' \
-  https://download.eversay.cc/app/vX.Y.Z/<run-id>/<asset>
+  https://download.eversay.cc/app/vX.Y.Z/manual/<asset>
 ```
 
-The status should be `206` with a positive `Content-Range`; the workflow performs
-the same range-GET health check after publishing.
+The status should be `206` with a positive `Content-Range`; perform this check for
+all three files before replacing the root `latest.json`.
 
 On a machine with the previous version installed:
 
@@ -159,7 +174,7 @@ For the `.dmg` on a fresh Mac, first launch hits Gatekeeper "已损坏" —
 documented user bypass is System Settings → 隐私与安全性 → 仍要打开
 (or `xattr -cr <app>`). No notarization yet (no Apple Developer account).
 
-## Required secrets and DogeCloud setup
+## Required secrets
 
 Set these once on the **private** repo (Settings → Secrets and variables
 → Actions → Repository secrets):
@@ -169,14 +184,6 @@ Set these once on the **private** repo (Settings → Secrets and variables
 | `TAURI_SIGNING_PRIVATE_KEY` | Sign installers → produce `.sig` (Win + Mac share the same key) | Full PEM contents of `~/.tauri/whatsub.key` |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Decrypt the key | Empty string for our key |
 | `RELEASES_REPO_TOKEN` | Publish the canonical release across repositories to `rjxznb/whatsub-releases` | Fine-grained GitHub PAT: resource owner = your account; repository access = `rjxznb/whatsub-releases` only; `Contents: Read and write` |
-| `DOGECLOUD_ACCESS_KEY` | Requests narrowly scoped temporary upload credentials | DogeCloud permanent AccessKey |
-| `DOGECLOUD_SECRET_KEY` | Signs the temporary-token request | DogeCloud permanent SecretKey |
-| `DOGECLOUD_BUCKET` | Destination object-storage bucket | DogeCloud bucket name |
-| `DOGECLOUD_DOWNLOAD_DOMAIN` | Public HTTPS CDN origin used in manifests | `https://download.eversay.cc` |
-
-The DogeCloud permanent keys must exist only in GitHub repository secrets. CI signs
-`/auth/tmp_token.json` requests and receives a temporary S3 credential scoped to
-one exact object path. The workflow never prints permanent or temporary secrets.
 
 The Tauri signing key in CI must match the public key embedded at
 `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey`. They were
@@ -212,10 +219,10 @@ produced for the Windows `*-setup.exe` / macOS `.app.tar.gz`. Common causes:
 ### `Failed to fetch latest.json`
 - Confirm the GitHub release is published, not a draft, and includes lowercase
   `latest.json`.
-- Re-run **Release** for that existing version/tag to backfill DogeCloud; do not
-  bump the app version for a CDN-only repair.
+- Re-upload the existing version's three files and prepared DogeCloud manifest;
+  do not bump the app version for a CDN-only repair.
 - Fetch `https://download.eversay.cc/latest.json` directly. If it is stale, the
-  publish job did not complete its final manifest promotion.
+  manual root-manifest upload was not completed.
 - Test the affected CDN object with the anonymous `Range: bytes=0-0` GET above.
 
 ### Vulkan SDK installer step fails
@@ -244,12 +251,10 @@ build (the `*-setup.exe` from the workflow artifact) instead.
 | Private signing key | Sign installers → produce `.sig` (shared by Win + Mac) | `secrets/whatsub.key` (repo backup) + `%USERPROFILE%\.tauri\whatsub.key` (active local copy) + `TAURI_SIGNING_PRIVATE_KEY` GitHub secret |
 | Public verification key | Verify `.sig` in user's app | `client/src-tauri/tauri.conf.json` `plugins.updater.pubkey` (committed) |
 | `RELEASES_REPO_TOKEN` | Cross-repository canonical GitHub release publication | Private-repo Actions secret; fine-grained PAT scoped to `rjxznb/whatsub-releases` with `Contents: Read and write` |
-| `DOGECLOUD_*` | Permanent API keys, bucket, and public CDN domain | Four private-repo Actions secrets; never commit them |
 | `release.yml` | Unified Win+Mac release workflow | `.github/workflows/release.yml` |
-| `dogecloud_upload.py` | Scoped temporary-token S3 uploader | `scripts/dogecloud_upload.py` |
 | `build-mac-binaries.yml` | (separate concern) Refresh Mac sidecar binaries committed to repo for local dev | `.github/workflows/build-mac-binaries.yml` |
 | Built `*-setup.exe` + `*-setup.exe.sig` | Windows NSIS installer + updater signature | Built in CI runner, uploaded to release |
 | Built `.dmg` | macOS installer (first install) | Built in CI runner, uploaded to release |
 | Built `.app.tar.gz` + `.app.tar.gz.sig` | macOS updater bundle + signature | Built in CI runner, uploaded to release |
 | GitHub `latest.json` | Canonical updater manifest | Generated by the `publish` job each release |
-| DogeCloud `latest.json` | Stable mainland-first updater manifest | `https://download.eversay.cc/latest.json`, promoted after all assets |
+| DogeCloud `latest.json` | Stable mainland-first updater manifest | `https://download.eversay.cc/latest.json`, uploaded manually after all assets |

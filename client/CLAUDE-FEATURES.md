@@ -105,18 +105,19 @@ Pre-Plan-D server builds returned only `{ mine }`. Both Rust (`#[serde(default)]
 1. `https://download.eversay.cc/latest.json` — DogeCloud first
 2. `https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json` — GitHub fallback
 
-GitHub remains the release source of truth. The `publish` job then uploads versioned updater assets to DogeCloud and promotes DogeCloud's stable `latest.json` last. Same minisign key for both—signature bytes remain identical; only each platform URL is rewritten.
+GitHub remains the release source of truth and CI publishes only to GitHub. The `publish` job also attaches `dogecloud-latest.json`, whose platform URLs target `app/vX.Y.Z/manual/` on DogeCloud. From a domestic workstation, upload the Windows setup, macOS updater archive, and DMG to that directory, verify them, then upload `dogecloud-latest.json` to the bucket root under the name `latest.json`. Same minisign key for both—signature bytes remain identical; only each platform URL is rewritten.
 
-Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. Cross-repository publication to canonical GitHub uses `RELEASES_REPO_TOKEN`. DogeCloud uses the four repository secrets `DOGECLOUD_ACCESS_KEY`, `DOGECLOUD_SECRET_KEY`, `DOGECLOUD_BUCKET`, and `DOGECLOUD_DOWNLOAD_DOMAIN`; permanent credentials only request narrowly scoped temporary upload tokens.
+Private signing key = repo secret `TAURI_SIGNING_PRIVATE_KEY` (+ local backup `secrets/whatsub.key`). Public key embedded in `tauri.conf.json plugins.updater.pubkey`. Cross-repository publication to canonical GitHub uses `RELEASES_REPO_TOKEN`. Desktop release CI does not hold DogeCloud credentials.
 
 ### Per-release
 
 1. Bump version in `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (must match).
 2. Commit + push to `main`.
-3. GH Actions → **Release** → Run workflow. Inputs: `targets` (both/windows/macos; single-platform is for dry-run diagnostics only), `release_notes`, `whisper_tag`, `vulkan_sdk_version` (bump if LunarG 404s an old version), `node_version`, `yt_dlp_tag` (default `latest`; pin to e.g. `2026.03.17` when chasing an upstream regression), `dry_run`. A public release requires both platform builds from the same version; `dry_run=true` publishes neither GitHub nor DogeCloud.
-4. ~5–25 min depending on cache hit. Windows produces NSIS `*-setup.exe` plus `*-setup.exe.sig`; macOS produces `.dmg`, `.app.tar.gz`, and `.app.tar.gz.sig`. The `.dmg` is notarized + stapled in CI, and `.app.tar.gz` is repackaged from the stapled `.app` so auto-updater serves the notarized version. The five release assets are uploaded before `latest.json`.
+3. GH Actions → **Release** → Run workflow. Inputs: `targets` (both/windows/macos; single-platform is for dry-run diagnostics only), `release_notes`, `whisper_tag`, `vulkan_sdk_version` (bump if LunarG 404s an old version), `node_version`, `yt_dlp_tag` (default `latest`; pin to e.g. `2026.03.17` when chasing an upstream regression), `dry_run`. A public release requires both platform builds from the same version; `dry_run=true` publishes nothing.
+4. ~5–25 min depending on cache hit. Windows produces NSIS `*-setup.exe` plus `*-setup.exe.sig`; macOS produces `.dmg`, `.app.tar.gz`, and `.app.tar.gz.sig`. The `.dmg` is notarized + stapled in CI, and `.app.tar.gz` is repackaged from the stapled `.app` so auto-updater serves the notarized version. GitHub receives the five binaries/signatures, canonical `latest.json`, and `dogecloud-latest.json`.
+5. Download the setup EXE, `.app.tar.gz`, `.dmg`, and `dogecloud-latest.json` locally. Upload the three binaries unchanged to `app/vX.Y.Z/manual/`, verify all three public URLs, then upload the prepared manifest to DogeCloud root as `latest.json`.
 
-If GitHub publish succeeds but DogeCloud upload fails, rerun **Release** with the same version/tag; GitHub uses `--clobber` and DogeCloud object writes are idempotent. The CDN manifest is uploaded last, so a failed run leaves the previous public version intact. Verify public assets with an anonymous range GET.
+Never upload the DogeCloud manifest before all three binaries are publicly reachable. Keeping the manifest last makes a partial manual upload harmless. Verify public assets with an anonymous range GET.
 
 CI caches whisper sidecar+DLLs, Vulkan SDK, node sidecar, and cargo target (`Swatinem/rust-cache@v2`). Warm rebuild ~5–8 min Win + 2–3 min Mac (cold = 25 + 5).
 

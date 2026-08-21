@@ -30,18 +30,20 @@ test("app updater prefers DogeCloud and retains GitHub fallback", () => {
   ]);
 });
 
-test("release workflow uploads to DogeCloud only outside dry-run", () => {
+test("desktop release workflow publishes GitHub only", () => {
   const workflow = read(".github/workflows/release.yml");
-  assert.match(workflow, /DOGECLOUD_ACCESS_KEY/);
-  assert.match(workflow, /DOGECLOUD_SECRET_KEY/);
-  assert.match(workflow, /DOGECLOUD_BUCKET/);
-  assert.match(workflow, /DOGECLOUD_DOWNLOAD_DOMAIN/);
+  assert.doesNotMatch(workflow, /DOGECLOUD_ACCESS_KEY/);
+  assert.doesNotMatch(workflow, /DOGECLOUD_SECRET_KEY/);
+  assert.doesNotMatch(workflow, /DOGECLOUD_BUCKET/);
+  assert.doesNotMatch(workflow, /DOGECLOUD_DOWNLOAD_DOMAIN/);
+  assert.doesNotMatch(workflow, /dogecloud_fetch\.py/);
+  assert.doesNotMatch(workflow, /dogecloud_upload\.py/);
+  assert.match(workflow, /dogecloud-latest\.json/);
+  assert.match(workflow, /https:\/\/download\.eversay\.cc/);
   assert.match(workflow, /!inputs\.dry_run/);
   assert.match(
     workflow,
     /needs\.build-windows\.result == 'success'\s*&&\s*needs\.build-macos\.result == 'success'/,
   );
   assert.doesNotMatch(workflow, /PREV_LATEST/);
-  assert.match(workflow, /dogecloud_fetch\.py/);
-  assert.match(workflow, /dogecloud_upload\.py doge-latest\.json latest\.json/);
 });

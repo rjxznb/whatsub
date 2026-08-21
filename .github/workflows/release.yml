@@ -805,8 +805,9 @@ jobs:
       needs.build-windows.result == 'success' &&
       needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
-    # GitHub publish plus several hundred MB of DogeCloud multipart uploads.
-    timeout-minutes: 30
+    # CI publishes GitHub only. Mainland CDN files are uploaded manually from
+    # a domestic workstation after downloading this release's signed assets.
+    timeout-minutes: 15
     steps:
       - name: Checkout (need tauri.conf.json for version)
         uses: actions/checkout@v4
@@ -887,105 +888,12 @@ jobs:
 
           gh release upload "$TAG" latest.json --repo "$REPO" --clobber
 
-          echo "::notice::Published $TAG (windows-x86_64 darwin-aarch64)"
-
-      - name: Install DogeCloud upload dependency
-        run: python -m pip install --disable-pip-version-check boto3
-
-      - name: Publish mainland CDN assets and promote latest.json
-        env:
-          DOGECLOUD_ACCESS_KEY: ${{ secrets.DOGECLOUD_ACCESS_KEY }}
-          DOGECLOUD_SECRET_KEY: ${{ secrets.DOGECLOUD_SECRET_KEY }}
-          DOGECLOUD_BUCKET: ${{ secrets.DOGECLOUD_BUCKET }}
-          DOGECLOUD_DOWNLOAD_DOMAIN: ${{ secrets.DOGECLOUD_DOWNLOAD_DOMAIN }}
-          TAG: ${{ steps.publish-release.outputs.tag }}
-          BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          test -n "$DOGECLOUD_ACCESS_KEY"
-          test -n "$DOGECLOUD_SECRET_KEY"
-          test -n "$DOGECLOUD_BUCKET"
-          test -n "$DOGECLOUD_DOWNLOAD_DOMAIN"
-
+          # Prepare a ready-to-upload mainland manifest. The operator uploads
+          # the three binaries to app/<tag>/manual/ in DogeCloud, then uploads
+          # this file to the bucket root as latest.json only after verification.
           node scripts/dogecloud-manifest.mjs \
-            latest.json doge-latest.json doge-assets.json \
-            "$DOGECLOUD_DOWNLOAD_DOMAIN" "$TAG" "$BUILD_ID"
+            latest.json dogecloud-latest.json dogecloud-assets.json \
+            https://download.eversay.cc "$TAG" manual
+          gh release upload "$TAG" dogecloud-latest.json --repo "$REPO" --clobber
 
-          verify_object() {
-            local local_path=$1 key=$2 expected_size headers status content_range
-            expected_size=$(stat -c%s "$local_path")
-            headers=$(mktemp)
-            for attempt in 1 2 3 4 5 6; do
-              status=$(curl --proto '=https' --proto-redir '=https' \
-                --silent --show-error --location --range 0-0 \
-                --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
-                "${DOGECLOUD_DOWNLOAD_DOMAIN%/}/$key") || true
-              content_range=$(awk 'tolower($0) ~ /^content-range:/ {sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); print; exit}' "$headers")
-              if [ "$status" = 206 ] && [ "$content_range" = "bytes 0-0/$expected_size" ]; then
-                rm -f "$headers"
-                return 0
-              fi
-              sleep 5
-            done
-            rm -f "$headers"
-            echo "::error::CDN object verification failed for $key (HTTP $status, Content-Range $content_range)"
-            return 1
-          }
-
-          # Ask DogeCloud to fetch the public GitHub release assets server-side.
-          # Direct runner -> Beijing multipart uploads are too slow and OSS may
-          # abort them with UserNetworkTooSlow.
-          while IFS= read -r row; do
-            platform=$(jq -r '.platform' <<<"$row")
-            source_url=$(jq -r '.sourceUrl' <<<"$row")
-            key=$(jq -r '.key' <<<"$row")
-            case "$platform" in
-              windows-x86_64) local_path=$(find dist/windows -name '*-setup.exe' -type f | head -1) ;;
-              darwin-aarch64) local_path=$(find dist/macos -name '*.app.tar.gz' -type f | head -1) ;;
-              *) echo "::error::Unexpected updater platform: $platform"; exit 1 ;;
-            esac
-            [ -f "$local_path" ] || { echo "::error::Missing local artifact for $platform"; exit 1; }
-            python scripts/dogecloud_fetch.py "$source_url" "$key"
-            verify_object "$local_path" "$key"
-          done < <(jq -c '.[]' doge-assets.json)
-
-          # DMG is a manual-install asset rather than a Tauri updater asset.
-          # Publish it when macOS was built in this run.
-          while IFS= read -r dmg; do
-            [ -n "$dmg" ] || continue
-            filename=$(basename "$dmg")
-            encoded_filename=$(python -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$filename")
-            key="app/$TAG/$BUILD_ID/$filename"
-            source_url="https://github.com/rjxznb/whatsub-releases/releases/download/$TAG/$encoded_filename"
-            python scripts/dogecloud_fetch.py "$source_url" "$key"
-            verify_object "$dmg" "$key"
-          done < <(find dist/macos -name '*.dmg' -type f 2>/dev/null || true)
-
-          # Atomic promotion: clients only see the new version after all files
-          # above are publicly reachable with the exact expected sizes.
-          python scripts/dogecloud_upload.py doge-latest.json latest.json \
-            --cache-control 'no-cache, max-age=60' --content-type application/json
-
-      - name: Verify public DogeCloud CDN release
-        env:
-          DOMAIN: ${{ secrets.DOGECLOUD_DOWNLOAD_DOMAIN }}
-        run: |
-          set -euo pipefail
-          domain=${DOMAIN%/}
-          for attempt in 1 2 3 4 5 6; do
-            remote=$(mktemp)
-            if curl --proto '=https' --proto-redir '=https' \
-              --fail --silent --show-error --location \
-              -o "$remote" \
-              "$domain/latest.json?ci=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$attempt"; then
-              jq -S . "$remote" > remote-normalized.json
-              jq -S . doge-latest.json > local-normalized.json
-              if cmp -s remote-normalized.json local-normalized.json; then
-                rm -f "$remote"
-                break
-              fi
-            fi
-            rm -f "$remote"
-            [ "$attempt" = 6 ] && { echo "::error::CDN latest.json was not promoted"; exit 1; }
-            sleep 5
-          done
+          echo "::notice::Published $TAG (windows-x86_64 darwin-aarch64)"

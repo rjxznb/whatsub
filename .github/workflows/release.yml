@@ -932,10 +932,12 @@ jobs:
             return 1
           }
 
-          # Upload this run's original build outputs directly. Never re-download
-          # a just-clobbered GitHub asset URL: its CDN may still return old bytes.
+          # Ask DogeCloud to fetch the public GitHub release assets server-side.
+          # Direct runner -> Beijing multipart uploads are too slow and OSS may
+          # abort them with UserNetworkTooSlow.
           while IFS= read -r row; do
             platform=$(jq -r '.platform' <<<"$row")
+            source_url=$(jq -r '.sourceUrl' <<<"$row")
             key=$(jq -r '.key' <<<"$row")
             case "$platform" in
               windows-x86_64) local_path=$(find dist/windows -name '*-setup.exe' -type f | head -1) ;;
@@ -943,7 +945,7 @@ jobs:
               *) echo "::error::Unexpected updater platform: $platform"; exit 1 ;;
             esac
             [ -f "$local_path" ] || { echo "::error::Missing local artifact for $platform"; exit 1; }
-            python scripts/dogecloud_upload.py "$local_path" "$key"
+            python scripts/dogecloud_fetch.py "$source_url" "$key"
             verify_object "$local_path" "$key"
           done < <(jq -c '.[]' doge-assets.json)
 
@@ -951,8 +953,11 @@ jobs:
           # Publish it when macOS was built in this run.
           while IFS= read -r dmg; do
             [ -n "$dmg" ] || continue
-            key="app/$TAG/$BUILD_ID/$(basename "$dmg")"
-            python scripts/dogecloud_upload.py "$dmg" "$key"
+            filename=$(basename "$dmg")
+            encoded_filename=$(python -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$filename")
+            key="app/$TAG/$BUILD_ID/$filename"
+            source_url="https://github.com/rjxznb/whatsub-releases/releases/download/$TAG/$encoded_filename"
+            python scripts/dogecloud_fetch.py "$source_url" "$key"
             verify_object "$dmg" "$key"
           done < <(find dist/macos -name '*.dmg' -type f 2>/dev/null || true)
 

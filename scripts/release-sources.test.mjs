@@ -42,4 +42,6 @@ test("release workflow uploads to DogeCloud only outside dry-run", () => {
     /needs\.build-windows\.result == 'success'\s*&&\s*needs\.build-macos\.result == 'success'/,
   );
   assert.doesNotMatch(workflow, /PREV_LATEST/);
+  assert.match(workflow, /dogecloud_fetch\.py/);
+  assert.match(workflow, /dogecloud_upload\.py doge-latest\.json latest\.json/);
 });

@@ -164,6 +164,9 @@ impl WhisperRecovery {
 
 /// Build the whisper-cli argument vector. When `vad_model` is `Some`, append
 /// `--vad --vad-model <path>`; otherwise the args are exactly today's set.
+/// Keep ordinary subtitle cues short enough for the player to synchronize
+/// translations with the video. `--split-on-word` prevents the character
+/// limit from cutting through a spoken word.
 fn build_whisper_args<'a>(
     model: &'a str,
     audio: &'a str,
@@ -176,6 +179,8 @@ fn build_whisper_args<'a>(
         "-f", audio,
         "-l", "en",
         "-mc", "0",
+        "-ml", "100",
+        "-sow",
         "-osrt",
         "-of", out_base,
         "--print-progress",
@@ -935,6 +940,8 @@ mod tests {
         let args = build_whisper_args("m.bin", "a.wav", "out", None, WhisperRunMode::Gpu);
         assert!(!args.contains(&"--vad"));
         assert!(args.contains(&"-mc") && args.contains(&"0"));
+        assert!(args.contains(&"-ml") && args.contains(&"100"));
+        assert!(args.contains(&"-sow"));
         assert!(args.contains(&"-osrt"));
         // sanity: model + audio threaded through
         assert!(args.contains(&"m.bin") && args.contains(&"a.wav"));
@@ -954,6 +961,8 @@ mod tests {
         assert_eq!(args[i + 1], "vad.bin");
         // existing flags preserved
         assert!(args.contains(&"-mc") && args.contains(&"-osrt"));
+        assert!(args.contains(&"-ml") && args.contains(&"100"));
+        assert!(args.contains(&"-sow"));
     }
 
     #[test]

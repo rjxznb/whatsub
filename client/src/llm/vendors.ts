@@ -1,4 +1,5 @@
 import type { LlmProvider } from "../types/settings";
+import { API_ORIGIN } from "../lib/apiBase";
 
 /**
  * Model IDs checked against vendor documentation on 2026-08-18:
@@ -41,7 +42,7 @@ export const VENDORS: VendorPreset[] = [
     id: "whatsub-managed",
     name: "whatSub 托管 (Pro 订阅专用)",
     protocol: "openai-compatible",
-    baseUrl: "https://whatsub.eversay.cc/api/llm/v1",
+    baseUrl: `${API_ORIGIN}/api/llm/v1`,
     // Server forces deepseek-v4-flash regardless of what we send; the
     // model field is shown read-only in Settings for clarity. No `note`:
     // for this vendor Settings renders ManagedRelayQuotaPanel (used/limit

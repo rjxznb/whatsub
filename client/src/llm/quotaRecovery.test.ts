@@ -127,7 +127,7 @@ describe("quota recovery details", () => {
 
     expect(canResumeQuota(details, 0)).toBe(false);
     expect(quotaRecoveryMessage(details)).toBe(
-      "本月 AI 额度已用完。解析进度尚未开始；切换自己的 API 后可立即继续。",
+      "本月 AI 额度已用完。解析进度尚未开始；请订阅 Pro 或购买可用的 Token 加量包后继续。",
     );
   });
 

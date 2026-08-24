@@ -1,6 +1,7 @@
 import { llmQuota, type LlmQuota } from "../lib/api/quota";
 import type { Settings } from "../types/settings";
 import { RelayError } from "./providers/relayErrors";
+import type { LlmEntitlements } from "../store/auth";
 
 export interface QuotaExhaustedDetails {
   used: number | null;
@@ -11,6 +12,26 @@ export interface QuotaExhaustedDetails {
 }
 
 export const SETTINGS_LLM_LINK = "/settings?highlight=llm-provider";
+export const TOPUP_URL = "https://whatsub.eversay.cc/topup";
+export const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
+
+export type QuotaRecoveryAction =
+  | { kind: "subscribe"; label: string }
+  | { kind: "topup"; label: string }
+  | { kind: "byok"; label: string }
+  | { kind: "wait"; label: string };
+
+export function quotaRecoveryActions(
+  _details: QuotaExhaustedDetails,
+  entitlements: LlmEntitlements | null | undefined,
+): QuotaRecoveryAction[] {
+  if (!entitlements || entitlements.tier === "free") return [{ kind: "subscribe", label: "升级 Pro" }];
+  const actions: QuotaRecoveryAction[] = [];
+  if (entitlements.tokenTopups) actions.push({ kind: "topup", label: "购买 Token" });
+  if (entitlements.byok) actions.push({ kind: "byok", label: "切换自己的 API" });
+  actions.push({ kind: "wait", label: "等待下月额度" });
+  return actions;
+}
 
 type LoadQuota = () => Promise<LlmQuota>;
 
@@ -66,7 +87,7 @@ export function quotaRecoveryMessage(details: QuotaExhaustedDetails): string {
     ? `已保存到第 ${details.committedCueOffset} 条字幕`
     : "解析进度尚未开始";
   if (details.periodResetAt === null) {
-    return `本月 AI 额度已用完。${progress}；切换自己的 API 后可立即继续。`;
+    return `本月 AI 额度已用完。${progress}；请订阅 Pro 或购买可用的 Token 加量包后继续。`;
   }
   const reset = formatBeijingTime(details.periodResetAt);
   return `本月 AI 额度已用完。${progress}，将于 ${reset}（北京时间）恢复；恢复后可从这里继续，无需重新下载或转录。`;

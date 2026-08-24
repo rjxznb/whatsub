@@ -11,6 +11,7 @@ import { useSettings } from "../store/settings";
 import { useAuth } from "../store/auth";
 import type { Settings, WhisperModelSize } from "../types/settings";
 import { VENDORS, getVendor, inferVendorId } from "../llm/vendors";
+import { allowedLlmModes, coerceLlmSettings, isManagedSettings } from "../llm/entitlementPolicy";
 import { MODEL_TIERS, formatModelSize } from "../llm/modelTiers";
 import { useModelDownload } from "../store/modelDownload";
 import { useUpdater } from "../hooks/useUpdater";
@@ -40,6 +41,7 @@ export function Settings() {
   const downloadPaused = dlPhase === "paused" ? dlActive : null;
   const [testStatus, setTestStatus] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const llmEntitlements = useAuth((s) => s.llmEntitlements);
 
   // Deep-link highlight: the Player's tiny-model nudge routes here with
   // ?highlight=whisper-model. Scroll the 字幕识别引擎 section into view and
@@ -78,7 +80,7 @@ export function Settings() {
   useEffect(() => {
     load();
   }, [load]);
-  useEffect(() => setDraft(settings), [settings]);
+  useEffect(() => setDraft(coerceLlmSettings(settings, llmEntitlements)), [settings, llmEntitlements]);
 
   useEffect(() => {
     Promise.all(
@@ -146,7 +148,7 @@ export function Settings() {
           console.log(`Froze ${frozen} legacy entries to old library dir`);
         }
       }
-      await save(draft);
+      await save(coerceLlmSettings(draft, llmEntitlements));
       setSaveStatus({ ok: true, msg: "✓ 已保存" });
       setTimeout(() => setSaveStatus(null), 2500);
     } catch (e) {
@@ -1288,9 +1290,16 @@ function VendorSection({
   draft: Settings;
   setDraft: (s: Settings) => void;
 }) {
+  const llmEntitlements = useAuth((s) => s.llmEntitlements);
   const vendorId =
     draft.vendorId ?? inferVendorId(draft.llmProvider, draft.openaiCompatible.baseUrl);
   const vendor = getVendor(vendorId) ?? VENDORS[0];
+  const allowedModes = allowedLlmModes(llmEntitlements);
+  const visibleVendors = VENDORS.filter((candidate) =>
+    isManagedSettings({ vendorId: candidate.id })
+      ? allowedModes.includes("managedRelay")
+      : allowedModes.includes("byok"),
+  );
 
   // Read the active key+model from whichever protocol slot the current
   // vendor uses. The protocol slots remain runtime source of truth; the
@@ -1311,6 +1320,7 @@ function VendorSection({
   function pickVendor(id: string) {
     const v = getVendor(id);
     if (!v) return;
+    if (!visibleVendors.some((candidate) => candidate.id === v.id)) return;
     if (v.id === vendor.id) return;
 
     // 1) Stash the OUTGOING vendor's current key+model under its own slot.
@@ -1408,7 +1418,7 @@ function VendorSection({
             onChange={(e) => pickVendor(e.target.value)}
             className="w-full mt-1 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-sm text-zinc-100"
           >
-            {VENDORS.map((v) => (
+            {visibleVendors.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.name}
               </option>

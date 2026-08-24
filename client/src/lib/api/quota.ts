@@ -16,8 +16,9 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { API_BASE } from "../apiBase";
 
-const BASE = "https://whatsub.eversay.cc/api";
+const BASE = API_BASE;
 const TIMEOUT_MS = 15_000;
 
 export interface Quota {

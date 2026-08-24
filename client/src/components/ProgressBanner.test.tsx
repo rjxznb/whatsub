@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ProgressBanner } from "./ProgressBanner";
 import { useAnalysis } from "../store/analysis";
+import { useAuth } from "../store/auth";
 import { SETTINGS_LLM_LINK } from "../llm/quotaRecovery";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
@@ -11,6 +12,14 @@ vi.mock("react-router-dom", () => ({ useNavigate: () => navigate }));
 describe("ProgressBanner recovery actions", () => {
   beforeEach(() => {
     useAnalysis.getState().reset();
+    useAuth.setState({
+      llmEntitlements: {
+        tier: "pro",
+        managedRelay: true,
+        byok: true,
+        tokenTopups: true,
+      },
+    });
     navigate.mockClear();
   });
 

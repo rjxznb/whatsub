@@ -66,10 +66,14 @@ export function FirstRunGate({ children }: Props) {
   // authFromLicense → useAuth.refresh() for ACTIVE users; the effect below
   // re-runs when it flips so a license+sub user still gets defaulted to managed.
   const hasSub = useAuth((s) => s.hasActiveSubscription);
+  const llmEntitlements = useAuth((s) => s.llmEntitlements);
   const relayEligible =
-    mode === "TRIAL_ACTIVE" ||
-    mode === "SUB_ACTIVE" ||
-    (mode === "ACTIVE" && hasSub);
+    llmEntitlements?.managedRelay ?? (
+      mode === "TRIAL_ACTIVE" ||
+      mode === "SUB_ACTIVE" ||
+      (mode === "ACTIVE" && hasSub)
+    );
+  const byokAllowed = llmEntitlements?.byok ?? false;
   const [trialOnboarded, setTrialOnboarded] = useState(() => {
     try {
       return localStorage.getItem(TRIAL_ONBOARDED_KEY) === "1";
@@ -164,7 +168,7 @@ export function FirstRunGate({ children }: Props) {
   })();
 
   // BYOK configured → straight to app (any mode).
-  if (hasLlmKey && modelOk) return <>{children}</>;
+  if (hasLlmKey && modelOk && byokAllowed) return <>{children}</>;
 
   // Relay-eligible (trial / Pro subscriber): bundled model + free managed LLM
   // → NOTHING to configure. Play the welcome animation once, then auto-enter
@@ -229,7 +233,7 @@ export function FirstRunGate({ children }: Props) {
       />,
     );
   }
-  if (!hasLlmKey) {
+  if (!hasLlmKey && byokAllowed) {
     cards.push(
       <TranslationServiceCard
         key="llm"
@@ -306,6 +310,7 @@ function TranslationServiceCard({
   done: boolean;
   stepNum?: number;
 }) {
+  const llmEntitlements = useAuth((s) => s.llmEntitlements);
   // Default to deepseek for users who haven't picked a vendor yet (new install
   // or settings.json missing vendorId), but respect any explicit choice carried
   // over from a previous session — if the user has been using e.g. Claude
@@ -313,6 +318,11 @@ function TranslationServiceCard({
   // deepseek would override their preference unexpectedly.
   const [vendorId, setVendorId] = useState(settings.vendorId ?? "deepseek");
   const vendor = getVendor(vendorId) ?? VENDORS[0];
+  const visibleVendors = VENDORS.filter((candidate) =>
+    candidate.id === "whatsub-managed"
+      ? (llmEntitlements?.managedRelay ?? true)
+      : (llmEntitlements?.byok ?? false),
+  );
   // whatSub 托管 is gated on a Pro subscription (entitlement resolved
   // server-side from the session bearer), so it has no API key. When it's the
   // selected vendor we swap the key field + verify button for a subscription
@@ -409,7 +419,7 @@ function TranslationServiceCard({
         onChange={(e) => pickVendor(e.target.value)}
         className="w-full mb-1.5 px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded text-base"
       >
-        {VENDORS.filter((v) => v.id !== "custom").map((v) => (
+        {visibleVendors.filter((v) => v.id !== "custom").map((v) => (
           <option key={v.id} value={v.id}>
             {v.id === "deepseek" ? `${v.name}（推荐）` : v.name}
           </option>

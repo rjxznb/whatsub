@@ -3,6 +3,14 @@ import { invoke } from '@tauri-apps/api/core';
 
 export type AuthStatus = 'unknown' | 'authed' | 'unauthed';
 
+export type LlmEntitlementTier = 'free' | 'buyout' | 'pro' | 'buyout_pro';
+export interface LlmEntitlements {
+  tier: LlmEntitlementTier;
+  managedRelay: boolean;
+  byok: boolean;
+  tokenTopups: boolean;
+}
+
 interface AuthStore {
   status: AuthStatus;
   email: string | null;
@@ -12,6 +20,7 @@ interface AuthStore {
    *  The relay already gates on this server-side; the client tracks it so the
    *  UI surfaces Pro + auto-defaults to the managed vendor. */
   hasActiveSubscription: boolean;
+  llmEntitlements: LlmEntitlements | null;
   refresh: () => Promise<void>;
   authFromLicense: (licenseKey: string) => Promise<{ ok: boolean; reason?: string }>;
   /** Email-OTP login (step 1): ask the backend to email a 6-digit code. */
@@ -30,6 +39,7 @@ interface AuthMeResult {
   email: string | null;
   hasActiveLicense: boolean | null;
   hasActiveSubscription: boolean | null;
+  llmEntitlements?: LlmEntitlements | null;
 }
 
 interface AuthResult {
@@ -42,6 +52,7 @@ export const useAuth = create<AuthStore>((set, get) => ({
   email: null,
   hasActiveLicense: false,
   hasActiveSubscription: false,
+  llmEntitlements: null,
 
   refresh: async () => {
     try {
@@ -52,12 +63,15 @@ export const useAuth = create<AuthStore>((set, get) => ({
           email: r.email,
           hasActiveLicense: !!r.hasActiveLicense,
           hasActiveSubscription: !!r.hasActiveSubscription,
+          llmEntitlements: r.llmEntitlements ?? null,
         });
       } else {
-        set({ status: 'unauthed', email: null, hasActiveLicense: false, hasActiveSubscription: false });
+        set({ status: 'unauthed', email: null, hasActiveLicense: false, hasActiveSubscription: false, llmEntitlements: null });
       }
     } catch {
-      set({ status: 'unauthed', email: null, hasActiveLicense: false, hasActiveSubscription: false });
+      // A transient /me failure is not a logout. Keep the last confirmed
+      // account-scoped capabilities; explicit unauthenticated responses and
+      // logout still clear them in the branches above/below.
     }
   },
 
@@ -84,7 +98,7 @@ export const useAuth = create<AuthStore>((set, get) => ({
     try {
       await invoke('auth_logout');
     } finally {
-      set({ status: 'unauthed', email: null, hasActiveLicense: false, hasActiveSubscription: false });
+      set({ status: 'unauthed', email: null, hasActiveLicense: false, hasActiveSubscription: false, llmEntitlements: null });
     }
   },
 }));

@@ -1,8 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RotateCw } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useLicense } from "../store/license";
+import { useAuth } from "../store/auth";
 import { llmQuota, type LlmQuota } from "../lib/api/quota";
+import {
+  createTokenTopupOrder,
+  getTokenHistory,
+  getTokenTopupCatalog,
+  getTokenWallet,
+  type TokenTopupProduct,
+  type TokenTransaction,
+  type TokenWallet,
+} from "../lib/api/tokenWallet";
+import { resumeQuotaPausedBackgroundAnalyses } from "../store/backgroundAnalyses";
 
 /** Desktop Pro subscription card (main site, Alipay-web checkout + 买断 8 折).
  *  NOT "/mobile#pro" — that's the iOS-only card (Apple-compliance, no Alipay). */
@@ -26,6 +37,7 @@ const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 export function ManagedRelayQuotaPanel() {
   const mode = useLicense((s) => s.mode);
   const trial = useLicense((s) => s.trial);
+  const tokenTopups = useAuth((s) => s.llmEntitlements?.tokenTopups === true);
 
   const [quota, setQuota] = useState<LlmQuota | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -145,8 +157,100 @@ export function ManagedRelayQuotaPanel() {
           </div>
         </div>
       )}
+
+      {tokenTopups && <TokenTopupPanel />}
     </div>
   );
+}
+
+function TokenTopupPanel() {
+  const [catalog, setCatalog] = useState<TokenTopupProduct[]>([]);
+  const [wallet, setWallet] = useState<TokenWallet | null>(null);
+  const [history, setHistory] = useState<TokenTransaction[]>([]);
+  const walletRef = useRef<TokenWallet | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [products, nextWallet, nextHistory] = await Promise.all([
+        getTokenTopupCatalog(),
+        getTokenWallet(),
+        getTokenHistory(),
+      ]);
+      const previousCapacity = walletRef.current ? availableCapacity(walletRef.current) : null;
+      setCatalog(products);
+      setWallet(nextWallet);
+      walletRef.current = nextWallet;
+      setHistory(nextHistory);
+      setError(null);
+      // Returning from the payment page/focus can refresh repeatedly. Only
+      // wake quota-paused jobs when server-reported capacity actually grew;
+      // ordinary polling must not repeatedly resume a still-paused job.
+      if (previousCapacity !== null && availableCapacity(nextWallet) > previousCapacity) {
+        resumeQuotaPausedBackgroundAnalyses();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "充值余额读取失败");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
+  async function buy(product: TokenTopupProduct) {
+    setBusy(true);
+    setError(null);
+    try {
+      const order = await createTokenTopupOrder(product.id);
+      await openUrl(order.payUrl);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "充值下单失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded border border-amber-800/60 bg-amber-950/20 p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium text-amber-100">Token 充值余额</span>
+        {wallet && <span className="text-xs font-mono text-amber-300">{short(wallet.topupBalance)} 可用</span>}
+      </div>
+      {wallet?.topupFrozen && <p className="text-[11px] text-amber-200">余额已冻结，Pro 恢复后继续可用。</p>}
+      {catalog.length > 0 ? (
+        <div className="grid grid-cols-3 gap-2">
+          {catalog.map((product) => (
+            <button
+              key={product.id}
+              type="button"
+              disabled={busy}
+              onClick={() => void buy(product)}
+              className="rounded border border-zinc-700 px-2 py-2 text-left hover:border-amber-400 disabled:opacity-50"
+            >
+              <span className="block text-xs text-zinc-300">{short(product.tokens)} Token</span>
+              <span className="mt-1 block text-xs font-medium text-amber-300">¥{product.priceCny}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-zinc-500">加量包暂未开放。</p>
+      )}
+      {history.length > 0 && (
+        <p className="text-[11px] text-zinc-500">最近充值：+{short(history[0].tokenDelta)} Token</p>
+      )}
+      {error && <p className="text-[11px] text-amber-300">{error}</p>}
+    </div>
+  );
+}
+
+function availableCapacity(wallet: TokenWallet): number {
+  const monthly = Math.max(0, wallet.monthlyLimit - wallet.monthlyUsed);
+  return monthly + (wallet.topupFrozen ? 0 : Math.max(0, wallet.topupBalance));
 }
 
 function tierLabel(tier: LlmQuota["tier"]): string {

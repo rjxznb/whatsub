@@ -12,7 +12,13 @@ const { useAuth } = await import('./auth');
 beforeEach(() => {
   invokeMock.mockReset();
   // Reset the store
-  useAuth.setState({ status: 'unknown', email: null, hasActiveLicense: false });
+  useAuth.setState({
+    status: 'unknown',
+    email: null,
+    hasActiveLicense: false,
+    hasActiveSubscription: false,
+    llmEntitlements: null,
+  });
 });
 
 describe('useAuth', () => {
@@ -36,6 +42,33 @@ describe('useAuth', () => {
     });
     await useAuth.getState().refresh();
     expect(useAuth.getState().status).toBe('unauthed');
+  });
+
+  it('refresh: retains the last confirmed identity and entitlements on a transient failure', async () => {
+    const confirmed = {
+      tier: 'buyout' as const,
+      managedRelay: false,
+      byok: true,
+      tokenTopups: false,
+    };
+    useAuth.setState({
+      status: 'authed',
+      email: 'paid@x.com',
+      hasActiveLicense: true,
+      hasActiveSubscription: false,
+      llmEntitlements: confirmed,
+    });
+    invokeMock.mockRejectedValueOnce(new Error('offline'));
+
+    await useAuth.getState().refresh();
+
+    expect(useAuth.getState()).toMatchObject({
+      status: 'authed',
+      email: 'paid@x.com',
+      hasActiveLicense: true,
+      hasActiveSubscription: false,
+      llmEntitlements: confirmed,
+    });
   });
 
   it('logout: invokes auth_logout and sets unauthed', async () => {

@@ -416,6 +416,17 @@ export function resumeBackgroundAnalysis(videoId: string): void {
       : driveRetranscribeThenAnalyze(runtime);
 }
 
+/** Resume only jobs stopped by managed-relay quota. Called after a wallet
+ * refresh; completed jobs and unrelated failures remain untouched. */
+export function resumeQuotaPausedBackgroundAnalyses(): void {
+  for (const [videoId] of runtimes) {
+    const job = useBgAnalyses.getState().jobs[videoId];
+    if (job?.phase === "error" && job.quotaError) {
+      resumeBackgroundAnalysis(videoId);
+    }
+  }
+}
+
 /** Cancel background work, then close its lease after the current task exits. */
 export async function cancelBackground(videoId: string): Promise<void> {
   const runtime = runtimes.get(videoId);

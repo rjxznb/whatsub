@@ -10,6 +10,7 @@ import {
   ManagedRequestError,
   mergeManagedSummary,
   mergeManagedSubtitleBatch,
+  requiresExternalQuotaRecovery,
   type ManagedPreviewState,
 } from "./managedAnalysis";
 
@@ -46,6 +47,11 @@ function analysis(
 }
 
 describe("managed desktop job contract", () => {
+  it("does not immediately resume a quota-paused server job", () => {
+    expect(requiresExternalQuotaRecovery("paused_quota")).toBe(true);
+    expect(requiresExternalQuotaRecovery("running")).toBe(false);
+  });
+
   it("keeps desktop jobs out of server-side Library persistence", () => {
     const payload = buildManagedJobPayload({
       videoId: "video-1",

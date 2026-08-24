@@ -5,19 +5,36 @@
 //! so we manually set Content-Type + serialize/deserialize bodies ourselves
 //! (same pattern as `commands/license.rs`).
 
+use crate::api_config::LICENSE_API_BASE;
 use crate::auth::{self, AuthState};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{future::Future, time::Duration};
 use tauri::{AppHandle, Runtime};
 
-const SERVER_BASE: &str = "https://whatsub.eversay.cc/api/license";
+const SERVER_BASE: &str = LICENSE_API_BASE;
+
+fn use_direct_connection_for_base(base: &str) -> bool {
+    base.starts_with("http://127.0.0.1:")
+        || base.starts_with("http://localhost:")
+        || base.starts_with("http://[::1]:")
+}
 
 /// Auth HTTP client with the same 30s timeout discipline as `license.rs`.
 /// Without a timeout, one stalled connection turns into an INFINITE spinner
 /// in the login dialog / a permanently-unauthed corpus gate (2026-07-13).
 fn http_client() -> Result<Client, AuthHttpError> {
-    Client::builder()
+    let builder = Client::builder();
+    let builder = if use_direct_connection_for_base(SERVER_BASE) {
+        // Local verification must not be sent through a machine-wide HTTP
+        // proxy (common on Windows development machines). The proxy can
+        // return an HTML/interstitial response, which auth surfaces as a
+        // protocol error instead of the backend's JSON result.
+        builder.no_proxy()
+    } else {
+        builder
+    };
+    builder
         .timeout(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(15))
         .build()
@@ -158,6 +175,17 @@ struct MeResp {
     /// deserialize cleanly.
     #[serde(rename = "hasActiveSubscription", default)]
     has_active_subscription: bool,
+    #[serde(rename = "llmEntitlements", default)]
+    llm_entitlements: Option<LlmEntitlements>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmEntitlements {
+    pub tier: String,
+    pub managed_relay: bool,
+    pub byok: bool,
+    pub token_topups: bool,
 }
 
 #[derive(Serialize)]
@@ -176,6 +204,8 @@ pub struct StatusResult {
     /// LicenseGate's SUB_ACTIVE branch (2026-06-04).
     #[serde(rename = "hasActiveSubscription")]
     pub has_active_subscription: Option<bool>,
+    #[serde(rename = "llmEntitlements")]
+    pub llm_entitlements: Option<LlmEntitlements>,
 }
 
 fn map_reason(body: &serde_json::Value) -> String {
@@ -291,6 +321,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             email: None,
             has_active_license: None,
             has_active_subscription: None,
+            llm_entitlements: None,
         });
     };
     if !auth::is_valid(&auth) {
@@ -300,6 +331,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             email: None,
             has_active_license: None,
             has_active_subscription: None,
+            llm_entitlements: None,
         });
     }
     let client = http_client().map_err(|error| error.code().to_string())?;
@@ -331,6 +363,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             email: Some(m.email),
             has_active_license: Some(m.has_active_license),
             has_active_subscription: Some(m.has_active_subscription),
+            llm_entitlements: m.llm_entitlements,
         })
     } else {
         // Token rejected — drop it locally too
@@ -340,6 +373,7 @@ pub async fn auth_me<R: Runtime>(app: AppHandle<R>) -> Result<StatusResult, Stri
             email: None,
             has_active_license: None,
             has_active_subscription: None,
+            llm_entitlements: None,
         })
     }
 }
@@ -806,5 +840,12 @@ mod tests {
             "desktop",
         );
         assert_eq!(request.headers().get("Authorization").unwrap(), "Bearer TOK");
+    }
+
+    #[test]
+    fn local_backend_uses_direct_connection_even_when_proxy_is_configured() {
+        assert!(use_direct_connection_for_base("http://127.0.0.1:3002/api"));
+        assert!(use_direct_connection_for_base("http://localhost:3002/api"));
+        assert!(!use_direct_connection_for_base("https://whatsub.eversay.cc/api/license"));
     }
 }

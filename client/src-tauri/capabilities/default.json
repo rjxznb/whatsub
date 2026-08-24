@@ -29,6 +29,8 @@
         { "url": "https://open.bigmodel.cn/*" },
         { "url": "https://dashscope.aliyuncs.com/*" },
         { "url": "https://whatsub.eversay.cc/*" },
+        { "url": "http://127.0.0.1:3002/*" },
+        { "url": "http://localhost:3002/*" },
         { "url": "https://*/*" }
       ]
     },

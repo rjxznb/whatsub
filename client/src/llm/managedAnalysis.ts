@@ -11,8 +11,9 @@ import type {
 import type { PersistedAnalysisSession } from "./analysisSession";
 import type { AnalysisPreview } from "./analyze";
 import { abortableDelay } from "./retry";
+import { API_BASE } from "../lib/apiBase";
 
-const BASE_URL = "https://whatsub.eversay.cc/api/library/mobile-analysis";
+const BASE_URL = `${API_BASE}/library/mobile-analysis`;
 const POLL_MS = 2_000;
 const QUEUE_RETRY_MS = 4_000;
 const QUEUE_RETRY_ATTEMPTS = 15;
@@ -42,6 +43,12 @@ interface ManagedResults {
   batches: Array<{ batchIndex: number; subtitles: Subtitle[] }>;
   keyPhrases?: KeyPhrase[];
   errorCode: string | null;
+}
+
+export function requiresExternalQuotaRecovery(
+  status: ManagedJob["status"],
+): boolean {
+  return status === "paused_quota";
 }
 
 export class ManagedRequestError extends Error {
@@ -768,7 +775,6 @@ export async function executeManagedAnalysis(
       }
       if (
         active.status === "failed" ||
-        active.status === "paused_quota" ||
         active.status === "cancelled"
       ) {
         if (
@@ -789,6 +795,12 @@ export async function executeManagedAnalysis(
           continue;
         }
         throw new Error(`托管解析未完成：${active.errorCode ?? active.status}`);
+      }
+      if (requiresExternalQuotaRecovery(active.status)) {
+        // Capacity has not changed merely because polling observed a pause.
+        // Leave the exact server job dormant; quotaRecovery resumes it only
+        // after a wallet/subscription refresh proves capacity increased.
+        throw new Error("托管解析未完成：paused_quota");
       }
       if (
         active.status === "completed" &&

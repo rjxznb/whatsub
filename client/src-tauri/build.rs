@@ -3,6 +3,18 @@ use std::path::PathBuf;
 
 fn main() {
     tauri_build::build();
+    println!("cargo:rerun-if-env-changed=WHATSUB_API_ORIGIN");
+    let origin = env::var("WHATSUB_API_ORIGIN")
+        .unwrap_or_else(|_| "https://whatsub.eversay.cc".to_string());
+    let license_api_base = if origin.starts_with("http://127.0.0.1")
+        || origin.starts_with("http://localhost")
+    {
+        format!("{origin}/api")
+    } else {
+        format!("{origin}/api/license")
+    };
+    println!("cargo:rustc-env=WHATSUB_API_ORIGIN={origin}");
+    println!("cargo:rustc-env=WHATSUB_LICENSE_API_BASE={license_api_base}");
 
     // Copy whisper.cpp shared-library deps next to the built exe so the
     // whisper-cli sidecar can resolve them at runtime. Tauri's `externalBin`

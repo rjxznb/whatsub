@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-const ACTIVATE_URL: &str = "https://whatsub.eversay.cc/api/license/activate";
-const TRIAL_START_URL: &str = "https://whatsub.eversay.cc/api/license/trial/start";
+const ACTIVATE_URL: &str = concat!(env!("WHATSUB_LICENSE_API_BASE"), "/activate");
+const TRIAL_START_URL: &str = concat!(env!("WHATSUB_LICENSE_API_BASE"), "/trial/start");
 const NET_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What `read_license_state` returns when the local file exists.

@@ -1,14 +1,17 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNavigate } from "react-router-dom";
 import { useAnalysis } from "../store/analysis";
+import { useAuth } from "../store/auth";
 import {
   canResumeQuota,
   quotaRecoveryMessage,
+  quotaRecoveryActions,
+  SUBSCRIBE_URL,
+  TOPUP_URL,
   SETTINGS_LLM_LINK,
 } from "../llm/quotaRecovery";
 
 /** Desktop Pro subscription card (main site, not the iOS-only /mobile page). */
-const SUBSCRIBE_URL = "https://whatsub.eversay.cc/#pro";
 
 const PHASE_LABELS: Record<string, string> = {
   waiting_download: "等待下载…",
@@ -42,6 +45,7 @@ export function ProgressBanner({
   onMoveToBackground,
 }: Props) {
   const navigate = useNavigate();
+  const entitlements = useAuth((state) => state.llmEntitlements);
   const {
     phase,
     progressPercent,
@@ -124,12 +128,21 @@ export function ProgressBanner({
         </button>
       )}
       {isError && quotaError && (
-        <button
-          onClick={() => navigate(SETTINGS_LLM_LINK)}
-          className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-zinc-900 font-medium text-xs transition-colors whitespace-nowrap"
-        >
-          切换自己的 API
-        </button>
+        <div className="flex items-center gap-2">
+          {quotaRecoveryActions(quotaError, entitlements).map((action) => (
+            <button
+              key={action.kind}
+              onClick={() => {
+                if (action.kind === "byok") navigate(SETTINGS_LLM_LINK);
+                else if (action.kind === "topup") void openUrl(TOPUP_URL).catch(() => {});
+                else if (action.kind === "subscribe") void openUrl(SUBSCRIBE_URL).catch(() => {});
+              }}
+              className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-400 text-zinc-900 font-medium text-xs transition-colors whitespace-nowrap"
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
       )}
       {isError && errorUpsell && !quotaError && (
         <button

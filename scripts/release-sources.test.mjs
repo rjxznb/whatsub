@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = new URL("../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, root), "utf8");
 
-test("active updater and release configuration contains no GitCode source", () => {
+test("active updater and release configuration contains GitCode as the primary source", () => {
   const workflowDir = new URL("../.github/workflows/", import.meta.url);
   const workflowText = readdirSync(workflowDir)
     .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
@@ -19,18 +19,18 @@ test("active updater and release configuration contains no GitCode source", () =
     read("client/src-tauri/src/commands/yt_dlp.rs"),
   ].join("\n");
 
-  assert.doesNotMatch(activeText, /gitcode/i);
+  assert.match(activeText, /gitcode/i);
 });
 
-test("app updater prefers DogeCloud and retains GitHub fallback", () => {
+test("app updater prefers GitCode and retains GitHub fallback", () => {
   const config = JSON.parse(read("client/src-tauri/tauri.conf.json"));
   assert.deepEqual(config.plugins.updater.endpoints, [
-    "https://download.eversay.cc/latest.json",
+    "https://api.gitcode.com/api/v5/repos/rjxznb/whatsub-release/raw/latest.json?ref=main",
     "https://github.com/rjxznb/whatsub-releases/releases/latest/download/latest.json",
   ]);
 });
 
-test("desktop release workflow publishes GitHub only", () => {
+test("desktop release workflow publishes GitHub and mirrors to GitCode", () => {
   const workflow = read(".github/workflows/release.yml");
   assert.doesNotMatch(workflow, /DOGECLOUD_ACCESS_KEY/);
   assert.doesNotMatch(workflow, /DOGECLOUD_SECRET_KEY/);
@@ -38,8 +38,8 @@ test("desktop release workflow publishes GitHub only", () => {
   assert.doesNotMatch(workflow, /DOGECLOUD_DOWNLOAD_DOMAIN/);
   assert.doesNotMatch(workflow, /dogecloud_fetch\.py/);
   assert.doesNotMatch(workflow, /dogecloud_upload\.py/);
-  assert.match(workflow, /dogecloud-latest\.json/);
-  assert.match(workflow, /https:\/\/download\.eversay\.cc/);
+  assert.match(workflow, /mirror-gitcode/);
+  assert.match(workflow, /GITCODE_TOKEN/);
   assert.match(workflow, /!inputs\.dry_run/);
   assert.match(
     workflow,

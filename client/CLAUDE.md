@@ -201,14 +201,14 @@ When the iOS app encounters a caption-less YouTube video — OR **any non-YouTub
 
 `pipeline/ytdlp.rs::download()` resolves yt-dlp at runtime in priority order:
 
-1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy (`commands::yt_dlp::yt_dlp_update`), written to `.downloading`, atomic-renamed. `chmod +x` on unix. Download is **dual-source**: DogeCloud CDN first (`https://download.eversay.cc/yt-dlp/<version>/…`), matching-version GitHub release fallback; `connect_timeout(15s)` so a hung CDN falls back fast. Versioned paths prevent stale mutable CDN binaries.
+1. **`<app_data>/bin/yt-dlp{.exe}`** — user-updated copy (`commands::yt_dlp::yt_dlp_update`), written to `.downloading`, atomic-renamed. `chmod +x` on unix. Download is **dual-source**: GitCode first (`https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/…`), matching-version GitHub release fallback; `connect_timeout(15s)` so a hung mirror falls back fast. Versioned release assets prevent stale mutable binaries.
 2. **Bundled sidecar** (`binaries/yt-dlp-<target_triple>{.exe}`) — what `pnpm tauri build` ships. CI workflow input `yt_dlp_tag` (default `latest`) controls which yt-dlp release gets bundled.
 
 The AppData path uses `pipeline/spawn.rs::run_external_with_callback` because Tauri shell plugin's `sidecar()` only accepts whitelisted basenames, not arbitrary paths. The bundled fallback uses `run_sidecar`.
 
 Why this split: yt-dlp upstream ships multiple times/week chasing YouTube's player JS changes. Bundling means weeks-long lag when extractors break.
 
-**Launch-time update prompt (0.1.98).** `yt_dlp_check_update` reads `https://download.eversay.cc/yt-dlp/yt-dlp-version.json` (`{version, notes}`), then falls back to the official GitHub release API — best-effort, total failure ⇒ silently no prompt. `useYtDlpUpdater` + `YtDlpUpdateToast` (bottom-LEFT, so it never overlaps the app-updater toast at bottom-right) prompt 更新 / 稍后 / 不再提醒此版本 (localStorage `ytdlpSkippedVersions`); the binary swaps ONLY on an explicit 更新 click — no silent auto-update. Users can still hit Settings → 更新 yt-dlp manually. The CDN is refreshed on demand via **Mirror yt-dlp to DogeCloud** (`.github/workflows/mirror-ytdlp.yml`); upkeep + compatibility checklist is in [`docs/ytdlp-mirror.md`](./docs/ytdlp-mirror.md).
+**Launch-time update prompt (0.1.98).** `yt_dlp_check_update` reads `https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json` (`{version, notes}`), then falls back to the official GitHub release API — best-effort, total failure ⇒ silently no prompt. `useYtDlpUpdater` + `YtDlpUpdateToast` (bottom-LEFT, so it never overlaps the app-updater toast at bottom-right) prompt 更新 / 稍后 / 不再提醒此版本 (localStorage `ytdlpSkippedVersions`); the binary swaps ONLY on an explicit 更新 click — no silent auto-update. Users can still hit Settings → 更新 yt-dlp manually. The mirror is refreshed on demand via **Mirror yt-dlp to GitCode** (`.github/workflows/mirror-ytdlp.yml`); upkeep + compatibility checklist is in [`docs/ytdlp-mirror.md`](./docs/ytdlp-mirror.md).
 
 **macOS: the `node` sidecar needs JIT entitlements (0.1.100).** yt-dlp spawns `node` (`--js-runtimes node:<path>`) to solve YouTube's n-challenge — no JS runtime ⇒ `No video formats found`, i.e. ALL YouTube downloads fail. Notarization requires every executable in the `.app` to carry OUR signature, so Tauri re-signs each sidecar with hardened runtime + `Entitlements.plist`, **discarding the entitlements the official nodejs.org binary ships with**. Without re-granting them the kernel kills node inside V8's `SetPermissions` → `Error running node process (returncode: -5)` (−5 = SIGTRAP). `Entitlements.plist` must therefore keep BOTH `com.apple.security.cs.allow-jit` **and** `com.apple.security.cs.allow-unsigned-executable-memory` (allow-jit alone is insufficient on recent macOS). Both are allowed for Developer ID + notarization. Windows is unaffected (no hardened runtime). Don't prune these keys.
 
@@ -298,7 +298,7 @@ cd src-tauri && cargo test    # safe: tests use temp paths only
 
 ## Release workflow
 
-Release distribution uses private source / canonical GitHub release / DogeCloud mainland CDN with a minisign-signed updater. Step-by-step instructions, signing key handling, DogeCloud setup, and Updater UX live in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#release-workflow). The non-negotiables:
+Release distribution uses private source / canonical GitHub release / GitCode mainland mirror with a minisign-signed updater. Step-by-step instructions, signing key handling, GitCode mirror setup, and Updater UX live in [`CLAUDE-FEATURES.md`](./CLAUDE-FEATURES.md#release-workflow). The non-negotiables:
 
 - **Never lose the private signing key** (public key shipped in app; rotation breaks all installed clients).
 - **Never make source repo public** without rotating the local backup key.

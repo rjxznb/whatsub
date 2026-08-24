@@ -1,0 +1,411 @@
+name: Mirror releases to GitCode
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: GitHub Release tag to mirror
+        required: true
+        type: string
+      manifest_only:
+        description: Publish a GitCode-hosted manifest that keeps GitHub asset URLs
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      GITCODE_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub Release tag to mirror
+        required: true
+        type: string
+      manifest_only:
+        description: Publish a GitCode-hosted manifest that keeps GitHub asset URLs
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitcode-release-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout manifest transformer
+        uses: actions/checkout@v4
+
+      - name: Create temporary GitCode credential file
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          credential_file="$RUNNER_TEMP/gitcode-credentials"
+          printf 'https://oauth2:%s@gitcode.com\n' "$GITCODE_TOKEN" > "$credential_file"
+          echo "CREDENTIAL_FILE=$credential_file" >> "$GITHUB_ENV"
+
+      - name: Mirror release assets and manifest
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          MANIFEST_ONLY: ${{ inputs.manifest_only }}
+          GH_TOKEN: ${{ github.token }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          source_repo='rjxznb/whatsub-releases'
+          mirror_owner='rjxznb'
+          mirror_repo='whatsub-release'
+          api_base='https://api.gitcode.com/api/v5'
+          tag="$REQUESTED_TAG"
+          test -n "$tag" || { echo '::error::A release tag is required'; exit 1; }
+
+          urlencode() {
+            jq -rn --arg value "$1" '$value | @uri'
+          }
+
+          hash_value() {
+            printf '%s' "$1" | sha256sum | awk '{print $1}'
+          }
+
+          asset_key() {
+            printf '%s\0%s' "$1" "$2" | sha256sum | awk '{print $1}'
+          }
+
+          release_file() {
+            local kind="$1"
+            local release_tag="$2"
+            printf 'work/releases/%s-%s.json' "$kind" "$(hash_value "$release_tag")"
+          }
+
+          api_request() {
+            curl --fail --silent --show-error --proto '=https' --max-redirs 0 \
+              --url-query "access_token=$GITCODE_TOKEN" "$@"
+          }
+
+          api_get_status() {
+            local output="$1"
+            local url="$2"
+            local status
+            status=$(curl --silent --show-error --proto '=https' --max-redirs 0 \
+              --url-query "access_token=$GITCODE_TOKEN" \
+              --output "$output" --write-out '%{http_code}' "$url") || return
+            printf '%s' "$status"
+          }
+
+          require_published_github_release() {
+            local published
+            published=$(gh release view "$tag" --repo "$source_repo" --json isDraft,publishedAt \
+              --jq 'if .isDraft == false and .publishedAt != null then "published" else empty end') || {
+              echo "::error::Unable to inspect GitHub Release $tag"
+              exit 1
+            }
+            if [ "$published" != published ]; then
+              echo "::error::GitHub Release $tag is draft or unpublished"
+              exit 1
+            fi
+          }
+
+          publish_manifest() {
+            local manifest_path="$1"
+            rm -rf mirror
+            git -c credential.helper="store --file=$CREDENTIAL_FILE" clone --branch main \
+              https://gitcode.com/rjxznb/whatsub-release.git mirror
+            cp "$manifest_path" mirror/latest.json
+            git -C mirror config user.name 'whatsub-release-bot'
+            git -C mirror config user.email 'whatsub-release-bot@users.noreply.github.com'
+            if ! git -C mirror diff --quiet -- latest.json; then
+              git -C mirror add latest.json
+              git -C mirror commit -m "release: mirror $tag to GitCode"
+              git -C mirror -c credential.helper="store --file=$CREDENTIAL_FILE" push origin HEAD:main
+            fi
+          }
+
+          ensure_release() {
+            local release_tag="$1"
+            local encoded_tag summary_file status payload
+            encoded_tag=$(urlencode "$release_tag")
+            summary_file=$(release_file summary "$release_tag")
+            status=$(api_get_status "$summary_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/tags/$encoded_tag") || {
+              echo "::error::Unable to query GitCode Release $release_tag"
+              exit 1
+            }
+
+            case "$status" in
+              200) return ;;
+              404) ;;
+              *)
+                echo "::error::GitCode Release lookup for $release_tag returned HTTP $status"
+                exit 1
+                ;;
+            esac
+
+            # Releases start normal; only promote_requested_release may make one latest.
+            payload=$(jq -nc --arg tag "$release_tag" --arg name "whatsub $release_tag" \
+              --arg body "Mirrored from GitHub Release $release_tag" \
+              '{tag_name:$tag, name:$name, body:$body, target_commitish:"main"}')
+            api_request --request POST --header 'Content-Type: application/json' \
+              --data "$payload" --output "$summary_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases"
+          }
+
+          promote_requested_release() {
+            local release_tag="$1"
+            local encoded_tag summary_file release_name release_body payload
+            ensure_release "$release_tag"
+            encoded_tag=$(urlencode "$release_tag")
+            summary_file=$(release_file summary "$release_tag")
+            release_name=$(jq -r --arg fallback "whatsub $release_tag" '.name // $fallback' "$summary_file")
+            release_body=$(jq -r --arg fallback "Mirrored from GitHub Release $release_tag" \
+              'if (.body // "") == "" then $fallback else .body end' "$summary_file")
+            payload=$(jq -nc --arg tag "$release_tag" --arg name "$release_name" --arg body "$release_body" \
+              '{tag_name:$tag, name:$name, body:$body, release_status:"latest"}')
+            api_request --request PATCH --header 'Content-Type: application/json' \
+              --data "$payload" --output "$summary_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag"
+          }
+
+          fetch_release_detail() {
+            local release_tag="$1"
+            local encoded_tag detail_file status
+            encoded_tag=$(urlencode "$release_tag")
+            detail_file=$(release_file detail "$release_tag")
+            status=$(api_get_status "$detail_file" \
+              "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag") || {
+              echo "::error::Unable to query detailed GitCode Release $release_tag"
+              exit 1
+            }
+            if [ "$status" != 200 ]; then
+              echo "::error::Detailed GitCode Release lookup for $release_tag returned HTTP $status"
+              exit 1
+            fi
+            printf '%s' "$detail_file"
+          }
+
+          has_attachment_named() {
+            local asset_name="$1"
+            shift
+            jq -e -s --arg name "$asset_name" '
+              [ .[] | .. | objects |
+                select(.name? == $name or .file_name? == $name or .filename? == $name)
+              ] | length > 0
+            ' "$@" > /dev/null
+          }
+
+          find_attachment_id() {
+            local asset_name="$1"
+            shift
+            jq -r -s --arg name "$asset_name" '
+              [ .[] | .. | objects |
+                select(.name? == $name or .file_name? == $name or .filename? == $name) |
+                (.attach_file_id // .id // empty) |
+                select((type == "string" and length > 0) or type == "number") | tostring
+              ] | first // empty
+            ' "$@"
+          }
+
+          upload_url_from() {
+            local response_file="$1"
+            jq -er '
+              (.url? | select(type == "string" and test("^https://"))) //
+              ([
+                .. | objects | to_entries[]? |
+                select(.key | ascii_downcase | test("upload.*url|url.*upload")) |
+                .value | .. | strings | select(test("^https://"))
+              ] | first // empty)
+            ' "$response_file"
+          }
+
+          upload_asset() {
+            local release_tag="$1"
+            local asset_path="$2"
+            local asset_name="$3"
+            local encoded_tag summary_file detail_file attachment_id upload_response upload_url upload_host upload_method
+            local upload_attempt upload_attempts
+            local -a form_fields upload_headers upload_command
+
+            ensure_release "$release_tag"
+            encoded_tag=$(urlencode "$release_tag")
+            summary_file=$(release_file summary "$release_tag")
+            detail_file=$(fetch_release_detail "$release_tag")
+            if has_attachment_named "$asset_name" "$summary_file" "$detail_file"; then
+              if verify_asset "$release_tag" "$asset_name"; then
+                echo "::notice::Reusing verified GitCode attachment $asset_name"
+                return 0
+              fi
+              attachment_id=$(find_attachment_id "$asset_name" "$summary_file" "$detail_file")
+              if [ -z "$attachment_id" ]; then
+                echo "::error::GitCode attachment $asset_name exists but no verified attachment id was found in summary or detailed Release responses"
+                exit 1
+              fi
+              api_request --request DELETE \
+                "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/attach_files/$attachment_id" \
+                > /dev/null
+            fi
+
+            upload_attempts=3
+            for upload_attempt in $(seq 1 "$upload_attempts"); do
+              # Upload URLs are short-lived. Always request a fresh one for each retry.
+              upload_response="work/uploads/$(asset_key "$release_tag" "$asset_name")-$upload_attempt.json"
+              api_request --output "$upload_response" \
+                --url-query "file_name=$asset_name" \
+                "$api_base/repos/$mirror_owner/$mirror_repo/releases/$encoded_tag/upload_url"
+              upload_url=$(upload_url_from "$upload_response") || {
+                echo "::error::GitCode did not return a usable upload URL for $release_tag"
+                exit 1
+              }
+              upload_url="${upload_url%%\{*}"
+              if [[ ! "$upload_url" =~ ^https://([^/?#:]+)(:[0-9]+)?(/|$) ]]; then
+                echo '::error::GitCode returned an invalid upload URL'
+                exit 1
+              fi
+              upload_host="${BASH_REMATCH[1]}"
+
+              form_fields=()
+              while IFS=$'\t' read -r field value; do
+                form_fields+=(-F "$field=$value")
+              done < <(jq -r '
+                .. | objects | .fields? | objects | to_entries[]? |
+                [.key, (.value | tostring)] | @tsv
+              ' "$upload_response")
+              upload_headers=()
+              while IFS=$'\t' read -r field value; do
+                upload_headers+=(--header "$field: $value")
+              done < <(jq -r '
+                .headers? | objects | to_entries[]? |
+                [.key, (.value | tostring)] | @tsv
+              ' "$upload_response")
+              upload_method=$(jq -r '
+                [
+                  .. | objects | to_entries[]? |
+                  select(.key | ascii_downcase | test("^(method|upload_method)$")) |
+                  .value | strings | ascii_upcase | select(. == "POST" or . == "PUT")
+                ] | first // empty
+              ' "$upload_response")
+
+              upload_command=(curl --fail --silent --show-error --proto '=https' --max-redirs 0 --connect-timeout 30 --max-time 1800)
+              # A returned presigned host never receives the GitCode personal access token.
+              if [ "$upload_host" = api.gitcode.com ]; then
+                upload_command+=(--url-query "access_token=$GITCODE_TOKEN")
+              fi
+              echo "::notice::Uploading $asset_name to GitCode (attempt $upload_attempt/$upload_attempts)"
+              if [ "${#form_fields[@]}" -gt 0 ] || [ "$upload_method" = POST ]; then
+                if "${upload_command[@]}" "${upload_headers[@]}" --request POST "${form_fields[@]}" \
+                  --form "file=@$asset_path;filename=$asset_name" "$upload_url" > /dev/null; then
+                  return 0
+                fi
+              elif [ -z "$upload_method" ] || [ "$upload_method" = PUT ]; then
+                if "${upload_command[@]}" "${upload_headers[@]}" --upload-file "$asset_path" \
+                  "$upload_url" > /dev/null; then
+                  return 0
+                fi
+              else
+                echo "::error::GitCode returned an unsupported upload method: $upload_method"
+                exit 1
+              fi
+
+              echo "::warning::GitCode upload failed for $asset_name (attempt $upload_attempt/$upload_attempts)"
+              if [ "$upload_attempt" -lt "$upload_attempts" ]; then
+                sleep $((upload_attempt * 10))
+              fi
+            done
+
+            echo "::error::GitCode upload failed for $asset_name after $upload_attempts attempts"
+            return 1
+          }
+
+          verify_asset() {
+            local release_tag="$1"
+            local asset_name="$2"
+            local public_url response status content_range
+            public_url="https://gitcode.com/$mirror_owner/$mirror_repo/releases/download/$(urlencode "$release_tag")/$(urlencode "$asset_name")"
+            # --range 0-0 sends Range: bytes=0-0; HEAD is deliberately never used.
+            response=$(curl --location --fail --silent --show-error --globoff \
+              --proto '=https' --proto-redir '=https' --range 0-0 \
+              --header 'Range: bytes=0-0' --output /dev/null \
+              --write-out '%{http_code}\n%header{content-range}' "$public_url")
+            status=${response%%$'\n'*}
+            content_range=${response#*$'\n'}
+            if [ "$status" != 206 ] || \
+              [[ ! "Content-Range: $content_range" =~ ^Content-Range:\ bytes\ 0-0/[1-9][0-9]*$ ]]; then
+              echo "::warning::Range verification failed for $release_tag/$asset_name"
+              return 1
+            fi
+          }
+
+          rm -rf work mirror
+          mkdir -p work/releases work/uploads work/assets
+          require_published_github_release
+          current_assets_dir="work/current-$(hash_value "$tag")"
+          mkdir -p "$current_assets_dir"
+
+          if [ "$MANIFEST_ONLY" = true ]; then
+            gh release download "$tag" --repo "$source_repo" --dir "$current_assets_dir" \
+              --pattern latest.json
+            latest_file="$current_assets_dir/latest.json"
+            test -f "$latest_file" || { echo "::error::GitHub Release $tag has no latest.json"; exit 1; }
+            cp "$latest_file" work/source-latest.json
+            publish_manifest work/source-latest.json
+            exit 0
+          fi
+
+          gh release download "$tag" --repo "$source_repo" --dir "$current_assets_dir"
+          gh release view "$tag" --repo "$source_repo" --json assets > work/current-assets.json
+          latest_file="$current_assets_dir/latest.json"
+          test -f "$latest_file" || { echo "::error::GitHub Release $tag has no latest.json"; exit 1; }
+          cp "$latest_file" work/source-latest.json
+
+          # Promotion is independent of updater URLs: both platforms may be carried from older tags.
+          promote_requested_release "$tag"
+
+          node scripts/gitcode-mirror-plan.mjs \
+            work/source-latest.json work/current-assets.json "$tag" work/assets.json
+          node scripts/gitcode-manifest.mjs work/source-latest.json work/latest.json
+          test -s work/assets.json || { echo '::error::latest.json has no updater assets'; exit 1; }
+
+          while IFS= read -r asset; do
+            asset_tag=$(jq -r '.tag' <<< "$asset")
+            asset_name=$(jq -r '.fileName' <<< "$asset")
+            asset_source=$(jq -r '.source' <<< "$asset")
+            asset_path="work/assets/$(asset_key "$asset_tag" "$asset_name")"
+            case "$asset_source" in
+              rewritten-manifest)
+                cp work/latest.json "$asset_path"
+                ;;
+              current-download)
+                current_asset="$current_assets_dir/$asset_name"
+                test -f "$current_asset" || { echo "::error::Downloaded GitHub Release is missing $asset_name"; exit 1; }
+                cp -- "$current_asset" "$asset_path"
+                ;;
+              carried-updater)
+                source_url=$(jq -r '.sourceUrl' <<< "$asset")
+                curl --fail --silent --show-error --location --globoff \
+                  --proto '=https' --proto-redir '=https' --output "$asset_path" "$source_url"
+                ;;
+              *)
+                echo "::error::Unknown mirror asset source $asset_source"
+                exit 1
+                ;;
+            esac
+            test -s "$asset_path" || { echo '::error::Downloaded GitHub asset is empty'; exit 1; }
+            upload_asset "$asset_tag" "$asset_path" "$asset_name"
+            verify_asset "$asset_tag" "$asset_name" || {
+              echo "::error::Uploaded GitCode asset failed verification: $asset_tag/$asset_name"
+              exit 1
+            }
+          done < <(jq -c '.[]' work/assets.json)
+
+          publish_manifest work/latest.json
+
+      - name: Remove temporary GitCode credential file
+        if: always()
+        run: rm -f "${CREDENTIAL_FILE:-}"

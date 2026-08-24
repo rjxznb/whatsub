@@ -130,7 +130,7 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
         return Err("当前操作系统不支持 yt-dlp 自动更新".into());
     }
 
-    // Resolve one immutable upstream version first. DogeCloud and GitHub then
+    // Resolve one immutable upstream version first. GitCode and GitHub then
     // serve byte-identical filenames under that version rather than mutable
     // `latest` paths that CDN edges could cache inconsistently.
     let client = reqwest::Client::builder()
@@ -159,7 +159,7 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     ));
 
     // 120s total timeout — yt-dlp.exe is ~20MB on Win, ~30MB on Mac.
-    // DogeCloud CDN is primary (mainland CN); GitHub is fallback. A short
+    // GitCode is primary (mainland CN); GitHub is fallback. A short
     // connect_timeout bounds the worst case: if the CDN primary hangs at
     // connect, we fall back to GitHub in ~15s instead of waiting the full 120s.
     let bytes = match download_bytes(&client, &primary).await {
@@ -198,10 +198,10 @@ pub async fn yt_dlp_update() -> Result<YtDlpStatus, String> {
     })
 }
 
-/// DogeCloud-hosted version manifest URL, followed by the official upstream
+/// GitCode-hosted version manifest URL, followed by the official upstream
 /// GitHub Release API fallback. The fixed `yt-dlp` tag is not the app latest.
 const YTDLP_MANIFEST_URLS: [&str; 2] = [
-    "https://download.eversay.cc/yt-dlp/yt-dlp-version.json",
+    "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp-version.json",
     "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
 ];
 const YTDLP_MANIFEST_USER_AGENT: &str = "whatsub/yt-dlp-updater";
@@ -209,7 +209,7 @@ const YTDLP_MANIFEST_USER_AGENT: &str = "whatsub/yt-dlp-updater";
 fn yt_dlp_download_urls(version: &str, windows: bool) -> (String, String) {
     let filename = if windows { "yt-dlp.exe" } else { "yt-dlp_macos" };
     (
-        format!("https://download.eversay.cc/yt-dlp/{version}/{filename}"),
+        format!("https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/{filename}"),
         format!("https://github.com/yt-dlp/yt-dlp/releases/download/{version}/{filename}"),
     )
 }
@@ -360,18 +360,18 @@ mod tests {
     }
 
     #[test]
-    fn yt_dlp_runtime_sources_prefer_dogecloud_before_official_github() {
+    fn yt_dlp_runtime_sources_prefer_gitcode_before_official_github() {
         assert_eq!(
             yt_dlp_download_urls("2026.08.20", true),
             (
-                "https://download.eversay.cc/yt-dlp/2026.08.20/yt-dlp.exe".to_string(),
+                "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp.exe".to_string(),
                 "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.20/yt-dlp.exe".to_string(),
             )
         );
         assert_eq!(
             yt_dlp_download_urls("2026.08.20", false),
             (
-                "https://download.eversay.cc/yt-dlp/2026.08.20/yt-dlp_macos".to_string(),
+                "https://gitcode.com/rjxznb/whatsub-release/releases/download/yt-dlp/yt-dlp_macos".to_string(),
                 "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.20/yt-dlp_macos".to_string(),
             )
         );

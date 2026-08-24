@@ -805,8 +805,6 @@ jobs:
       needs.build-windows.result == 'success' &&
       needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
-    # CI publishes GitHub only. Mainland CDN files are uploaded manually from
-    # a domestic workstation after downloading this release's signed assets.
     timeout-minutes: 15
     steps:
       - name: Checkout (need tauri.conf.json for version)
@@ -888,12 +886,13 @@ jobs:
 
           gh release upload "$TAG" latest.json --repo "$REPO" --clobber
 
-          # Prepare a ready-to-upload mainland manifest. The operator uploads
-          # the three binaries to app/<tag>/manual/ in DogeCloud, then uploads
-          # this file to the bucket root as latest.json only after verification.
-          node scripts/dogecloud-manifest.mjs \
-            latest.json dogecloud-latest.json dogecloud-assets.json \
-            https://download.eversay.cc "$TAG" manual
-          gh release upload "$TAG" dogecloud-latest.json --repo "$REPO" --clobber
-
           echo "::notice::Published $TAG (windows-x86_64 darwin-aarch64)"
+
+  mirror-gitcode:
+    needs: publish
+    if: ${{ !inputs.dry_run && needs.publish.result == 'success' }}
+    uses: ./.github/workflows/mirror-gitcode.yml
+    with:
+      tag: ${{ needs.publish.outputs.tag }}
+    secrets:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}

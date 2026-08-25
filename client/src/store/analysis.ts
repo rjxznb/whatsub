@@ -3,6 +3,7 @@ import type {
   AnalysisCheckpoint,
   AnalysisResult,
   CheckpointedAnalysis,
+  SrtCue,
   Subtitle,
 } from "../llm/types";
 import type { AnalysisPreview } from "../llm/analyze";
@@ -19,6 +20,56 @@ export function dedupSubtitles(subs: Subtitle[]): Subtitle[] {
     out.push(s);
   }
   return out;
+}
+
+function subtitleIdentity(value: Pick<SrtCue, "time" | "endTime" | "text">): string {
+  return `${value.time}|${value.endTime}|${value.text}`;
+}
+
+/** Keep the complete English transcript visible while generated fields arrive. */
+export function subtitlesWithEnglishBaseline(
+  sourceCues: readonly SrtCue[],
+  generated: readonly Subtitle[],
+): Subtitle[] {
+  const generatedByIdentity = new Map<string, Subtitle[]>();
+  for (const subtitle of dedupSubtitles([...generated])) {
+    const key = subtitleIdentity(subtitle);
+    const matches = generatedByIdentity.get(key) ?? [];
+    matches.push(subtitle);
+    generatedByIdentity.set(key, matches);
+  }
+
+  const displayed = sourceCues.map((cue) => {
+    const matches = generatedByIdentity.get(subtitleIdentity(cue));
+    const resolved = matches?.shift();
+    if (matches?.length === 0) generatedByIdentity.delete(subtitleIdentity(cue));
+    return resolved ?? {
+      time: cue.time,
+      endTime: cue.endTime,
+      text: cue.text,
+      translation: "",
+      isKeyPoint: false,
+      highlightWords: [],
+      keyNotes: {},
+      highlightTranslations: {},
+    };
+  });
+  for (const remaining of generatedByIdentity.values()) displayed.push(...remaining);
+  return displayed;
+}
+
+function displayedSubtitles(
+  analysis: CheckpointedAnalysis,
+  preview: AnalysisPreview | null,
+  sourceCues: readonly SrtCue[],
+): Subtitle[] {
+  const generated = dedupSubtitles([
+    ...analysis.subtitles,
+    ...(preview?.subtitles ?? []),
+  ]);
+  return sourceCues.length > 0 && analysis.checkpoint.phase !== "complete"
+    ? subtitlesWithEnglishBaseline(sourceCues, generated)
+    : generated;
 }
 
 export type AnalysisPhase =
@@ -61,11 +112,16 @@ interface AnalysisState {
   appendSubtitle: (s: Subtitle) => void;
   setSubtitles: (s: Subtitle[]) => void;
   setSummary: (s: Omit<AnalysisResult, "subtitles">) => void;
-  setCommittedAnalysis: (analysis: CheckpointedAnalysis, totalCues: number) => void;
+  setCommittedAnalysis: (
+    analysis: CheckpointedAnalysis,
+    totalCues: number,
+    sourceCues?: readonly SrtCue[],
+  ) => void;
   setAnalysisPreview: (
     committed: CheckpointedAnalysis,
     preview: AnalysisPreview | null,
     totalCues: number,
+    sourceCues?: readonly SrtCue[],
   ) => void;
   setRetryMessage: (message: string | null) => void;
   setError: (
@@ -115,7 +171,17 @@ export const useAnalysis = create<AnalysisState>((set) => ({
       quotaError: null,
     }),
   setPhase: (phase, percent) =>
-    set((s) => ({ phase, progressPercent: percent ?? s.progressPercent })),
+    set((s) => ({
+      phase,
+      progressPercent: percent ?? s.progressPercent,
+      ...(phase === "analyzing" ? {
+        errorMessage: null,
+        errorStage: null,
+        errorUpsell: false,
+        quotaError: null,
+        retryMessage: null,
+      } : {}),
+    })),
   appendSubtitle: (s) =>
     set((st) => {
       // Defensive dedup at append time too — if the same cue arrives via two
@@ -128,9 +194,9 @@ export const useAnalysis = create<AnalysisState>((set) => ({
     }),
   setSubtitles: (s) => set({ subtitles: dedupSubtitles(s) }),
   setSummary: (s) => set({ summary: s }),
-  setCommittedAnalysis: (analysis, totalCues) =>
+  setCommittedAnalysis: (analysis, totalCues, sourceCues = []) =>
     set({
-      subtitles: dedupSubtitles(analysis.subtitles),
+      subtitles: displayedSubtitles(analysis, null, sourceCues),
       summary: { keyPhrases: analysis.keyPhrases },
       checkpoint: analysis.checkpoint,
       committedCueOffset: analysis.checkpoint.nextCueOffset,
@@ -141,12 +207,9 @@ export const useAnalysis = create<AnalysisState>((set) => ({
         : 100,
       retryMessage: null,
     }),
-  setAnalysisPreview: (committed, preview, totalCues) =>
+  setAnalysisPreview: (committed, preview, totalCues, sourceCues = []) =>
     set({
-      subtitles: dedupSubtitles([
-        ...committed.subtitles,
-        ...(preview?.subtitles ?? []),
-      ]),
+      subtitles: displayedSubtitles(committed, preview, sourceCues),
       summary: { keyPhrases: committed.keyPhrases },
       checkpoint: committed.checkpoint,
       committedCueOffset: committed.checkpoint.nextCueOffset,

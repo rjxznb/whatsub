@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAnalysis } from "../store/analysis";
 import type { PersistedAnalysisSession } from "../llm/analysisSession";
-import type { CheckpointedAnalysis, Subtitle } from "../llm/types";
+import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import type { AnalysisPreview } from "../llm/analyze";
 import {
   canEditSubtitles,
   ownsForegroundAnalysis,
   ownsForegroundOperation,
   restoreForegroundDurablePreview,
+  subtitlesForManualPersistence,
 } from "./Player";
 
 const subtitle = (index: number): Subtitle => ({
@@ -164,12 +165,19 @@ describe("Player committed resume state", () => {
       close: async () => undefined,
     } satisfies PersistedAnalysisSession;
 
+    const sourceCues: SrtCue[] = [1, 51, 52].map((index) => ({
+      index,
+      time: index,
+      endTime: index + 1,
+      text: `Output ${index}`,
+    }));
     useAnalysis.getState().setAnalysisPreview(committed, durablePreview, 100);
-    restoreForegroundDurablePreview("video-1", session, 100);
+    restoreForegroundDurablePreview("video-1", session, 100, sourceCues);
 
-    expect(useAnalysis.getState().subtitles).toEqual([
-      ...committed.subtitles,
-      subtitle(51),
+    expect(useAnalysis.getState().subtitles.map((cue) => cue.translation)).toEqual([
+      "译文 1",
+      "译文 51",
+      "",
     ]);
     expect(useAnalysis.getState().checkpoint).toEqual(committed.checkpoint);
     expect(useAnalysis.getState().inflightCueCount).toBe(1);
@@ -199,6 +207,24 @@ describe("Player committed resume state", () => {
     expect(canEditSubtitles("analyzing")).toBe(false);
     expect(canEditSubtitles("paused")).toBe(true);
     expect(canEditSubtitles("complete")).toBe(true);
+  });
+
+  it("does not promote untranslated English placeholders during a manual save", () => {
+    const committed = subtitle(0);
+    const placeholder = { ...subtitle(1), translation: "" };
+    const manuallyTranslated = { ...subtitle(2), translation: "用户填写的译文" };
+    const sourceCues: SrtCue[] = [0, 1, 2].map((index) => ({
+      index,
+      time: index,
+      endTime: index + 1,
+      text: `Output ${index}`,
+    }));
+
+    expect(subtitlesForManualPersistence(
+      [committed, placeholder, manuallyTranslated],
+      [committed],
+      sourceCues,
+    )).toEqual([committed, manuallyTranslated]);
   });
 
   it("keeps the durable checkpoint when managed quota is exhausted", () => {

@@ -8,7 +8,11 @@ import type {
   SrtCue,
   Subtitle,
 } from "./types";
-import type { PersistedAnalysisSession } from "./analysisSession";
+import {
+  analysisPreviewFromJournal,
+  type PersistedAnalysisSession,
+} from "./analysisSession";
+import { mergeInflightEntries } from "./analysisJournal";
 import type { AnalysisPreview } from "./analyze";
 import { abortableDelay } from "./retry";
 import { API_BASE } from "../lib/apiBase";
@@ -19,6 +23,8 @@ const QUEUE_RETRY_MS = 4_000;
 const QUEUE_RETRY_ATTEMPTS = 15;
 const POLL_RETRY_MS = 1_000;
 const POLL_RETRY_ATTEMPTS = 4;
+const CANCEL_RESUME_RETRY_MS = 500;
+const CANCEL_RESUME_RETRY_ATTEMPTS = 20;
 const CREATE_RETRY_MS = 1_000;
 const CREATE_RETRY_ATTEMPTS = 4;
 const MANAGED_BATCH_SIZE = 50;
@@ -71,10 +77,53 @@ export interface ManagedAnalysisOptions {
   session: PersistedAnalysisSession;
   signal?: AbortSignal;
   onCommitted?: (analysis: CheckpointedAnalysis) => void;
+  onJobReady?: (jobId: string) => void;
   onPreview?: (
     committed: CheckpointedAnalysis,
     preview: AnalysisPreview | null,
-  ) => void;
+  ) => void | Promise<void>;
+}
+
+export async function checkpointManagedPreview(
+  session: PersistedAnalysisSession,
+  style: TranslationStyle,
+  committed: CheckpointedAnalysis,
+  preview: AnalysisPreview | null,
+  publish?: (
+    analysis: CheckpointedAnalysis,
+    preview: AnalysisPreview | null,
+  ) => void | Promise<void>,
+): Promise<void> {
+  if (!preview) {
+    await publish?.(
+      committed,
+      session.inflight ? analysisPreviewFromJournal(session.inflight) : null,
+    );
+    return;
+  }
+
+  const existing = session.inflight;
+  if (existing && (
+    existing.startCueOffset !== preview.startCueOffset
+    || existing.endCueOffset !== preview.endCueOffset
+  )) {
+    throw new TypeError("managed preview changed batch before canonical commit");
+  }
+  const base = existing ?? {
+    version: 1 as const,
+    journalId: crypto.randomUUID(),
+    transcriptGeneration: session.transcriptGeneration,
+    transcriptFingerprint: committed.checkpoint.transcriptFingerprint,
+    analysisStyle: style,
+    baseRevision: committed.checkpoint.revision,
+    startCueOffset: preview.startCueOffset,
+    endCueOffset: preview.endCueOffset,
+    entries: [],
+  };
+  const saved = await session.saveInflight(
+    mergeInflightEntries(base, preview.entries),
+  );
+  await publish?.(committed, analysisPreviewFromJournal(saved));
 }
 
 function asSrt(cues: readonly SrtCue[]): string {
@@ -168,6 +217,13 @@ export function isRetryableManagedError(error: unknown): boolean {
   );
 }
 
+export function managedAnalysisErrorMessage(error: unknown): string {
+  if (isRetryableManagedError(error)) {
+    return "连接服务器失败，当前进度已经保存，请检查网络后继续解析。";
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function isManagedErrorCode(error: unknown, code: string): boolean {
   return error instanceof ManagedRequestError && error.code === code;
 }
@@ -184,6 +240,51 @@ async function pollRequest<T>(path: string, signal?: AbortSignal): Promise<T> {
         throw error;
       }
       await abortableDelay(POLL_RETRY_MS, signal);
+    }
+  }
+}
+
+export async function cancelManagedAnalysis(jobId: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await request<ManagedJob>(
+        `/jobs/${encodeURIComponent(jobId)}/cancel`,
+        { method: "POST", body: "{}" },
+      );
+      return;
+    } catch (error) {
+      if (!isRetryableManagedError(error) || attempt >= POLL_RETRY_ATTEMPTS - 1) {
+        throw error;
+      }
+      await abortableDelay(POLL_RETRY_MS);
+    }
+  }
+}
+
+export async function resumeManagedAnalysisJob(
+  jobId: string,
+  signal?: AbortSignal,
+  retryDelayMs = CANCEL_RESUME_RETRY_MS,
+): Promise<ManagedJob> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await request<ManagedJob>(
+        `/jobs/${encodeURIComponent(jobId)}/resume`,
+        { method: "POST", body: "{}" },
+        signal,
+      );
+    } catch (error) {
+      const waitingForCancelledFence = isManagedErrorCode(
+        error,
+        "response_unrecoverable",
+      );
+      if (
+        !waitingForCancelledFence
+        || attempt >= CANCEL_RESUME_RETRY_ATTEMPTS - 1
+      ) {
+        throw error;
+      }
+      await abortableDelay(retryDelayMs, signal);
     }
   }
 }
@@ -329,14 +430,28 @@ export function applyManagedPreviewEvent(
   }
 
   if (envelope.eventType === "batch_reset") {
+    const nextAttempt = isRecord(envelope.payload)
+      && Number.isInteger(envelope.payload.nextAttempt)
+      && typeof envelope.payload.nextAttempt === "number"
+      && envelope.payload.nextAttempt > attempt
+      ? envelope.payload.nextAttempt
+      : attempt + 1;
+    const retained = state?.batchIndex === batchIndex && state.attempt === attempt
+      ? new Map(state.subtitles)
+      : new Map<number, Subtitle>();
     return {
       state: {
         batchIndex,
-        attempt,
+        attempt: nextAttempt,
         lastEventId: eventId >= 0 ? eventId : (state?.lastEventId ?? -1),
-        subtitles: new Map(),
+        subtitles: retained,
       },
-      preview: null,
+      preview: eventPreview({
+        batchIndex,
+        attempt: nextAttempt,
+        lastEventId: eventId >= 0 ? eventId : (state?.lastEventId ?? -1),
+        subtitles: retained,
+      }, committed, totalCues),
       changed: true,
     };
   }
@@ -394,7 +509,7 @@ async function consumeManagedEvents(
   onPreview: (
     committed: CheckpointedAnalysis,
     preview: AnalysisPreview | null,
-  ) => void,
+  ) => void | Promise<void>,
 ): Promise<void> {
   const response = await fetch(
     `${BASE_URL}/jobs/${encodeURIComponent(jobId)}/events`,
@@ -415,7 +530,7 @@ async function consumeManagedEvents(
   let eventName = "message";
   let eventData = "";
   let previewState: ManagedPreviewState | null = null;
-  const dispatch = () => {
+  const dispatch = async () => {
     let envelope: ManagedEventEnvelope | null = null;
     try {
       envelope = JSON.parse(eventData) as ManagedEventEnvelope;
@@ -432,15 +547,15 @@ async function consumeManagedEvents(
         submittedCues.map((cue) => cue.index),
       );
       previewState = result.state;
-      if (result.changed) onPreview(committedSnapshot, result.preview);
+      if (result.changed) await onPreview(committedSnapshot, result.preview);
     }
     eventName = "message";
     eventData = "";
   };
 
-  const consumeLine = (line: string) => {
+  const consumeLine = async (line: string) => {
     if (line === "") {
-      if (eventData) dispatch();
+      if (eventData) await dispatch();
       return;
     }
     if (line.startsWith("event:")) eventName = line.slice(6).trim();
@@ -456,7 +571,7 @@ async function consumeManagedEvents(
       let newline = buffer.search(/[\r\n]/);
       while (newline >= 0) {
         const delimiter = buffer[newline];
-        consumeLine(buffer.slice(0, newline));
+        await consumeLine(buffer.slice(0, newline));
         buffer = buffer.slice(newline + 1);
         if (delimiter === "\r" && buffer.startsWith("\n"))
           buffer = buffer.slice(1);
@@ -464,8 +579,8 @@ async function consumeManagedEvents(
       }
     }
     buffer += decoder.decode();
-    if (buffer) consumeLine(buffer);
-    if (eventData) dispatch();
+    if (buffer) await consumeLine(buffer);
+    if (eventData) await dispatch();
   } finally {
     await reader.cancel().catch(() => undefined);
   }
@@ -632,6 +747,7 @@ export async function executeManagedAnalysis(
       await abortableDelay(delayMs, options.signal);
     }
   }
+  options.onJobReady?.(job.jobId);
 
   let cursor = initialCursor;
   let active = job;
@@ -651,7 +767,13 @@ export async function executeManagedAnalysis(
       () => current,
       options.cues.length,
       eventController.signal,
-      forwardPreview,
+      (committed, preview) => checkpointManagedPreview(
+        options.session,
+        options.style,
+        committed,
+        preview,
+        forwardPreview,
+      ),
     ).catch(() => undefined);
   }
   try {
@@ -719,7 +841,7 @@ export async function executeManagedAnalysis(
           ),
         );
         options.onCommitted?.(current);
-        options.onPreview?.(current, null);
+        await options.onPreview?.(current, null);
         cursor = batch.batchIndex;
       }
       // A completed results page is authoritative for desktop-only jobs. They
@@ -777,6 +899,10 @@ export async function executeManagedAnalysis(
         active.status === "failed" ||
         active.status === "cancelled"
       ) {
+        if (active.status === "cancelled") {
+          active = await resumeManagedAnalysisJob(active.jobId, options.signal);
+          continue;
+        }
         if (
           active.status === "failed" &&
           [

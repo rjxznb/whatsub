@@ -1,11 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CheckpointedAnalysis, Subtitle } from "./types";
+const invokeMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/plugin-http", () => ({ fetch: fetchMock }));
 import {
   applyManagedPreviewEvent,
   buildManagedJobPayload,
+  cancelManagedAnalysis,
   canFinalizeManagedCompletion,
+  checkpointManagedPreview,
   isManagedErrorCode,
   isRetryableManagedError,
+  managedAnalysisErrorMessage,
+  resumeManagedAnalysisJob,
   managedCursorForCheckpoint,
   ManagedRequestError,
   mergeManagedSummary,
@@ -13,6 +21,7 @@ import {
   requiresExternalQuotaRecovery,
   type ManagedPreviewState,
 } from "./managedAnalysis";
+import type { PersistedAnalysisSession } from "./analysisSession";
 
 function subtitle(index: number): Subtitle {
   return {
@@ -106,6 +115,16 @@ describe("managed desktop job contract", () => {
 });
 
 describe("managed request errors", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue("session-token");
+    fetchMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("classifies queue errors independently of their diagnostic suffix", () => {
     const error = new ManagedRequestError(429, "queue_limit", "relay_busy");
     expect(isManagedErrorCode(error, "queue_limit")).toBe(true);
@@ -124,13 +143,54 @@ describe("managed request errors", () => {
       isRetryableManagedError(new ManagedRequestError(400, "invalid")),
     ).toBe(false);
   });
+
+  it("hides raw request URLs in the user-facing network error", () => {
+    const error = new Error(
+      "error sending request for url (https://whatsub.eversay.cc/api/library/mobile-analysis/jobs/private/results)",
+    );
+
+    expect(managedAnalysisErrorMessage(error)).toBe(
+      "连接服务器失败，当前进度已经保存，请检查网络后继续解析。",
+    );
+  });
+
+  it("sends an idempotent server cancellation for the active managed job", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      jobId: "job-1",
+      status: "cancelled",
+    }), { status: 200 }));
+
+    await cancelManagedAnalysis("job-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/jobs\/job-1\/cancel$/),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("waits for a cancelled request fence to settle before resuming", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: "response_unrecoverable",
+      }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        jobId: "job-1",
+        status: "queued",
+      }), { status: 200 }));
+
+    await expect(resumeManagedAnalysisJob("job-1", undefined, 0)).resolves.toMatchObject({
+      jobId: "job-1",
+      status: "queued",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("managed SSE preview ordering", () => {
   const committed = analysis(0, 0);
   const indexes = Array.from({ length: 100 }, (_, index) => index);
 
-  it("ignores stale events and resets only the active batch attempt", () => {
+  it("ignores stale events and rebases accepted cues into the retry attempt", () => {
     let state: ManagedPreviewState | null = null;
     let result = applyManagedPreviewEvent(
       state,
@@ -206,13 +266,17 @@ describe("managed SSE preview ordering", () => {
         eventType: "batch_reset",
         batchIndex: 0,
         attempt: 2,
+        payload: { abandonedAttempt: 2, nextAttempt: 3 },
       },
       committed,
       100,
       indexes,
     );
     expect(result.changed).toBe(true);
-    expect(result.preview).toBeNull();
+    expect(result.state?.attempt).toBe(3);
+    expect(result.preview?.entries.map((entry) => entry.cueOffset)).toEqual([
+      3,
+    ]);
     state = result.state;
 
     result = applyManagedPreviewEvent(
@@ -230,7 +294,9 @@ describe("managed SSE preview ordering", () => {
     );
     expect(result.changed).toBe(false);
     expect(result.state).toBe(state);
-    expect(result.preview).toBeNull();
+    expect(result.preview?.entries.map((entry) => entry.cueOffset)).toEqual([
+      3,
+    ]);
   });
 
   it("rejects cues outside the active committed batch", () => {
@@ -260,6 +326,7 @@ describe("managed SSE preview ordering", () => {
         eventType: "batch_reset",
         batchIndex: 0,
         attempt: 2,
+        payload: { abandonedAttempt: 2, nextAttempt: 3 },
       },
       committed,
       100,
@@ -269,7 +336,7 @@ describe("managed SSE preview ordering", () => {
     expect(reset.changed).toBe(true);
     expect(reset.state).toMatchObject({
       batchIndex: 0,
-      attempt: 2,
+      attempt: 3,
       lastEventId: 8,
     });
 
@@ -290,4 +357,48 @@ describe("managed SSE preview ordering", () => {
     expect(staleCue.changed).toBe(false);
     expect(staleCue.state).toBe(reset.state);
   });
+
+  it("persists each managed cue before publishing it to the UI", async () => {
+    const order: string[] = [];
+    let inflight: PersistedAnalysisSession["inflight"] = null;
+    const session = {
+      videoId: "video-1",
+      lease: "lease-1",
+      transcriptGeneration: "generation-1",
+      analysis: committed,
+      get inflight() {
+        return inflight;
+      },
+      async save() {
+        return committed;
+      },
+      async saveInflight(next: NonNullable<PersistedAnalysisSession["inflight"]>) {
+        order.push("disk");
+        inflight = next;
+        return next;
+      },
+      async close() {},
+    } satisfies PersistedAnalysisSession;
+    const preview = {
+      startCueOffset: 0,
+      endCueOffset: 50,
+      entries: [{ cueOffset: 2, subtitle: subtitle(2) }],
+      subtitles: [subtitle(2)],
+    };
+
+    await checkpointManagedPreview(
+      session,
+      "colloquial",
+      committed,
+      preview,
+      (_analysis, published) => {
+        order.push("ui");
+        expect(published?.entries.map((entry) => entry.cueOffset)).toEqual([2]);
+      },
+    );
+
+    expect(order).toEqual(["disk", "ui"]);
+    expect(session.inflight?.entries.map((entry) => entry.cueOffset)).toEqual([2]);
+  });
+
 });

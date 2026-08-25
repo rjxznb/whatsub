@@ -16,6 +16,7 @@ import { useSettings } from "./settings";
 import { useLibrary } from "./library";
 import type { CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import type { TranslationStyle } from "../types/settings";
+import { subtitlesWithEnglishBaseline } from "./analysis";
 import {
   quotaDetailsFromRelayError,
   type QuotaExhaustedDetails,
@@ -60,6 +61,7 @@ interface BgRuntime {
   controller: AbortController;
   disposition: RuntimeDisposition;
   needsSessionReload: boolean;
+  managed: boolean;
   runner: Promise<void>;
 }
 
@@ -98,6 +100,7 @@ export function runInBackground(opts: RunInBackgroundOptions): void {
     controller: new AbortController(),
     disposition: "background",
     needsSessionReload: false,
+    managed: useSettings.getState().settings.vendorId === "whatsub-managed",
     runner: Promise.resolve(),
   };
   runtimes.set(opts.videoId, runtime);
@@ -141,6 +144,7 @@ export function retranscribeAndAnalyzeInBackground(opts: RetranscribeBgOptions):
     controller: new AbortController(),
     disposition: "background",
     needsSessionReload: false,
+    managed: useSettings.getState().settings.vendorId === "whatsub-managed",
     runner: Promise.resolve(),
   };
   runtimes.set(opts.videoId, runtime);
@@ -240,7 +244,7 @@ async function driveAnalysis(runtime: BgRuntime): Promise<void> {
 
   try {
     const settings = useSettings.getState().settings;
-    const completed = settings.vendorId === "whatsub-managed"
+    const completed = runtime.managed
       ? await (() => {
           const entry = useLibrary.getState().library?.videos?.find((v) => v.id === runtime.videoId);
           if (!entry) throw new Error("找不到视频库条目，无法启动托管解析");
@@ -302,6 +306,12 @@ function publishAnalysis(
   preview: AnalysisPreview | null = null,
 ): void {
   const previous = useBgAnalyses.getState().jobs[runtime.videoId];
+  const generated = [...analysis.subtitles, ...(preview?.subtitles ?? [])];
+  const visible = phase !== "done"
+    && analysis.checkpoint.phase !== "complete"
+    && runtime.cues
+    ? subtitlesWithEnglishBaseline(runtime.cues, generated)
+    : generated;
   useBgAnalyses.setState((state) => ({
     jobs: {
       ...state.jobs,
@@ -320,7 +330,7 @@ function publishAnalysis(
         quotaError: null,
         retryMessage: null,
         startedAt: previous?.startedAt ?? Date.now(),
-        subtitles: [...analysis.subtitles, ...(preview?.subtitles ?? [])],
+        subtitles: visible,
         summary: { keyPhrases: analysis.keyPhrases },
       },
     },

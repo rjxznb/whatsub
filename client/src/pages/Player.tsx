@@ -29,7 +29,11 @@ import {
   openStoredAnalysisSession,
   type PersistedAnalysisSession,
 } from "../llm/analysisSession";
-import { executeManagedAnalysis } from "../llm/managedAnalysis";
+import {
+  cancelManagedAnalysis,
+  executeManagedAnalysis,
+  managedAnalysisErrorMessage,
+} from "../llm/managedAnalysis";
 import { analysisRetryMessage } from "../llm/analysisRetryMessage";
 import { getProvider } from "../llm/providers";
 import { RelayError } from "../llm/providers/relayErrors";
@@ -41,7 +45,7 @@ import {
 } from "../store/backgroundAnalyses";
 import { captionStyleFromSettings } from "../types/settings";
 import type { Settings } from "../types/settings";
-import type { AnalysisResult, CheckpointedAnalysis, SrtCue } from "../llm/types";
+import type { AnalysisResult, CheckpointedAnalysis, SrtCue, Subtitle } from "../llm/types";
 import { useTutorRuntime } from "../store/tutorRuntime";
 import { planLesson } from "../tutor/lessonPlanLLM";
 import { loadLearnerProfile } from "../tutor/learnerProfile";
@@ -53,6 +57,29 @@ type Tab = "subtitles" | "keyPhrases";
 
 export function canEditSubtitles(phase: AnalysisPhase): boolean {
   return phase !== "analyzing";
+}
+
+function cueIdentity(value: Pick<SrtCue, "time" | "endTime" | "text">): string {
+  return `${value.time}|${value.endTime}|${value.text}`;
+}
+
+/** Remove UI-only English rows before a paused analysis is manually saved. */
+export function subtitlesForManualPersistence(
+  visible: readonly Subtitle[],
+  committed: readonly Subtitle[],
+  sourceCues: readonly SrtCue[],
+): Subtitle[] {
+  const committedIds = new Set(committed.map(cueIdentity));
+  const sourceIds = new Set(sourceCues.map(cueIdentity));
+  return visible.filter((subtitle) => {
+    const identity = cueIdentity(subtitle);
+    if (committedIds.has(identity) || !sourceIds.has(identity)) return true;
+    return subtitle.translation.trim().length > 0
+      || subtitle.isKeyPoint
+      || subtitle.highlightWords.length > 0
+      || Object.keys(subtitle.keyNotes).length > 0
+      || Object.keys(subtitle.highlightTranslations).length > 0;
+  });
 }
 
 export function captionExportGeometry(
@@ -72,6 +99,7 @@ export function restoreForegroundDurablePreview(
   videoId: string,
   session: PersistedAnalysisSession,
   totalCues: number,
+  sourceCues: readonly SrtCue[] = [],
 ): void {
   const state = useAnalysis.getState();
   if (state.videoId !== videoId) return;
@@ -79,6 +107,7 @@ export function restoreForegroundDurablePreview(
     session.analysis,
     session.inflight ? analysisPreviewFromJournal(session.inflight) : null,
     totalCues,
+    sourceCues,
   );
 }
 
@@ -294,6 +323,9 @@ export function Player() {
   const sessionRef = useRef<PersistedAnalysisSession | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const analysisRunRef = useRef<Promise<void> | null>(null);
+  const activeManagedJobIdRef = useRef<string | null>(null);
+  const managedPauseTailRef = useRef<Promise<void>>(Promise.resolve());
+  const pauseRequestedRef = useRef(false);
   const cuesRef = useRef<SrtCue[] | null>(null);
   const manualSaveTailRef = useRef<Promise<void>>(Promise.resolve());
   const retranscribeEpochRef = useRef(0);
@@ -311,7 +343,11 @@ export function Player() {
       try {
         const state = useAnalysis.getState();
         const saved = await session.save({
-          subtitles: state.subtitles,
+          subtitles: subtitlesForManualPersistence(
+            state.subtitles,
+            session.analysis.subtitles,
+            cues,
+          ),
           keyPhrases: state.summary?.keyPhrases ?? [],
           checkpoint: {
             ...session.analysis.checkpoint,
@@ -319,7 +355,7 @@ export function Player() {
           },
         });
         if (!stillOwnsSession()) return;
-        analysis.setCommittedAnalysis(saved, cues.length);
+        analysis.setCommittedAnalysis(saved, cues.length, cues);
       } catch (error) {
         if (!stillOwnsSession()) return;
         analysis.setError(
@@ -350,6 +386,7 @@ export function Player() {
     const entry = library.videos.find((v) => v.id === videoId);
     const style = entry?.analysisStyle ?? "colloquial";
     const provider = getProvider(settings);
+    activeManagedJobIdRef.current = null;
     analysis.setRetryMessage(null);
     analysis.setPhase(
       "analyzing",
@@ -361,16 +398,38 @@ export function Player() {
     try {
       const onCommitted = (persisted: CheckpointedAnalysis) => {
         if (!stillOwnsSession()) return;
-        analysis.setCommittedAnalysis(persisted, cues.length);
+        analysis.setCommittedAnalysis(
+          persisted,
+          cues.length,
+          cues,
+        );
       };
       const onManagedPreview = (committed: CheckpointedAnalysis, preview: import("../llm/analyze").AnalysisPreview | null) => {
         if (!stillOwnsSession()) return;
-        analysis.setAnalysisPreview(committed, preview, cues.length);
+        analysis.setAnalysisPreview(committed, preview, cues.length, cues);
       };
       const completed = settings.vendorId === "whatsub-managed"
         ? await executeManagedAnalysis({
             entry: entry!, cues, style, session, signal: localController.signal, onCommitted,
             onPreview: onManagedPreview,
+            onJobReady: (jobId) => {
+              activeManagedJobIdRef.current = jobId;
+              if (!pauseRequestedRef.current) return;
+              localController.abort();
+              activeManagedJobIdRef.current = null;
+              const pause = managedPauseTailRef.current
+                .catch(() => undefined)
+                .then(() => cancelManagedAnalysis(jobId));
+              managedPauseTailRef.current = pause;
+              void pause.catch((error) => {
+                if (!pauseRequestedRef.current || !stillOwnsSession()) return;
+                analysis.setError(
+                  `服务器暂停失败：${managedAnalysisErrorMessage(error)}`,
+                  false,
+                  "analysis",
+                );
+              });
+            },
           })
         : await executeAnalysisSession({
             session, provider, cues, style, batchSize: 25,
@@ -378,7 +437,7 @@ export function Player() {
             onCommitted,
             onPreview: (committed, preview) => {
               if (!stillOwnsSession()) return;
-              analysis.setAnalysisPreview(committed, preview, cues.length);
+              analysis.setAnalysisPreview(committed, preview, cues.length, cues);
             },
             onRetry: (event) => {
               if (!stillOwnsSession()) return;
@@ -404,6 +463,10 @@ export function Player() {
       }
     } catch (e: unknown) {
       if (!stillOwnsSession()) return;
+      if (pauseRequestedRef.current) {
+        analysis.setPhase("paused");
+        return;
+      }
       const isAbort =
         localController.signal.aborted ||
         (e instanceof DOMException && e.name === "AbortError") ||
@@ -412,7 +475,9 @@ export function Player() {
         analysis.setPhase("paused");
         return;
       }
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = settings.vendorId === "whatsub-managed"
+        ? managedAnalysisErrorMessage(e)
+        : e instanceof Error ? e.message : String(e);
       const upsell = e instanceof RelayError && e.upsell;
       const quotaError = quotaDetailsFromRelayError(
         e,
@@ -430,6 +495,7 @@ export function Player() {
       await reload();
     } finally {
       if (abortRef.current === localController) abortRef.current = null;
+      activeManagedJobIdRef.current = null;
     }
   };
 
@@ -449,12 +515,37 @@ export function Player() {
   };
 
   const onStop = () => {
-    abortRef.current?.abort();
+    pauseRequestedRef.current = true;
+    const managedJobId = activeManagedJobIdRef.current;
+    if (settings.vendorId !== "whatsub-managed" || managedJobId) {
+      abortRef.current?.abort();
+    }
+    if (managedJobId) {
+      activeManagedJobIdRef.current = null;
+      const pause = managedPauseTailRef.current
+        .catch(() => undefined)
+        .then(() => cancelManagedAnalysis(managedJobId));
+      managedPauseTailRef.current = pause;
+      void pause.catch((error) => {
+        if (!pauseRequestedRef.current) return;
+        analysis.setError(
+          `服务器暂停失败：${managedAnalysisErrorMessage(error)}`,
+          false,
+          "analysis",
+        );
+      });
+    }
     analysis.setPhase("paused");
   };
 
   const onContinue = () => {
-    startAnalysis();
+    pauseRequestedRef.current = false;
+    analysis.setPhase("analyzing");
+    void (async () => {
+      await analysisRunRef.current?.catch(() => undefined);
+      await managedPauseTailRef.current.catch(() => undefined);
+      if (!pauseRequestedRef.current) startAnalysis();
+    })();
   };
 
   /**
@@ -600,11 +691,16 @@ export function Player() {
         cuesRef.current = reclaimed.cues;
         sessionRef.current = reclaimed.session;
         analysis.startFor(videoId);
-        analysis.setCommittedAnalysis(reclaimed.analysis, reclaimed.cues.length);
+        analysis.setCommittedAnalysis(
+          reclaimed.analysis,
+          reclaimed.cues.length,
+          reclaimed.cues,
+        );
         analysis.setAnalysisPreview(
           reclaimed.analysis,
           reclaimed.inflightPreview,
           reclaimed.cues.length,
+          reclaimed.cues,
         );
         if (reclaimed.analysis.checkpoint.phase === "complete") {
           analysis.setPhase("complete", 100);
@@ -663,11 +759,12 @@ export function Player() {
       cuesRef.current = cues;
       sessionRef.current = session;
       analysis.startFor(videoId);
-      analysis.setCommittedAnalysis(session.analysis, cues.length);
+      analysis.setCommittedAnalysis(session.analysis, cues.length, cues);
       analysis.setAnalysisPreview(
         session.analysis,
         session.inflight ? analysisPreviewFromJournal(session.inflight) : null,
         cues.length,
+        cues,
       );
 
       if (session.analysis.checkpoint.phase === "complete") {

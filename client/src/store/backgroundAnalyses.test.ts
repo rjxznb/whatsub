@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   getProvider: vi.fn(),
   reload: vi.fn(async () => undefined),
   openStoredAnalysisSession: vi.fn(),
+  settings: {} as { vendorId?: string },
+  library: { videos: [] as Array<{ id: string }> },
 }));
 
 vi.mock("../llm/providers", () => ({ getProvider: mocks.getProvider }));
@@ -36,10 +38,10 @@ vi.mock("../llm/analysisSession", async (importOriginal) => {
   return { ...actual, openStoredAnalysisSession: mocks.openStoredAnalysisSession };
 });
 vi.mock("./settings", () => ({
-  useSettings: { getState: () => ({ settings: {} }) },
+  useSettings: { getState: () => ({ settings: mocks.settings }) },
 }));
 vi.mock("./library", () => ({
-  useLibrary: { getState: () => ({ reload: mocks.reload }) },
+  useLibrary: { getState: () => ({ reload: mocks.reload, library: mocks.library }) },
 }));
 
 const cues: SrtCue[] = Array.from({ length: 51 }, (_, index) => ({
@@ -117,8 +119,50 @@ describe("background analysis lease handoff", () => {
     mocks.getProvider.mockReset();
     mocks.reload.mockClear();
     mocks.openStoredAnalysisSession.mockReset();
+    mocks.settings = {};
+    mocks.library = { videos: [] };
     vi.mocked(invoke).mockReset();
     retranscribePipelineHandler = null;
+  });
+
+  it("publishes the complete English transcript before managed AI returns", async () => {
+    let releaseStart!: () => void;
+    const waitForStart = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    mocks.settings = { vendorId: "whatsub-managed" };
+    const empty: CheckpointedAnalysis = {
+      subtitles: [],
+      keyPhrases: [],
+      checkpoint: {
+        version: 1,
+        transcriptFingerprint: "sha256:fixture",
+        nextCueOffset: 0,
+        phase: "cues",
+        revision: 1,
+      },
+    };
+    const { session } = fakeSession(empty);
+
+    runInBackground({
+      videoId: "video-1",
+      label: "Video",
+      cues,
+      session,
+      style: "colloquial",
+      waitFor: waitForStart,
+    });
+
+    try {
+      const job = useBgAnalyses.getState().jobs["video-1"];
+      expect(job?.subtitles).toHaveLength(cues.length);
+      expect(job?.subtitles.map((cue) => cue.text)).toEqual(cues.map((cue) => cue.text));
+      expect(job?.subtitles.every((cue) => cue.translation === "")).toBe(true);
+    } finally {
+      const cancelled = cancelBackground("video-1");
+      releaseStart();
+      await cancelled;
+    }
   });
 
   it("marks explicit retranscription as background scheduler work", async () => {

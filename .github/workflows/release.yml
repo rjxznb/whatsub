@@ -59,6 +59,10 @@ on:
         description: 'Build artifacts only — do not publish to release repo'
         type: boolean
         default: false
+      sync_gitcode:
+        description: 'Mirror the published GitHub Release to GitCode'
+        type: boolean
+        default: true
 
 jobs:
   # ─────────────────────────────────────────────────────────────────
@@ -890,7 +894,7 @@ jobs:
 
   mirror-gitcode:
     needs: publish
-    if: ${{ !inputs.dry_run && needs.publish.result == 'success' }}
+    if: ${{ !inputs.dry_run && needs.publish.result == 'success' && inputs.sync_gitcode }}
     uses: ./.github/workflows/mirror-gitcode.yml
     with:
       tag: ${{ needs.publish.outputs.tag }}
